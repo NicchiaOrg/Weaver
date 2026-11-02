@@ -1,8 +1,8 @@
-//! What the app answers to the `trama` commands that need its own state: who may run a command
+//! What the app answers to the `weaver` commands that need its own state: who may run a command
 //! (a working job, the working General), the commands of the jobs themselves (`job new | show |
 //! list | edit`, `announcement new`), and the hooks other parts plug into.
 //!
-//! [`AppAuthority`] implements [`trama_cli::exec::Authority`]; the socket handler hands it to
+//! [`AppAuthority`] implements [`weaver_cli::exec::Authority`]; the socket handler hands it to
 //! `exec::execute`, which calls it after every check of the command and inside the project's
 //! queue.
 
@@ -10,12 +10,12 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use serde_json::{json, Value};
-use trama_cli::exec::Authority;
-use trama_cli::spec::{Call, Failure};
-use trama_core::command::CommandReply;
-use trama_core::jobs::JobRecord;
-use trama_core::paths::project_hash_of_canonical;
-use trama_core::project::board::AgentFacts;
+use weaver_cli::exec::Authority;
+use weaver_cli::spec::{Call, Failure};
+use weaver_core::command::CommandReply;
+use weaver_core::jobs::JobRecord;
+use weaver_core::paths::project_hash_of_canonical;
+use weaver_core::project::board::AgentFacts;
 
 use super::registry::Jobs;
 use super::starts::{Ctx, StartGate};
@@ -45,7 +45,7 @@ pub trait CommandExtension: Send + Sync {
     fn run(&self, call: &Call) -> Option<Result<CommandReply, Failure>>;
 }
 
-/// `trama job new design`: sends a written design request (the design request's own rules
+/// `weaver job new design`: sends a written design request (the design request's own rules
 /// decide whether it can go). Installed by the design requests.
 pub trait RequestSender: Send + Sync {
     /// Sends the request and returns the identity of the job that works on it.
@@ -156,7 +156,7 @@ fn reply(markdown: String, json: Value) -> CommandReply {
 fn job_id<'a>(call: &'a Call<'_>) -> Result<&'a str, Failure> {
     call.caller.job.as_deref().ok_or_else(|| {
         Failure::new(
-            trama_core::command::code::FORBIDDEN,
+            weaver_core::command::code::FORBIDDEN,
             "this command is for the agent of a job",
         )
     })
@@ -306,16 +306,16 @@ fn start_jobs(jobs: &Jobs, call: &Call, kind: &str) -> Result<Vec<String>, Failu
         root: call.root,
         image: call.image,
     };
-    let refused = |refusal: trama_core::jobs::admission::Refusal| {
+    let refused = |refusal: weaver_core::jobs::admission::Refusal| {
         Failure::refused(format!("{REFUSED_PREFIX}{refusal}."))
     };
     Ok(match kind {
         "scan" => vec![jobs.start_scan(&ctx).map_err(refused)?],
         "run" => match call.input.get("task").and_then(Value::as_str) {
             Some(task) => {
-                let task = trama_core::project::resolve::resolve_card(
+                let task = weaver_core::project::resolve::resolve_card(
                     call.image,
-                    trama_core::project::cards::CardKind::Task,
+                    weaver_core::project::cards::CardKind::Task,
                     task,
                 )
                 .map_err(|error| Failure::refused(error.to_string()))?;
@@ -324,9 +324,9 @@ fn start_jobs(jobs: &Jobs, call: &Call, kind: &str) -> Result<Vec<String>, Failu
             None => jobs.start_run_all(&ctx).map_err(refused)?,
         },
         "resolve" => {
-            let drift = trama_core::project::resolve::resolve_card(
+            let drift = weaver_core::project::resolve::resolve_card(
                 call.image,
-                trama_core::project::cards::CardKind::Drift,
+                weaver_core::project::cards::CardKind::Drift,
                 text(call, "drift"),
             )
             .map_err(|error| Failure::refused(error.to_string()))?;

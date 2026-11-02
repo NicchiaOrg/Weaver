@@ -1,12 +1,12 @@
-// CLI contract tests (specs#testing, requirements/quality#Tests): they run the compiled `trama`
+// CLI contract tests (specs#testing, requirements/quality#Tests): they run the compiled `weaver-cli`
 // binary and check, for every command of the registry, `--help` and `--help --json`, input
 // validation (exit 2 with field paths), exit codes 0 and 1, the shape of the Markdown and `--json`
 // output, and `--input -` with and without a UTF-8 BOM.
 //
-// Run with `node --test tests/cli-contract/` after building `trama` (path in `CLI_CONTRACT_BIN`,
-// else `target/release/trama`, else `target/debug/trama`).
+// Run with `node --test tests/cli-contract/` after building `weaver-cli` (path in `CLI_CONTRACT_BIN`,
+// else `target/release/weaver-cli`, else `target/debug/weaver-cli`).
 //
-// The command registry is built by the Task "Riga di comando trama". Until `trama --help` lists
+// The command registry is built by the Task "Riga di comando weaver". Until `weaver --help` lists
 // the objects of `requirements/cli#General`, the per-command tests are skipped and say why; from
 // the first object listed, every command of the table below is tested and a missing one fails.
 
@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import path from "node:path";
 import { after, describe, test } from "node:test";
 
-import { TRAMA, cleanup, entries, hermeticEnvironment, makeFolder, newProject, run, temporaryFolder } from "./support.mjs";
+import { WEAVER_CLI, cleanup, entries, hermeticEnvironment, makeFolder, newProject, run, temporaryFolder } from "./support.mjs";
 
 after(cleanup);
 
@@ -128,13 +128,13 @@ function wrongTypeFor(schema) {
 // ---------------------------------------------------------------------------------------------
 // What exists whatever the registry: the top-level help and the hermetic run itself.
 
-describe("trama --help", () => {
+describe("weaver --help", () => {
   test("exits 0, prints usage on stdout and reads no stdin", async () => {
     const cwd = emptyFolder();
     const result = await exec(["--help"], { cwd, stdin: "open" });
     assert.equal(result.timedOut, false, "--help waited for stdin");
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /Usage:\s+trama\b/, "the usage line names `trama`");
+    assert.match(result.stdout, /Usage:\s+weaver\b/, "the usage line names `weaver`");
     assert.match(result.stdout, /-h, --help/);
     assert.equal(result.stderr, "");
   });
@@ -145,23 +145,23 @@ describe("trama --help", () => {
     const short = await exec(["-h"], { cwd });
     assert.equal(short.status, 0);
     assert.ok(short.stdout.length > 0 && long.stdout.length >= short.stdout.length);
-    assert.match(short.stdout, /Usage:\s+trama\b/);
+    assert.match(short.stdout, /Usage:\s+weaver\b/);
   });
 
   test("creates nothing in the folder, the home or the data folders", async () => {
     const cwd = emptyFolder();
     const before = entries(environment.sandbox);
     await exec(["--help"], { cwd });
-    assert.deepEqual(entries(cwd), [], "no .trama or other file in the current folder");
+    assert.deepEqual(entries(cwd), [], "no .weaver or other file in the current folder");
     assert.deepEqual(entries(environment.sandbox), before, "nothing written in the sandboxed home");
   });
 
-  test("prints the same with or without TRAMA_* and WEAVER_* variables", async () => {
+  test("prints the same with or without WEAVER_* variables", async () => {
     const cwd = emptyFolder();
     const clean = await exec(["--help"], { cwd });
     const polluted = await run(["--help"], {
       cwd,
-      env: { ...environment.env, TRAMA_ENDPOINT: "not-an-endpoint", WEAVER_LOG: "debug", TRAMA_ROOT: "/nonexistent" },
+      env: { ...environment.env, WEAVER_ENDPOINT: "not-an-endpoint", WEAVER_LOG: "debug", WEAVER_ROOT: "/nonexistent" },
     });
     assert.equal(polluted.status, clean.status);
     assert.equal(polluted.stdout, clean.stdout);
@@ -190,10 +190,10 @@ const listed = OBJECTS.filter((object) => new RegExp(`^\\s+${object}\\b`, "m").t
 const registryBuilt = listed.length > 0;
 const SKIP = registryBuilt
   ? false
-  : "the command registry is not built yet (Task \"Riga di comando trama\"): `trama --help` lists none of the objects of requirements/cli#General";
+  : "the command registry is not built yet (Task \"Riga di comando weaver\"): `weaver --help` lists none of the objects of requirements/cli#General";
 
 describe("command registry", { skip: SKIP }, () => {
-  test("`trama --help` lists every object of requirements/cli#General", () => {
+  test("`weaver --help` lists every object of requirements/cli#General", () => {
     assert.deepEqual(listed, OBJECTS);
   });
 });
@@ -219,7 +219,7 @@ describe("every command", { skip: SKIP }, () => {
         const result = await exec([object, verb, "--help"], { cwd, stdin: "open" });
         assert.equal(result.timedOut, false, "--help waited for stdin");
         assert.equal(result.status, 0, result.stderr);
-        assert.ok(result.stdout.includes(`trama ${object} ${verb}`), "usage names the command");
+        assert.ok(result.stdout.includes(`weaver ${object} ${verb}`), "usage names the command");
         assert.deepEqual(entries(cwd), []);
       });
 
@@ -237,7 +237,7 @@ describe("every command", { skip: SKIP }, () => {
       });
 
       if (name !== "project new") {
-        test("without .trama/ it fails with exit 1 saying to initialise the project", async () => {
+        test("without .weaver/ it fails with exit 1 saying to initialise the project", async () => {
           const cwd = emptyFolder();
           const result = await exec(withArgs("--root", cwd, "--input", "{}"), { cwd });
           assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
@@ -245,7 +245,18 @@ describe("every command", { skip: SKIP }, () => {
           assert.deepEqual(entries(cwd), [], "a refused command creates no folder");
         });
 
-        test("does not look in a parent folder for .trama/", async () => {
+        test("a folder with only an old .trama/ is not a project: exit 1 saying to initialise it", async () => {
+          const cwd = emptyFolder();
+          makeFolder(cwd, ".trama/model");
+          writeFileSync(path.join(cwd, ".trama", "model", "system.md"), "# Old\n");
+          const before = snapshot(cwd);
+          const result = await exec(withArgs("--root", cwd, "--input", "{}"), { cwd });
+          assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
+          assert.match(result.stderr, /initiali[sz]e/i);
+          assert.deepEqual(snapshot(cwd), before, "a refused command writes nothing, .trama/ included");
+        });
+
+        test("does not look in a parent folder for .weaver/", async () => {
           const project = await newProject(environment);
           const inner = makeFolder(project, "inner");
           const result = await exec(withArgs("--input", "{}"), { cwd: inner });
@@ -334,7 +345,7 @@ if (registryBuilt) {
   for (const [object, verb] of READS) {
     const result = await exec([object, verb, "--root", probe, "--json"], { cwd: probe });
     if (parseJson(result.stdout)?.error?.code === "not-implemented") {
-      pendingHandlers.set(`${object} ${verb}`, `\`trama ${object} ${verb}\` is not built yet: its Task fills the handler of the registry entry`);
+      pendingHandlers.set(`${object} ${verb}`, `\`weaver ${object} ${verb}\` is not built yet: its Task fills the handler of the registry entry`);
     }
   }
 }
@@ -396,8 +407,8 @@ describe("refused commands", { skip: SKIP }, () => {
 });
 
 // The test suite sets the variables it needs itself; it never reads the inherited ones.
-const asJob = (extra = {}) => ({ env: { ...environment.env, TRAMA_JOB: "jjjjjjjj", ...extra } });
-const asGeneral = () => ({ env: { ...environment.env, TRAMA_GENERAL: "gggggggg" } });
+const asJob = (extra = {}) => ({ env: { ...environment.env, WEAVER_JOB: "jjjjjjjj", ...extra } });
+const asGeneral = () => ({ env: { ...environment.env, WEAVER_GENERAL: "gggggggg" } });
 
 describe("who may run what (requirements/cli#agent)", { skip: SKIP }, () => {
   const JOB_BOUND = [
@@ -408,7 +419,7 @@ describe("who may run what (requirements/cli#agent)", { skip: SKIP }, () => {
     [["job", "edit"], '{"note":"Reading the Machine"}'],
   ];
   for (const [words, input] of JOB_BOUND) {
-    test(`${words.join(" ")} without TRAMA_JOB: exit 1, only the agent of a Weaver job can, nothing written`, async () => {
+    test(`${words.join(" ")} without WEAVER_JOB: exit 1, only the agent of a Weaver job can, nothing written`, async () => {
       const root = await newProject(environment);
       const before = snapshot(root);
       const result = await exec([...words, "--root", root, "--input", input], { cwd: root });
@@ -419,7 +430,7 @@ describe("who may run what (requirements/cli#agent)", { skip: SKIP }, () => {
       assert.equal(parseJson(json.stdout)?.error?.code, "forbidden", json.stdout);
     });
 
-    test(`${words.join(" ")} with a TRAMA_JOB and no app: exit 1 saying Weaver is not running, nothing written`, async () => {
+    test(`${words.join(" ")} with a WEAVER_JOB and no app: exit 1 saying Weaver is not running, nothing written`, async () => {
       const root = await newProject(environment);
       const before = snapshot(root);
       const result = await run([...words, "--root", root, "--input", input, "--json"], { ...asJob(), cwd: root });
@@ -516,12 +527,12 @@ describe("who may run what (requirements/cli#agent)", { skip: SKIP }, () => {
     assert.deepEqual(parseJson(result.stdout), { job: null });
   });
 
-  test("the TRAMA_* variables change nothing for a command that reads", async () => {
+  test("the WEAVER_* variables change nothing for a command that reads", async () => {
     const root = await newProject(environment);
     const clean = await exec(["model", "check", "--root", root, "--json"], { cwd: root });
     const polluted = await run(["model", "check", "--root", root, "--json"], {
       cwd: root,
-      env: { ...environment.env, TRAMA_JOB: "jjjjjjjj", TRAMA_GENERAL: "gggggggg", TRAMA_ENDPOINT: "/nonexistent", TRAMA_RUN: "1", TRAMA_TASK: "tttttttt" },
+      env: { ...environment.env, WEAVER_JOB: "jjjjjjjj", WEAVER_GENERAL: "gggggggg", WEAVER_ENDPOINT: "/nonexistent", WEAVER_RUN: "1", WEAVER_TASK: "tttttttt" },
     });
     assert.equal(polluted.status, clean.status);
     assert.equal(polluted.stdout, clean.stdout);
@@ -530,7 +541,7 @@ describe("who may run what (requirements/cli#agent)", { skip: SKIP }, () => {
 
 describe("model commands", { skip: SKIP }, () => {
   const write = (root, rel, text) => {
-    const file = path.join(root, ".trama", rel);
+    const file = path.join(root, ".weaver", rel);
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, text);
   };
@@ -608,7 +619,7 @@ describe("task commands", { skip: SKIP || pendingHandlers.get("task list") || fa
     assert.match(created.id, /^[a-z0-9]{8}$/);
     assert.equal(created.column, "todo");
     assert.ok(Number.isInteger(created.number));
-    const files = entries(path.join(root, ".trama", "tasks"));
+    const files = entries(path.join(root, ".weaver", "tasks"));
     assert.deepEqual(files, [`${created.id}-tidy-the-logs.md`]);
 
     const shown = await exec(["task", "show", `t${created.number}`, "--root", root, "--json"], { cwd: root });
@@ -625,7 +636,7 @@ describe("task commands", { skip: SKIP || pendingHandlers.get("task list") || fa
 
     const deleted = await exec(["task", "delete", created.id, "--root", root], { cwd: root });
     assert.equal(deleted.status, 0, `${deleted.stdout}${deleted.stderr}`);
-    assert.deepEqual(entries(path.join(root, ".trama", "tasks")), []);
+    assert.deepEqual(entries(path.join(root, ".weaver", "tasks")), []);
   });
 
   test("task new: a technical Task with references and a non-technical one without are refused, nothing written", async () => {
@@ -648,11 +659,11 @@ describe("task commands", { skip: SKIP || pendingHandlers.get("task list") || fa
 });
 
 describe("project new", { skip: SKIP }, () => {
-  test("creates .trama/ in a fresh folder: exit 0, Markdown on stdout", async () => {
+  test("creates .weaver/ in a fresh folder: exit 0, Markdown on stdout", async () => {
     const root = emptyFolder();
     const result = await exec(["project", "new", "--input", "{}", "--root", root], { cwd: root });
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
-    assert.ok(existsSync(path.join(root, ".trama")));
+    assert.ok(existsSync(path.join(root, ".weaver")));
     assert.ok(result.stdout.trim().length > 0);
   });
 
@@ -668,16 +679,26 @@ describe("project new", { skip: SKIP }, () => {
       const root = emptyFolder();
       const result = await exec(["project", "new", "--input", "-", "--root", root], { cwd: root, stdin });
       assert.equal(result.status, 0, `${JSON.stringify(stdin)}: ${result.stdout}${result.stderr}`);
-      assert.ok(existsSync(path.join(root, ".trama")));
+      assert.ok(existsSync(path.join(root, ".weaver")));
     }
   });
 
-  test("an unknown field is exit 2 and creates no .trama/", async () => {
+  test("an unknown field is exit 2 and creates no .weaver/", async () => {
     const root = emptyFolder();
     const result = await exec(["project", "new", "--input", '{"noSuchField":1}', "--root", root], { cwd: root });
     assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
     assert.ok(result.stderr.includes("noSuchField"));
     assert.deepEqual(entries(root), []);
+  });
+
+  test("beside an old .trama/ it creates .weaver/ and leaves .trama/ as it was", async () => {
+    const root = emptyFolder();
+    makeFolder(root, ".trama/model");
+    writeFileSync(path.join(root, ".trama", "model", "system.md"), "# Old\n");
+    const result = await exec(["project", "new", "--input", "{}", "--root", root], { cwd: root });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.ok(existsSync(path.join(root, ".weaver", "model", "system.md")));
+    assert.equal(readFileSync(path.join(root, ".trama", "model", "system.md"), "utf8"), "# Old\n");
   });
 
   test("a second run is refused with exit 1 and changes nothing", async () => {
@@ -691,7 +712,7 @@ describe("project new", { skip: SKIP }, () => {
 
   test("a fresh project passes `model check`, has the five Areas and installs the agent files", async () => {
     const root = await newProject(environment);
-    assert.deepEqual(entries(path.join(root, ".trama", "requirements")), ["data", "quality", "rules", "tech", "ui"]);
+    assert.deepEqual(entries(path.join(root, ".weaver", "requirements")), ["data", "quality", "rules", "tech", "ui"]);
     assert.ok(existsSync(path.join(root, ".agents", "skills", "trama-design", "COMMANDS.md")));
     assert.ok(existsSync(path.join(root, ".omp", "WATCHDOG.yml")));
     const check = await exec(["model", "check", "--root", root], { cwd: root });
@@ -711,11 +732,11 @@ describe("project new", { skip: SKIP }, () => {
     assert.deepEqual(snapshot(root), before);
     const forced = await exec(["project", "new", "--input", '{"force":true}', "--root", root], { cwd: root });
     assert.equal(forced.status, 0, `${forced.stdout}${forced.stderr}`);
-    assert.ok(existsSync(path.join(root, ".trama")));
+    assert.ok(existsSync(path.join(root, ".weaver")));
     assert.notEqual(readFileSync(path.join(root, ".omp", "WATCHDOG.yml"), "utf8"), "mine");
   });
 });
 
 test("the binary under test is the one this run located", () => {
-  assert.ok(existsSync(TRAMA), TRAMA);
+  assert.ok(existsSync(WEAVER_CLI), WEAVER_CLI);
 });

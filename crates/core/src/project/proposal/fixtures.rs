@@ -107,7 +107,7 @@ pub(crate) fn proposal(
             content,
         );
     }
-    root.join(".trama").join(folder)
+    root.join(".weaver").join(folder)
 }
 
 /// A Task file of a Proposal.

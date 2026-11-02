@@ -70,18 +70,43 @@ const COMMANDS: &[&str] = &[
 
 fn main() {
     build_sidecar();
+    embed_windows_manifest();
     let attributes = tauri_build::Attributes::new()
-        .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS));
+        .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS))
+        .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest());
     tauri_build::try_build(attributes).expect("failed to run the Tauri build script");
 }
 
-/// Builds the `trama` CLI and stores it as `binaries/trama-<target triple>[.exe]`, the file the
+/// Passes the application manifest `windows-app-manifest.xml` to the MSVC linker, so that every executable of
+/// this package embeds it: the app and the test binaries, including the unit tests of `weaver_lib`.
+///
+/// `tauri-build` embeds its manifest (the dependency on Common Controls v6) only in the app binary, while
+/// the test binaries link crates (rfd, tao, muda, tauri-plugin-dialog) that import comctl32 v6 symbols and
+/// fail to start without it (`STATUS_ENTRYPOINT_NOT_FOUND`). `tauri-build`'s own manifest is turned off in
+/// `main`, so the app carries one manifest only. `rustc-link-arg` is used, not `rustc-link-arg-tests`, which
+/// does not cover the unit tests of the lib.
+///
+/// The target comes from `CARGO_CFG_TARGET_*`: `#[cfg(windows)]` would describe the host of this script.
+fn embed_windows_manifest() {
+    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("set by cargo"))
+        .join("windows-app-manifest.xml");
+    println!("cargo:rerun-if-changed={}", manifest.display());
+
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    if target_os == "windows" && target_env == "msvc" {
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
+    }
+}
+
+/// Builds the `weaver-cli` binary and stores it as `binaries/weaver-cli-<target triple>[.exe]`, the file the
 /// `externalBin` entry of `tauri.conf.json` requires.
 ///
 /// It is built here, with the same profile and target as the app, into a separate target folder
 /// (`<target>/sidecar`): the app crate cannot depend on a binary of another package, and
-/// `tauri-build` copies the sidecar to `<target>/<profile>/trama`, the path of the workspace's own
-/// `trama` binary, so the two builds must not share a build folder.
+/// `tauri-build` copies the sidecar to `<target>/<profile>/weaver-cli`, the path of the workspace's own
+/// `weaver-cli` binary, so the two builds must not share a build folder.
 fn build_sidecar() {
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("set by cargo"));
     let workspace = manifest_dir
@@ -115,9 +140,9 @@ fn build_sidecar() {
         .args([
             "build",
             "--package",
-            "trama-cli",
+            "weaver-cli",
             "--bin",
-            "trama",
+            "weaver-cli",
             "--locked",
             "--target",
             &target,
@@ -138,16 +163,16 @@ fn build_sidecar() {
     }
     let status = cargo
         .status()
-        .expect("failed to run cargo to build the trama sidecar");
-    assert!(status.success(), "building the trama sidecar failed");
+        .expect("failed to run cargo to build the weaver-cli sidecar");
+    assert!(status.success(), "building the weaver-cli sidecar failed");
 
     let built = sidecar_target
         .join(&target)
         .join(if release { "release" } else { "debug" })
-        .join(format!("trama{ext}"));
+        .join(format!("weaver-cli{ext}"));
     let destination = manifest_dir
         .join("binaries")
-        .join(format!("trama-{target}{ext}"));
+        .join(format!("weaver-cli-{target}{ext}"));
     copy_if_different(&built, &destination);
 }
 

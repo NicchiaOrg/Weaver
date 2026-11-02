@@ -74,7 +74,7 @@ describe("the Specs page", () => {
     const notes = screen.getByRole("region", { name: "Notes" });
     expect(within(notes).getByText("notes").tagName).toBe("EM");
     await user.click(within(notes).getByRole("button", { name: "Open in editor" }));
-    await waitFor(() => expect(backend.opened).toEqual([{ file: ".trama/specs.yaml", line: 9 }]));
+    await waitFor(() => expect(backend.opened).toEqual([{ file: ".weaver/specs.yaml", line: 9 }]));
   });
 
   it("says so when the project has no Specs", async () => {

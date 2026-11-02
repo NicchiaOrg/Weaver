@@ -43,6 +43,6 @@ rejectReasons: Array<string>,
  */
 canRework: boolean, 
 /**
- * The references of its scope, for `View on diagram` and `View requirements`.
+ * The references of its scope, for `View requirements`.
  */
 scopeRefs: Array<string>, };

@@ -120,18 +120,18 @@ impl ProjectImage {
     /// Reads every file again, parsing only those whose content changed, and forgets the files
     /// that are gone.
     pub fn refresh_all(&mut self) {
-        let trama = layout::trama_dir(&self.root);
+        let weaver = layout::weaver_dir(&self.root);
         let mut present = BTreeSet::new();
         self.folder_issues.clear();
         for name in VERSIONED_ENTRIES {
-            self.scan(&trama.join(name), name, 0, &mut present);
+            self.scan(&weaver.join(name), name, 0, &mut present);
         }
         self.entries.retain(|rel, _| present.contains(rel));
         self.rebuild();
     }
 
-    /// Re-reads only the given paths (absolute, inside `.trama/`): a file is read again, a
-    /// removed file or folder is forgotten, a folder is scanned again. Paths outside `.trama/`
+    /// Re-reads only the given paths (absolute, inside `.weaver/`): a file is read again, a
+    /// removed file or folder is forgotten, a folder is scanned again. Paths outside `.weaver/`
     /// and hidden ones are ignored.
     pub fn refresh(&mut self, paths: &[PathBuf]) {
         let mut touched = false;
@@ -463,7 +463,7 @@ impl ProjectImage {
 
     /// The identities in use for cards of `kind`, from file and folder names, so that a card
     /// that failed to load still keeps its identity. For Tasks (and Proposal Tasks) this is
-    /// `.trama/tasks/`, the `cleared` copies in `history/` and the `tasks/` folders of every
+    /// `.weaver/tasks/`, the `cleared` copies in `history/` and the `tasks/` folders of every
     /// Proposal.
     pub fn used_ids(&self, kind: CardKind) -> BTreeSet<String> {
         let tasks = matches!(kind, CardKind::Task | CardKind::ProposalTask);
@@ -747,7 +747,7 @@ mod tests {
 
         // A file appears: picked up by refreshing its folder.
         put(dir.path(), "tasks/aaaaaaaa-new.md", TASK);
-        image.refresh(&[layout::trama_dir(dir.path()).join("tasks")]);
+        image.refresh(&[layout::weaver_dir(dir.path()).join("tasks")]);
         assert_eq!(image.parse_count(), loaded + 2);
         assert_eq!(image.cards_of(CardKind::Task).count(), 2);
 
@@ -760,7 +760,7 @@ mod tests {
         assert!(image.areas().is_empty());
         assert_eq!(image.parse_count(), loaded + 2);
 
-        // Paths outside `.trama/` and hidden ones are ignored.
+        // Paths outside `.weaver/` and hidden ones are ignored.
         image.refresh(&[
             dir.path().join("elsewhere.md"),
             layout::absolute(dir.path(), "tasks/.gitkeep"),
@@ -947,7 +947,7 @@ mod tests {
             Some("T2")
         );
         // The cache is local-only and ignored by git; the image never reads it as a card.
-        let ignore = layout::trama_dir(dir.path()).join("short-numbers/.gitignore");
+        let ignore = layout::weaver_dir(dir.path()).join("short-numbers/.gitignore");
         assert_eq!(fs::read(ignore).unwrap(), b"*\n");
     }
 }

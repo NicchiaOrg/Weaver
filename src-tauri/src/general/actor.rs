@@ -4,7 +4,7 @@
 //! turns what happens (omp's messages, the end of a turn, the exit of the process) into events of
 //! the Machine. Everything arrives on one channel, so it is handled one at a time, in order. The
 //! process, the JSON-RPC and the ACP calls are the ones of the jobs; what differs is what is
-//! started (`--append-system-prompt` instead of an overlay), the identity (`TRAMA_GENERAL`), the
+//! started (`--append-system-prompt` instead of an overlay), the identity (`WEAVER_GENERAL`), the
 //! session that is reloaded when a record exists (an empty one starts when the load fails), and
 //! the forms, declined with a text that asks the agent to ask in its reply.
 //!
@@ -17,16 +17,16 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use trama_core::jobs::general::{self as machine, Event};
-use trama_core::jobs::launch;
-use trama_core::jobs::machine::{MessageId, RequestId, SteeringOutcome};
-use trama_core::jobs::subagents::{self, SubAgentState};
-use trama_core::omp::machine::ReadyOmp;
+use weaver_core::jobs::general::{self as machine, Event};
+use weaver_core::jobs::launch;
+use weaver_core::jobs::machine::{MessageId, RequestId, SteeringOutcome};
+use weaver_core::jobs::subagents::{self, SubAgentState};
+use weaver_core::omp::machine::ReadyOmp;
 
 use super::service::General;
 use crate::jobs::conversation::Conversation;
 use crate::jobs::proc::{ExitInfo, OmpProcess, SpawnSpec};
-use crate::jobs::rpc::Incoming;
+use crate::jobs::rpc::{Incoming, RpcError};
 use crate::jobs::session::{self, OpenError, TurnEnd, OPEN_LIMIT};
 
 /// What a form or an ask of omp is declined with in General.
@@ -69,6 +69,10 @@ pub(crate) enum Msg {
     OmpReady(Arc<ReadyOmp>),
     Spawned(Result<(OmpProcess, UnboundedReceiver<Incoming>), String>),
     Opened(Result<Opened, OpenError>),
+    /// `initialize` answered, and the kept session is to be loaded.
+    Initialized(String),
+    /// The limit of the opening passed; carries the id of the load it was set for.
+    LoadTimeout(u64),
     Incoming(Incoming),
     Exited(ExitInfo),
     SteerDone(MessageId, SteeringOutcome),
@@ -99,9 +103,12 @@ pub(crate) async fn run(
         asks: false,
         reload: None,
         loading: false,
+        load: None,
         replay: Conversation::general(),
         opened_at: Instant::now(),
         exit_reported: false,
+        spawning: false,
+        closing: false,
         turn_running: false,
         started: false,
         poll_scheduled: false,
@@ -136,9 +143,15 @@ struct Actor {
     reload: Option<String>,
     /// The session is being reloaded: what omp sends is the replayed history.
     loading: bool,
+    /// The request id and the kept session of the `session/load` sent and not answered yet.
+    load: Option<(u64, String)>,
     replay: Conversation,
     opened_at: Instant,
     exit_reported: bool,
+    /// The process is being spawned: `Msg::Spawned` is on its way.
+    spawning: bool,
+    /// `Cmd::ShutDown` came while it was spawning: it ends when it arrives.
+    closing: bool,
     turn_running: bool,
     /// The session opened.
     started: bool,
@@ -161,6 +174,8 @@ impl Actor {
         match message {
             Msg::Cmd(cmd) => self.command(cmd).await,
             Msg::OmpReady(ready) => {
+                // The end of Waiting for omp: the kept conversation reloads without a message.
+                self.dispatch(Event::OmpReady);
                 // The CLI socket starts with the app: wait for it.
                 let mut endpoint = self.general.host.endpoint();
                 for _ in 0..600 {
@@ -177,6 +192,8 @@ impl Actor {
             }
             Msg::Spawned(result) => self.spawned(result),
             Msg::Opened(result) => self.opened(result),
+            Msg::Initialized(previous) => self.initialized(previous),
+            Msg::LoadTimeout(id) => self.load_timeout(id),
             Msg::Incoming(incoming) => self.incoming(incoming),
             Msg::Exited(info) => self.exited(info).await,
             Msg::SteerDone(message, outcome) => {
@@ -233,11 +250,12 @@ impl Actor {
             cwd: root,
             name: format!("general-{}", self.project),
         };
+        self.spawning = true;
         let tx = self.tx.clone();
         tauri::async_runtime::spawn(async move {
             let spawned = tauri::async_runtime::spawn_blocking(move || {
-                trama_core::atomic::write(&instruction_file, instruction.as_bytes(), None)
-                    .map_err(|error| format!("cannot write the instruction of General: {error}"))?;
+                weaver_core::atomic::write(&instruction_file, instruction.as_bytes(), None)
+                    .map_err(|error| format!("cannot write the instruction of Chat: {error}"))?;
                 OmpProcess::spawn(spec).map_err(|error| format!("could not start omp: {error}"))
             })
             .await
@@ -247,18 +265,26 @@ impl Actor {
     }
 
     fn spawned(&mut self, result: Result<(OmpProcess, UnboundedReceiver<Incoming>), String>) {
+        self.spawning = false;
+        if self.closing || self.finished {
+            // omp was asked to end while it was starting: whatever started ends at once.
+            if let Ok((process, _)) = result {
+                process.kill_now();
+            }
+            self.finished = true;
+            return;
+        }
         let (process, mut incoming) = match result {
             Ok(parts) => parts,
             Err(reason) => {
                 self.general.host.report_omp_missing(Some(reason.clone()));
-                self.fail_opening(&trama_core::omp::Failure::NotStarted.reason(), Some(reason));
+                self.fail_opening(
+                    &weaver_core::omp::Failure::NotStarted.reason(),
+                    Some(reason),
+                );
                 return;
             }
         };
-        if self.finished {
-            process.kill_now();
-            return;
-        }
         let process = Arc::new(process);
         let tx = self.tx.clone();
         tauri::async_runtime::spawn(async move {
@@ -282,37 +308,91 @@ impl Actor {
         let tx = self.tx.clone();
         self.process = Some(process);
         tauri::async_runtime::spawn(async move {
-            let opening =
-                async {
-                    session::initialize(&rpc).await?;
-                    let Some(previous) = reload else {
-                        return session::new_session(&rpc, &cwd)
+            let message = match reload {
+                None => {
+                    let opening = async {
+                        session::initialize(&rpc).await?;
+                        session::new_session(&rpc, &cwd)
                             .await
                             .map(|session| Opened {
                                 session,
                                 fell_back: None,
-                            });
+                            })
                     };
-                    match session::load_session(&rpc, &previous, &cwd).await {
-                        Ok(()) => Ok(Opened {
-                            session: previous,
-                            fell_back: None,
-                        }),
-                        // omp refused the kept session: an empty one starts and a notice says so.
-                        Err(OpenError::Failed(reason)) => session::new_session(&rpc, &cwd)
+                    Msg::Opened(
+                        tokio::time::timeout(remaining, opening)
                             .await
-                            .map(|session| Opened {
-                                session,
-                                fell_back: Some(reason),
-                            }),
-                        Err(other) => Err(other),
+                            .unwrap_or(Err(OpenError::Timeout)),
+                    )
+                }
+                // The load itself is sent by the actor, ordered with the replayed updates.
+                Some(previous) => {
+                    match tokio::time::timeout(remaining, session::initialize(&rpc))
+                        .await
+                        .unwrap_or(Err(OpenError::Timeout))
+                    {
+                        Ok(()) => Msg::Initialized(previous),
+                        Err(error) => Msg::Opened(Err(error)),
                     }
-                };
-            let result = tokio::time::timeout(remaining, opening)
-                .await
-                .unwrap_or(Err(OpenError::Timeout));
-            let _ = tx.send(Msg::Opened(result));
+                }
+            };
+            let _ = tx.send(message);
         });
+    }
+
+    /// `initialize` answered: the kept session is loaded, sent ordered with the notifications omp
+    /// sends meanwhile, so that its answer is handled after every replayed update. The 30 s limit
+    /// of the opening goes on running.
+    fn initialized(&mut self, previous: String) {
+        let Some(process) = self.process.clone().filter(|_| !self.finished) else {
+            return;
+        };
+        let id = session::load_session(&process.rpc, &previous, &self.root);
+        self.load = Some((id, previous));
+        let remaining = OPEN_LIMIT.saturating_sub(self.opened_at.elapsed());
+        let tx = self.tx.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(remaining).await;
+            let _ = tx.send(Msg::LoadTimeout(id));
+        });
+    }
+
+    /// The limit passed while the load had no answer yet.
+    fn load_timeout(&mut self, id: u64) {
+        if self.load.as_ref().is_some_and(|(load, _)| *load == id) {
+            self.load = None;
+            self.opened(Err(OpenError::Timeout));
+        }
+    }
+
+    /// The answer of `session/load`. When omp refused the kept session, an empty one starts and a
+    /// notice says so.
+    fn load_answered(&mut self, previous: String, result: Result<Value, RpcError>) {
+        match result {
+            Ok(_) => self.opened(Ok(Opened {
+                session: previous,
+                fell_back: None,
+            })),
+            Err(error) => {
+                let reason = error.text();
+                let (rpc, cwd) = match &self.process {
+                    Some(process) if !self.finished => (process.rpc.clone(), self.root.clone()),
+                    _ => return,
+                };
+                let remaining = OPEN_LIMIT.saturating_sub(self.opened_at.elapsed());
+                let tx = self.tx.clone();
+                tauri::async_runtime::spawn(async move {
+                    let result = tokio::time::timeout(remaining, session::new_session(&rpc, &cwd))
+                        .await
+                        .unwrap_or(Err(OpenError::Timeout))
+                        .map(|session| Opened {
+                            session,
+                            fell_back: Some(reason),
+                        });
+                    let _ = tx.send(Msg::Opened(result));
+                });
+            }
+        }
     }
 
     fn opened(&mut self, result: Result<Opened, OpenError>) {
@@ -426,6 +506,11 @@ impl Actor {
                     process
                         .shutdown(self.session.as_deref(), turn_running || self.turn_running)
                         .await;
+                } else if self.spawning {
+                    // The process is being spawned: it is ended when it arrives, so the actor
+                    // stays until then.
+                    self.closing = true;
+                    return;
                 }
                 self.finished = true;
             }
@@ -452,7 +537,11 @@ impl Actor {
             }
             Incoming::Request { id, method, params } => self.request(id, &method, &params),
             Incoming::Response { id, result } => {
-                if self.prompts.remove(&id) {
+                if self.load.as_ref().is_some_and(|(load, _)| *load == id) {
+                    // Every replayed update read before this answer was handled before it.
+                    let (_, previous) = self.load.take().expect("the load was just matched");
+                    self.load_answered(previous, result);
+                } else if self.prompts.remove(&id) {
                     self.turn_done(session::turn_end(result));
                 }
             }

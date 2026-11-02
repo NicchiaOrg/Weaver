@@ -19,6 +19,9 @@ const buttonVariants = cva(
           "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80 aria-disabled:hover:bg-secondary",
         outline:
           "border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground aria-disabled:hover:bg-background aria-disabled:hover:text-current",
+        // `Refine`: a click starts the agent. Solid yellow, one shade darker on hover, `zinc-950` text.
+        refine:
+          "bg-yellow-500 text-zinc-950 shadow-sm hover:bg-yellow-600 dark:bg-yellow-400 dark:hover:bg-yellow-500 aria-disabled:hover:bg-yellow-500 dark:aria-disabled:hover:bg-yellow-400",
         ghost: "hover:bg-accent hover:text-accent-foreground aria-disabled:hover:bg-transparent",
       },
       size: {

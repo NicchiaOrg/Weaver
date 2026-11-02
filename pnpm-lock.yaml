@@ -241,12 +241,6 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
-      cytoscape:
-        specifier: ^3.34.4
-        version: 3.34.4
-      elkjs:
-        specifier: ^0.9.3
-        version: 0.9.3
       lucide-react:
         specifier: ^1.66.0
         version: 1.66.0(@types/react@19.3.0)(react@19.3.1)

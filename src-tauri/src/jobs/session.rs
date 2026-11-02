@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use trama_core::jobs::machine::SteeringOutcome;
+use weaver_core::jobs::machine::SteeringOutcome;
 
 use super::rpc::{Rpc, RpcError};
 
@@ -14,7 +14,7 @@ pub const OPEN_LIMIT: Duration = Duration::from_secs(30);
 
 /// The fixed text an elicitation or an ask of omp is declined with.
 pub const DECLINE_TEXT: &str =
-    "In Weaver jobs, ask the developer only with `trama question new` (bash timeout 0). Do not ask in any other way.";
+    "In Weaver jobs, ask the developer only with `weaver question new` (bash timeout 0). Do not ask in any other way.";
 
 /// Why a session could not be opened.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,14 +148,16 @@ pub async fn new_session(rpc: &Rpc, cwd: &Path) -> Result<String, OpenError> {
         .ok_or_else(|| OpenError::Failed("omp opened a session without an identity".to_owned()))
 }
 
-/// `session/load`: the history is replayed as `session/update` notifications before it answers.
-pub async fn load_session(rpc: &Rpc, session: &str, cwd: &Path) -> Result<(), OpenError> {
-    rpc.request(
+/// `session/load`, sent ordered like `session/prompt`: the history is replayed as `session/update`
+/// notifications before it answers, and the answer comes back as an
+/// [`super::rpc::Incoming::Response`] with the id returned, always after every replayed update
+/// that was read before it. The caller handles the load as finished only at that response, so no
+/// replayed update reaches the live conversation.
+pub fn load_session(rpc: &Rpc, session: &str, cwd: &Path) -> u64 {
+    rpc.send_ordered(
         "session/load",
         json!({ "sessionId": session, "cwd": cwd.to_string_lossy(), "mcpServers": [] }),
     )
-    .await?;
-    Ok(())
 }
 
 /// `session/prompt`: the answer comes back as an [`super::rpc::Incoming::Response`] with the id

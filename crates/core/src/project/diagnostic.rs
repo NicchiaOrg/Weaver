@@ -1,6 +1,6 @@
 //! Diagnostics: a file that cannot be read or interpreted, or a rule the project breaks.
 //!
-//! A diagnostic carries the path (relative to `.trama/`, with `/` separators) and the reason.
+//! A diagnostic carries the path (relative to `.weaver/`, with `/` separators) and the reason.
 //! It is shown in the project window and in the output of the CLI command that met it; the
 //! file is never dropped silently nor rewritten, and the other files still load.
 
@@ -17,7 +17,7 @@ pub enum Severity {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Diagnostic {
-    /// Path relative to `.trama/`, `/`-separated.
+    /// Path relative to `.weaver/`, `/`-separated.
     pub path: String,
     pub severity: Severity,
     pub message: String,

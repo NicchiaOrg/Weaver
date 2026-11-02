@@ -1,7 +1,7 @@
 //! The text fingerprint of the references of a Drift (`requirements/rules#drift`).
 //!
 //! SHA-256 (lowercase hex) over the references in order, each as a line `# <ref>` followed by the
-//! text `trama model show <ref>` prints, which holds the element or section and every
+//! text `weaver model show <ref>` prints, which holds the element or section and every
 //! Requirement section titled with it, LF-normalised. A reference that is gone adds `(missing)`.
 //! This is the one function a dismissal and a prepared question both use: the fingerprint says
 //! whether the Model and the Requirements a Drift concerns have changed since.

@@ -169,7 +169,7 @@ fn snapshot(root: &Path) -> Vec<(String, Vec<u8>)> {
         }
     }
     let mut out = Vec::new();
-    walk(&root.join(".trama"), &mut out);
+    walk(&root.join(".weaver"), &mut out);
     out.sort();
     out
 }
@@ -292,7 +292,7 @@ fn a_prepared_question_is_valid_until_what_it_concerns_changes() {
             option: None
         }
     );
-    let file = fs::read_to_string(root.join(".trama/drifts/dddddddd-d.md")).unwrap();
+    let file = fs::read_to_string(root.join(".weaver/drifts/dddddddd-d.md")).unwrap();
     assert!(
         file.contains("## Prepared question\n\n```json\n{"),
         "{file}"
@@ -313,7 +313,7 @@ fn a_prepared_question_is_valid_until_what_it_concerns_changes() {
     );
     assert!(!found.is_valid());
     assert_eq!(
-        fs::read_to_string(root.join(".trama/drifts/dddddddd-d.md")).unwrap(),
+        fs::read_to_string(root.join(".weaver/drifts/dddddddd-d.md")).unwrap(),
         file,
         "an invalid question is never changed by itself"
     );
@@ -330,7 +330,7 @@ fn a_prepared_question_holds_only_while_the_drift_is_open_and_its_options_and_pr
     assert!(prepared::check(&image, drift_of(&image, DRIFT)).is_valid());
 
     // The attached Proposal is no longer in Draft or Open.
-    let text = fs::read_to_string(root.join(".trama/proposals/pppppppp-t/proposal.md")).unwrap();
+    let text = fs::read_to_string(root.join(".weaver/proposals/pppppppp-t/proposal.md")).unwrap();
     put(
         root,
         "proposals/pppppppp-t/proposal.md",
@@ -343,7 +343,7 @@ fn a_prepared_question_holds_only_while_the_drift_is_open_and_its_options_and_pr
     put(root, "proposals/pppppppp-t/proposal.md", &text);
 
     // A fix option is gone.
-    let file = fs::read_to_string(root.join(".trama/drifts/dddddddd-d.md")).unwrap();
+    let file = fs::read_to_string(root.join(".weaver/drifts/dddddddd-d.md")).unwrap();
     put(
         root,
         "drifts/dddddddd-d.md",
@@ -425,7 +425,7 @@ fn a_new_preparation_replaces_the_old_one() {
     )
     .unwrap();
     apply(root, &edited.changes);
-    let file = fs::read_to_string(root.join(".trama/drifts/dddddddd-d.md")).unwrap();
+    let file = fs::read_to_string(root.join(".weaver/drifts/dddddddd-d.md")).unwrap();
     assert_eq!(file.matches("## Prepared question").count(), 1);
     let (image, _, _) = state(root);
     let valid = prepared::check(&image, drift_of(&image, DRIFT));
@@ -560,7 +560,7 @@ fn edit_checks_the_shape_of_the_question_and_of_the_decisions() {
 
     // Nothing was written by any refusal.
     assert_eq!(
-        fs::read_to_string(root.join(".trama/drifts/dddddddd-d.md")).unwrap(),
+        fs::read_to_string(root.join(".weaver/drifts/dddddddd-d.md")).unwrap(),
         drift_text("open", "")
     );
 }
@@ -1294,7 +1294,7 @@ fn accepting_the_proposal_approves_it_and_the_drift_is_proposal_accepted() {
         Some(Status::Approved)
     );
     assert!(
-        fs::read_to_string(root.join(".trama/model/shop/order.md"))
+        fs::read_to_string(root.join(".weaver/model/shop/order.md"))
             .unwrap()
             .contains("The customer paid."),
         "the Model says what the code does"
@@ -1366,7 +1366,7 @@ fn the_fix_task_finished_fixes_the_drift_and_closed_unchanged_dismisses_it_with_
         let fix = decided.fix_task.unwrap();
         // The agent takes the fix Task.
         let text = fs::read_to_string(root.join(format!(
-            ".trama/{}",
+            ".weaver/{}",
             image.card(CardKind::Task, &fix).unwrap().path
         )))
         .unwrap();
@@ -1829,7 +1829,7 @@ fn a_proposal_decision_carries_the_files_of_the_attached_proposal() {
         drift_of(&after, DRIFT).str_key("status"),
         Some("proposal-accepted")
     );
-    assert!(fs::read_to_string(root.join(".trama/model/shop/order.md"))
+    assert!(fs::read_to_string(root.join(".weaver/model/shop/order.md"))
         .unwrap()
         .contains("The customer paid."));
     assert_eq!(

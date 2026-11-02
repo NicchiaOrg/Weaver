@@ -384,6 +384,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_answer_of_an_ordered_request_is_handled_after_the_notifications_read_before_it() {
+        let (mut omp_out, client_in) = pipe();
+        let (rpc, mut incoming) = Rpc::start(client_in, Sink::default(), "t").unwrap();
+        let load = rpc.send_ordered("session/load", json!({ "sessionId": "s" }));
+        // omp replays the history, then answers, all in one go: nothing separates the lines.
+        for n in 1..=3 {
+            writeln!(
+                omp_out,
+                "{}",
+                json!({ "jsonrpc": "2.0", "method": "session/update", "params": { "n": n } })
+            )
+            .unwrap();
+        }
+        writeln!(
+            omp_out,
+            "{}",
+            json!({ "jsonrpc": "2.0", "id": load, "result": { "loaded": true } })
+        )
+        .unwrap();
+        for n in 1..=3 {
+            assert_eq!(
+                incoming.recv().await,
+                Some(Incoming::Notification {
+                    method: "session/update".into(),
+                    params: json!({ "n": n })
+                })
+            );
+        }
+        assert_eq!(
+            incoming.recv().await,
+            Some(Incoming::Response {
+                id: load,
+                result: Ok(json!({ "loaded": true }))
+            })
+        );
+    }
+
+    #[tokio::test]
     async fn the_end_of_the_output_fails_every_request_that_waits_and_is_reported_once() {
         let (omp_out, client_in) = pipe();
         let (rpc, mut incoming) = Rpc::start(client_in, Sink::default(), "t").unwrap();

@@ -1,7 +1,7 @@
 //! The app side of the design request (Machine `design-request`): the editor's commands, what
 //! `Send` starts, and what the rest of the app tells the requests.
 //!
-//! The rules and the files are in `trama_core::project::requests`; this module carries them out
+//! The rules and the files are in `weaver_core::project::requests`; this module carries them out
 //! in the project's queue and connects them to the rest of the app:
 //!
 //! * `developer.NEW_REQUEST`, `SEND_REQUEST`, `DISCARD_REQUEST` and every save are commands. A
@@ -14,7 +14,7 @@
 //!   Proposal bound to it goes back to `Writing`; the editor says so with `returned`.
 //! * `workspace.REQUEST_DELETED`: [`files_changed`], called with every batch of file changes of a
 //!   project; a sent request whose file is gone is forgotten and the editor is told.
-//! * `trama job new design` from the working General: [`GeneralSender`].
+//! * `weaver job new design` from the working General: [`GeneralSender`].
 //! * Closing a window or quitting: [`flush_window`] asks the editor to save what is pending and
 //!   waits for its answer before the window goes, so that closing never loses text and never sends.
 //!
@@ -27,13 +27,13 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
-use trama_core::job_instruction::Job;
-use trama_core::project::image::ProjectImage;
-use trama_core::project::requests::image::{base64_decode, base64_encode, ImageError};
-use trama_core::project::requests::{
+use ts_rs::TS;
+use weaver_core::job_instruction::Job;
+use weaver_core::project::image::ProjectImage;
+use weaver_core::project::requests::image::{base64_decode, base64_encode, ImageError};
+use weaver_core::project::requests::{
     model_is_empty, LocalTime, RequestEntry, RequestError, RequestState, RequestStore, SendPlan,
 };
-use ts_rs::TS;
 
 use crate::blocking;
 use crate::error::{AppError, ErrorCode};
@@ -376,13 +376,13 @@ pub fn emit_changed(app: &AppHandle, project_id: &str) {
     }
 }
 
-/// Whether a batch of file changes touches `.trama/requests/`.
+/// Whether a batch of file changes touches `.weaver/requests/`.
 pub fn touches_requests(root: &Path, batch: &Rebuild) -> bool {
     match batch {
         Rebuild::All => true,
         Rebuild::Paths(paths) => {
-            let folder = trama_core::project::layout::trama_dir(root)
-                .join(trama_core::project::layout::REQUESTS_DIR);
+            let folder = weaver_core::project::layout::weaver_dir(root)
+                .join(weaver_core::project::layout::REQUESTS_DIR);
             paths.iter().any(|path| path.starts_with(&folder))
         }
     }
@@ -443,7 +443,7 @@ pub async fn flush_window(app: &AppHandle, project_id: &str) {
         .remove(project_id);
 }
 
-/// `trama job new design` from the working General.
+/// `weaver job new design` from the working General.
 struct GeneralSender(Arc<RequestsService>);
 
 impl RequestSender for GeneralSender {
@@ -467,7 +467,7 @@ impl JobObserver for JobEnd {
     fn job_ended(&self, job: &JobInfo) {
         if !matches!(
             job.kind,
-            trama_core::jobs::JobKind::Setup | trama_core::jobs::JobKind::Design
+            weaver_core::jobs::JobKind::Setup | weaver_core::jobs::JobKind::Design
         ) {
             return;
         }
@@ -770,7 +770,7 @@ mod tests {
     }
 
     fn put(root: &Path, rel: &str, text: &str) {
-        let path = root.join(".trama").join(rel);
+        let path = root.join(".weaver").join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
     }
@@ -975,7 +975,7 @@ mod tests {
         assert!(!f
             .project
             .path()
-            .join(format!(".trama/requests/{id}.md"))
+            .join(format!(".weaver/requests/{id}.md"))
             .exists());
         // Its job ending afterwards returns nothing, and a file that reappears is ignored.
         assert!(f
@@ -1001,7 +1001,7 @@ mod tests {
         let f = fixture(true);
         let id = written(&f, "Add a cart");
         f.service.send_locked(P, f.project.path(), &id).unwrap();
-        fs::remove_file(f.project.path().join(format!(".trama/requests/{id}.md"))).unwrap();
+        fs::remove_file(f.project.path().join(format!(".weaver/requests/{id}.md"))).unwrap();
         let listed = f.service.list_locked(P, f.project.path(), false).unwrap();
         assert!(listed.requests.is_empty());
         assert!(RequestStore::new(f.project.path())
@@ -1059,18 +1059,18 @@ mod tests {
     fn a_batch_touches_the_requests_only_when_it_names_their_folder() {
         let root = Path::new("/p");
         let inside = Rebuild::Paths(vec![
-            "/p/.trama/model/system.md".into(),
-            "/p/.trama/requests/.state.json".into(),
+            "/p/.weaver/model/system.md".into(),
+            "/p/.weaver/requests/.state.json".into(),
         ]);
         assert!(touches_requests(root, &inside));
         assert!(touches_requests(root, &Rebuild::All));
         assert!(!touches_requests(
             root,
-            &Rebuild::Paths(vec!["/p/.trama/tasks/a.md".into()])
+            &Rebuild::Paths(vec!["/p/.weaver/tasks/a.md".into()])
         ));
         assert!(!touches_requests(
             root,
-            &Rebuild::Paths(vec!["/p/.trama/requests-old/a.md".into()])
+            &Rebuild::Paths(vec!["/p/.weaver/requests-old/a.md".into()])
         ));
     }
 
@@ -1078,7 +1078,7 @@ mod tests {
     async fn the_commands_save_send_and_discard_in_the_projects_queue() {
         let base = tempfile::tempdir().unwrap();
         let f = fixture(true);
-        let state = AppState::new(trama_core::paths::AppDirs::from_bases(
+        let state = AppState::new(weaver_core::paths::AppDirs::from_bases(
             base.path(),
             base.path(),
             None,

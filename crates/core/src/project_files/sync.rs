@@ -7,7 +7,7 @@
 //! | Moment | Call |
 //! |--------|------|
 //! | approval of a Proposal that changed Requirements | [`regenerate_requirement_skills`] |
-//! | 1 s after the last change under `.trama/requirements/` | [`regenerate_requirement_skills`] |
+//! | 1 s after the last change under `.weaver/requirements/` | [`regenerate_requirement_skills`] |
 //! | opening check, `Update skills` | [`sync`] with [`SyncOptions::everything`] / [`SyncOptions::update_skills`] |
 //! | initialisation | [`super::initialise`] |
 
@@ -22,7 +22,7 @@ use crate::agent_files;
 use crate::project::changes::{self, ChangeSet};
 use crate::project::image::ProjectImage;
 use crate::project::init;
-use crate::project::layout::{trama_dir, REQUIREMENTS_DIR, TRAMA_DIR};
+use crate::project::layout::{weaver_dir, REQUIREMENTS_DIR, WEAVER_DIR};
 use crate::project::requirements::{Area, AREA_FILE};
 
 use super::plan::{Action, Change, Differing, Plan};
@@ -140,9 +140,9 @@ impl SyncOptions {
 #[error("{0}")]
 pub struct SyncError(pub String);
 
-/// The Requirements are missing when `.trama/requirements/` does not exist or holds nothing.
+/// The Requirements are missing when `.weaver/requirements/` does not exist or holds nothing.
 fn requirements_missing(root: &Path) -> bool {
-    match fs::read_dir(trama_dir(root).join(REQUIREMENTS_DIR)) {
+    match fs::read_dir(weaver_dir(root).join(REQUIREMENTS_DIR)) {
         Ok(mut listing) => listing.next().is_none(),
         Err(_) => true,
     }
@@ -181,7 +181,7 @@ fn previous_mode(existing: &[String], areas: &[Area]) -> Option<Mode> {
     }
 }
 
-/// What a mode change the Requirements would cause says, for `trama proposal move <id> open`:
+/// What a mode change the Requirements would cause says, for `weaver proposal move <id> open`:
 /// `None` when both are in the same mode.
 pub fn mode_switch_warning(before: &[Area], after: &[Area]) -> Option<String> {
     let (was, will_be) = (skills::mode_of(before), skills::mode_of(after));
@@ -216,7 +216,7 @@ pub fn sync(root: &Path, options: SyncOptions) -> Result<SyncReport, SyncError> 
         starting = changes
             .iter()
             .map(|(rel, _)| Change {
-                path: format!("{TRAMA_DIR}/{rel}"),
+                path: format!("{WEAVER_DIR}/{rel}"),
                 action: Action::Created,
             })
             .collect();
@@ -294,7 +294,7 @@ mod tests {
     }
 
     fn put(root: &Path, rel: &str, text: &str) {
-        let path = root.join(".trama").join(rel);
+        let path = root.join(".weaver").join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
     }
@@ -389,7 +389,7 @@ mod tests {
         let rewritten = regenerate_requirement_skills(dir.path()).unwrap();
         assert_eq!(rewritten.changes[0].action, Action::Rewritten);
 
-        fs::remove_file(dir.path().join(".trama/requirements/ui/main.md")).unwrap();
+        fs::remove_file(dir.path().join(".weaver/requirements/ui/main.md")).unwrap();
         let removed = regenerate_requirement_skills(dir.path()).unwrap();
         assert_eq!(
             removed.changes,
@@ -451,7 +451,7 @@ mod tests {
         for n in 3..40 {
             fs::remove_file(
                 dir.path()
-                    .join(format!(".trama/requirements/tech/frag-{n:02}.md")),
+                    .join(format!(".weaver/requirements/tech/frag-{n:02}.md")),
             )
             .unwrap();
         }
@@ -478,9 +478,9 @@ mod tests {
     #[test]
     fn update_skills_creates_the_starting_areas_only_when_the_requirements_are_missing() {
         let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(dir.path().join(".trama/model")).unwrap();
+        fs::create_dir_all(dir.path().join(".weaver/model")).unwrap();
         fs::write(
-            dir.path().join(".trama/model/system.md"),
+            dir.path().join(".weaver/model/system.md"),
             "# Shop\n\nA shop.\n",
         )
         .unwrap();
@@ -488,20 +488,20 @@ mod tests {
         let created: Vec<&str> = report
             .changes
             .iter()
-            .filter(|c| c.path.starts_with(".trama/"))
+            .filter(|c| c.path.starts_with(".weaver/"))
             .map(|c| c.path.as_str())
             .collect();
         assert_eq!(created.len(), 5);
-        assert!(created.contains(&".trama/requirements/ui/area.md"));
+        assert!(created.contains(&".weaver/requirements/ui/area.md"));
         assert!(dir
             .path()
-            .join(".trama/requirements/quality/area.md")
+            .join(".weaver/requirements/quality/area.md")
             .is_file());
         // Present now: nothing is created again, even if the developer deletes one Area.
-        fs::remove_dir_all(dir.path().join(".trama/requirements/ui")).unwrap();
+        fs::remove_dir_all(dir.path().join(".weaver/requirements/ui")).unwrap();
         let again = sync(dir.path(), SyncOptions::update_skills()).unwrap();
         assert!(again.is_unchanged());
-        assert!(!dir.path().join(".trama/requirements/ui").exists());
+        assert!(!dir.path().join(".weaver/requirements/ui").exists());
     }
 
     #[test]

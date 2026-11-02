@@ -13,7 +13,7 @@
 //! here: the values of sensitive environment variables and every secret given to
 //! [`Logger::redact`] are replaced by `[redacted]`, and a line is one line of bounded length.
 //!
-//! The `trama` command line never writes a log file; it does not use this module.
+//! The `weaver` command line never writes a log file; it does not use this module.
 
 use std::backtrace::Backtrace;
 use std::fmt::{self, Write as _};

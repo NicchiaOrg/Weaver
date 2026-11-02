@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::Serialize;
-use trama_core::jobs::notes::Note;
-use trama_core::jobs::{AnnouncementRecord, JobKind, JobState};
 use ts_rs::TS;
+use weaver_core::jobs::notes::Note;
+use weaver_core::jobs::{AnnouncementRecord, JobKind, JobState};
 
 use super::conversation::{Changed, Entry};
 use super::registry::Jobs;

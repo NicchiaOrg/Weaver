@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -55,12 +55,20 @@ function snapshot(backlog: BoardCard[]): BoardSnapshot {
 }
 
 const decisions: { name: string; args: unknown }[] = [];
+const handlers = new Map<string, (event: unknown) => void>();
+let cards: BoardCard[] = [];
+let revision = 1;
 
 async function show(card: BoardCard, actions: BoardActions = {}, fail?: { code: string; message: string }) {
   decisions.length = 0;
-  vi.mocked(on).mockImplementation((() => Promise.resolve(() => {})) as unknown as typeof on);
+  cards = [card];
+  revision = 1;
+  vi.mocked(on).mockImplementation(((name: string, handler: (event: unknown) => void) => {
+    handlers.set(name, handler);
+    return Promise.resolve(() => {});
+  }) as unknown as typeof on);
   vi.mocked(call).mockImplementation(((name: string, args: unknown) => {
-    if (name === "board_snapshot") return Promise.resolve(snapshot([card]));
+    if (name === "board_snapshot") return Promise.resolve({ ...snapshot(cards), revision });
     decisions.push({ name, args });
     return fail ? Promise.reject(fail) : Promise.resolve(null);
   }) as unknown as typeof call);
@@ -127,22 +135,23 @@ describe("the card of a Proposal", () => {
     expect(within(popover).getAllByRole("listitem").map((item) => item.textContent)).toEqual(reasons);
   });
 
-  it("says `refinement interrupted` and has only Approve and Discard", async () => {
+  it("says `refinement interrupted` and has only Refine and Discard", async () => {
     const user = userEvent.setup();
-    await show(proposal({ standing: "interrupted" }, { approve: { reasons: [], tooltip: "Continue refining, then approve" } }));
+    await show(proposal({ standing: "interrupted" }, { approve: { reasons: [], tooltip: "Continue refining, then approve", refines: true } }));
     const shown = within(card());
     expect(shown.getByText("refinement interrupted")).toBeInTheDocument();
-    expect(shown.getByRole("button", { name: "Approve" })).not.toHaveAttribute("aria-disabled");
+    expect(shown.getByRole("button", { name: "Refine" })).not.toHaveAttribute("aria-disabled");
+    expect(shown.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
     expect(shown.getByRole("button", { name: "Discard" })).toBeInTheDocument();
     expect(shown.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
     expect(shown.queryByRole("button", { name: "More ways to reject" })).not.toBeInTheDocument();
-    await user.hover(shown.getByRole("button", { name: "Approve" }));
+    await user.hover(shown.getByRole("button", { name: "Refine" }));
     expect((await screen.findAllByText("Continue refining, then approve")).length).toBeGreaterThan(0);
   });
 
   it("confirms Discard before it discards, and a cancel changes nothing", async () => {
     const user = userEvent.setup();
-    await show(proposal({ standing: "interrupted" }, { approve: { reasons: [], tooltip: "Continue refining, then approve" } }));
+    await show(proposal({ standing: "interrupted" }, { approve: { reasons: [], tooltip: "Continue refining, then approve", refines: true } }));
     await user.click(within(card()).getByRole("button", { name: "Discard" }));
     const dialog = await screen.findByRole("alertdialog", { name: "Discard P1?" });
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -193,7 +202,7 @@ describe("Approve", () => {
   it("lists every reason it is disabled in order and ignores a click", async () => {
     const user = userEvent.setup();
     const reasons = ["The agent is still finishing", "A run is in progress", "Proposal P2 is not approved yet"];
-    await show(proposal({}, { approve: { reasons, tooltip: null } }));
+    await show(proposal({}, { approve: { reasons, tooltip: null, refines: false } }));
     const approve = within(card()).getByRole("button", { name: "Approve" });
     expect(approve).toHaveAttribute("aria-disabled", "true");
     expect(reasonsOf(approve)).toEqual(reasons);
@@ -201,15 +210,27 @@ describe("Approve", () => {
     expect(decisions).toEqual([]);
   });
 
-  it("is enabled, with its tooltip, when only staleness blocks the Proposal", async () => {
+  it("is a yellow `Refine`, enabled, with its tooltip, when only staleness blocks the Proposal", async () => {
     const user = userEvent.setup();
-    await show(proposal({}, { stale: true, blocked: ["Stale: `model/x.md` changed since the Proposal started"], approve: { reasons: [], tooltip: "Refine on the current Model, then approve" } }));
-    const approve = within(card()).getByRole("button", { name: "Approve" });
-    expect(approve).not.toHaveAttribute("aria-disabled");
-    await user.hover(approve);
+    await show(proposal({}, { stale: true, blocked: ["Stale: `model/x.md` changed since the Proposal started"], approve: { reasons: [], tooltip: "Refine on the current Model, then approve", refines: true } }));
+    expect(within(card()).queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    const refine = within(card()).getByRole("button", { name: "Refine" });
+    expect(refine).not.toHaveAttribute("aria-disabled");
+    expect(refine).toHaveClass("bg-yellow-500", "dark:bg-yellow-400", "text-zinc-950");
+    expect(refine).not.toHaveClass("bg-primary");
+    expect(refine.querySelector("svg")).toHaveClass("lucide-sparkles");
+    await user.hover(refine);
     expect((await screen.findAllByText("Refine on the current Model, then approve")).length).toBeGreaterThan(0);
-    await user.click(approve);
-    expect(decisions).toHaveLength(1);
+    await user.click(refine);
+    expect(decisions).toEqual([{ name: "approve_proposal", args: { projectId: PROJECT, proposalId: "pppppppp" } }]);
+  });
+
+  it("stays a blue `Approve` with a check icon when a click does not refine", async () => {
+    await show(proposal());
+    const approve = within(card()).getByRole("button", { name: "Approve" });
+    expect(approve).toHaveClass("bg-primary");
+    expect(approve).not.toHaveClass("bg-yellow-500");
+    expect(approve.querySelector("svg")).toHaveClass("lucide-check");
   });
 
   it("shows a decision refused when applied as a notice and asks for the Board again", async () => {
@@ -285,7 +306,7 @@ describe("Reject and Rework with feedback", () => {
   it("is disabled only by the agent still finishing or by being refined, and the menu stays shut", async () => {
     const user = userEvent.setup();
     const reasons = ["The agent is still finishing", "Being refined"];
-    await show(proposal({ standing: "refining" }, { rejectReasons: reasons, approve: { reasons: [...reasons, "Stale: `x` changed"], tooltip: null } }));
+    await show(proposal({ standing: "refining" }, { rejectReasons: reasons, approve: { reasons: [...reasons, "Stale: `x` changed"], tooltip: null, refines: false } }));
     const shown = within(card());
     const reject = shown.getByRole("button", { name: "Reject" });
     expect(reject).toHaveAttribute("aria-disabled", "true");
@@ -331,15 +352,20 @@ describe("the model control", () => {
   });
 });
 
-describe("View on diagram and View requirements", () => {
-  it("each exists only when its focus has at least one step", async () => {
+describe("View requirements", () => {
+  it("exists only when its focus has at least one step, and there is no `View on diagram`", async () => {
     const viewOn = vi.fn();
-    const focusSteps = vi.fn((view: string) => (view === "diagram" ? 2 : 0));
+    const focusSteps = vi.fn((view: string) => (view === "requirements" ? 2 : 0));
     await show(proposal({}, { scopeRefs: ["order/Paid"] }), { viewOn, focusSteps });
     const user = userEvent.setup();
+    expect(within(card()).queryByRole("button", { name: "View on diagram" })).not.toBeInTheDocument();
+    await user.click(within(card()).getByRole("button", { name: "View requirements" }));
+    expect(viewOn).toHaveBeenCalledWith("requirements", ["order/Paid"], { kind: "proposal", id: "pppppppp", number: "P1", title: expect.any(String) });
+  });
+
+  it("is absent when its focus has no step", async () => {
+    await show(proposal({}, { scopeRefs: ["order/Paid"] }), { viewOn: vi.fn(), focusSteps: () => 0 });
     expect(within(card()).queryByRole("button", { name: "View requirements" })).not.toBeInTheDocument();
-    await user.click(within(card()).getByRole("button", { name: "View on diagram" }));
-    expect(viewOn).toHaveBeenCalledWith("diagram", ["order/Paid"], { kind: "proposal", id: "pppppppp", number: "P1", title: expect.any(String) });
   });
 });
 
@@ -363,8 +389,11 @@ describe("the details dialog", () => {
           label: "Orders",
           files: { added: ["model/a.md"], changed: ["model/b.md"], removed: ["model/c.md"] },
           requires: [{ id: "qqqqqqqq", shortNumber: "P2", title: "Carts", state: "Open", problem: "is not approved yet" }],
-          tasks: [{ title: "Cancel the order", technical: false, refs: ["order/Paid", "order"] }, { title: "Wire the queue", technical: true, refs: [] }],
-          removalTasks: [{ title: "Remove code of `order/Gone`", technical: false, refs: ["order"] }],
+          tasks: [
+            { id: "tttttttt", title: "Cancel the order", body: "Set it to Cancelled.\n" },
+            { id: "uuuuuuuu", title: "Wire the queue", body: "" },
+          ],
+          removalTasks: [{ id: "removal:order/Gone", title: "Remove code of `order/Gone`", body: "" }],
           scopeRefs: ["order/Paid"],
         },
       ),
@@ -383,16 +412,109 @@ describe("the details dialog", () => {
     expect(within(within(files).getByRole("group", { name: "Changed" })).getByText("model/b.md")).toBeInTheDocument();
     expect(within(within(files).getByRole("group", { name: "Removed" })).getByText("model/c.md")).toBeInTheDocument();
     const tasks = within(shown.getByRole("region", { name: "Tasks it creates" }));
-    expect(tasks.getByText("Cancel the order")).toBeInTheDocument();
-    expect(tasks.getByText("technical")).toBeInTheDocument();
-    expect(within(tasks.getByRole("list", { name: "References of Cancel the order" })).getAllByRole("listitem").map((i) => i.textContent)).toEqual(["order/Paid", "order"]);
-    expect(within(shown.getByRole("region", { name: "Code-removal Tasks" })).getByText("Remove code of `order/Gone`")).toBeInTheDocument();
+    expect(tasks.getAllByRole("button").map((b) => b.textContent)).toEqual(["Cancel the order", "Wire the queue"]);
+    expect(shown.queryByText("technical")).not.toBeInTheDocument();
+    expect(shown.queryByText("order/Paid")).not.toBeInTheDocument();
+    expect(shown.queryByRole("list", { name: /References of/ })).not.toBeInTheDocument();
+    const removal = within(shown.getByRole("region", { name: "Code-removal Tasks" }));
+    const gone = removal.getByText("order/Gone");
+    expect(gone.tagName).toBe("CODE");
+    expect(removal.getByRole("listitem").textContent).toBe("Remove code of order/Gone");
+    expect(removal.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("shows `Refine` in its footer when a click refines", async () => {
+    const { dialog } = await open(proposal({}, { stale: true, approve: { reasons: [], tooltip: "Refine on the current Model, then approve", refines: true } }));
+    expect(within(dialog).getByRole("button", { name: "Refine" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+  });
+
+  describe("a Task it creates", () => {
+    async function openWithTasks() {
+      return open(
+        proposal(
+          {},
+          {
+            carriesTasks: true,
+            creates: 3,
+            label: "Orders",
+            tasks: [
+              { id: "tttttttt", title: "Cancel the order", body: "Set the order to **Cancelled**.\n" },
+              { id: "uuuuuuuu", title: "Wire the queue", body: "  \n" },
+              { id: "vvvvvvvv", title: "Wire the queue", body: "The other one.\n" },
+            ],
+          },
+        ),
+      );
+    }
+
+    it("opens a nested Dialog over the details dialog with its title and its rendered text, and Close returns the focus to the row", async () => {
+      const { user, dialog } = await openWithTasks();
+      const row = within(dialog).getByRole("button", { name: "Cancel the order" });
+      await user.click(row);
+      const nested = await screen.findByRole("dialog", { name: "Cancel the order" });
+      expect(within(nested).getByRole("heading", { name: "Cancel the order" })).toBeInTheDocument();
+      expect(within(nested).getByText("Cancelled").tagName).toBe("STRONG");
+      expect(within(nested).queryByText("technical")).not.toBeInTheDocument();
+      expect(within(nested).queryByText("No description.")).not.toBeInTheDocument();
+
+      await user.click(within(nested).getByRole("button", { name: "Close" }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Cancel the order" })).not.toBeInTheDocument());
+      expect(screen.getByRole("dialog", { name: /Cancel an order/ })).toBeInTheDocument();
+      expect(row).toHaveFocus();
+    });
+
+    it("opens with the keyboard, and Esc closes only the nested Dialog and returns the focus to the row", async () => {
+      const { user, dialog } = await openWithTasks();
+      const row = within(dialog).getByRole("button", { name: "Cancel the order" });
+      row.focus();
+      await user.keyboard("{Enter}");
+      await screen.findByRole("dialog", { name: "Cancel the order" });
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Cancel the order" })).not.toBeInTheDocument());
+      expect(screen.getByRole("dialog", { name: /Cancel an order/ })).toBeInTheDocument();
+      expect(row).toHaveFocus();
+    });
+
+    it("says `No description.` for a blank text and tells apart Tasks with the same title", async () => {
+      const { user, dialog } = await openWithTasks();
+      const rows = within(dialog).getAllByRole("button", { name: "Wire the queue" });
+      expect(rows).toHaveLength(2);
+      await user.click(rows[0]!);
+      expect(within(await screen.findByRole("dialog", { name: "Wire the queue" })).getByText("No description.")).toBeInTheDocument();
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Wire the queue" })).not.toBeInTheDocument());
+      await user.click(rows[1]!);
+      expect(within(await screen.findByRole("dialog", { name: "Wire the queue" })).getByText("The other one.")).toBeInTheDocument();
+    });
+
+    it("keeps the details dialog open when it closes, and a second Esc closes that one", async () => {
+      const { user, dialog } = await openWithTasks();
+      await user.click(within(dialog).getByRole("button", { name: "Cancel the order" }));
+      await screen.findByRole("dialog", { name: "Cancel the order" });
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Cancel the order" })).not.toBeInTheDocument());
+      expect(screen.getByRole("dialog", { name: /Cancel an order/ })).toBeInTheDocument();
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
+
+    it("closes with the details dialog", async () => {
+      const { user, dialog } = await openWithTasks();
+      await user.click(within(dialog).getByRole("button", { name: "Cancel the order" }));
+      await screen.findByRole("dialog", { name: "Cancel the order" });
+      // The Proposal leaves the Board: the details dialog closes by itself.
+      cards = [];
+      revision = 2;
+      await act(async () => handlers.get("project-changed")?.({ projectId: PROJECT, revision: 2, slices: ["board"] }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
   });
 
   it("ends with the controls of the card", async () => {
     const { dialog } = await open(proposal({}, { carriesTasks: true, creates: 1, label: "Orders", scopeRefs: ["order/Paid"] }));
     const shown = within(dialog);
-    for (const name of ["Approve", "Reject", "More ways to reject", "Model", "View on diagram", "View requirements"]) {
+    for (const name of ["Approve", "Reject", "More ways to reject", "Model", "View requirements"]) {
       expect(shown.getByRole("button", { name })).toBeInTheDocument();
     }
   });

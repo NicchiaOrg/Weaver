@@ -1,15 +1,15 @@
-//! `trama model show | list | check`: read-only views of the Model, the Requirements and the
+//! `weaver model show | list | check`: read-only views of the Model, the Requirements and the
 //! Specs, run in the CLI.
 
 use serde_json::{json, Value};
-use trama_core::command::CommandReply;
-use trama_core::project::browse;
-use trama_core::project::diagnostic::{Diagnostic, Severity};
-use trama_core::project::image::ProjectImage;
+use weaver_core::command::CommandReply;
+use weaver_core::project::browse;
+use weaver_core::project::diagnostic::{Diagnostic, Severity};
+use weaver_core::project::image::ProjectImage;
 
 use super::reply;
 use crate::spec::*;
-use trama_core::project::model_view;
+use weaver_core::project::model_view;
 
 pub fn commands() -> Vec<Command> {
     vec![
@@ -29,7 +29,7 @@ pub fn commands() -> Vec<Command> {
                     req("body", text(), "The section text."),
                 ])), "The Requirement sections that apply to the element."),
             ])
-            .example("trama model show order/Paid"),
+            .example("weaver model show order/Paid"),
         Command::new("model", "list", "Lists the Model and the Requirements, or searches them for a text.", list_model)
             .notes(&[
                 "Without `text` it lists the Actors, the Features with their Machines and the Requirement Areas. With `text` it prints every element, State, Event, Requirement section and Specs entry whose text contains it, compared without regard to case; the Requirements are searched too.",
@@ -38,7 +38,7 @@ pub fn commands() -> Vec<Command> {
             .output(vec![
                 req("text", nullable(line()), "The text searched for, or null."),
                 req("hits", list(object(vec![
-                    req("reference", line(), "The reference to pass to `trama model show`."),
+                    req("reference", line(), "The reference to pass to `weaver model show`."),
                     req("kind", line(), "What the hit is."),
                     req("title", line(), "Its title."),
                     req("excerpt", line(), "The first line that holds the text."),
@@ -55,7 +55,7 @@ pub fn commands() -> Vec<Command> {
                     req("description", line(), "When an agent needs it."),
                 ])), "The Requirement Areas (without `text`)."),
             ])
-            .example(r#"trama model list --input '{"text":"payment"}'"#),
+            .example(r#"weaver model list --input '{"text":"payment"}'"#),
         Command::new("model", "check", "Validates the Model, the Requirements and the Specs.", check)
             .notes(&[
                 "Exits 1 when there is an error; a warning (a fragment over 12,288 bytes) does not change the exit code.",
@@ -65,12 +65,12 @@ pub fn commands() -> Vec<Command> {
                 req("errors", int_min(0), "How many errors."),
                 req("warnings", int_min(0), "How many warnings."),
                 req("diagnostics", list(object(vec![
-                    req("path", line(), "The file, relative to `.trama/`."),
+                    req("path", line(), "The file, relative to `.weaver/`."),
                     req("severity", one_of(&["error", "warning"]), "How serious."),
                     req("message", line(), "What is wrong."),
                 ])), "Every problem, by path."),
             ])
-            .example("trama model check"),
+            .example("weaver model check"),
     ]
 }
 

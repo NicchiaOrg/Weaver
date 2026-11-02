@@ -71,7 +71,7 @@ impl JobKind {
         self == JobKind::Scan
     }
 
-    /// Whether the job is a Run (it carries `TRAMA_RUN`, has the advisor, excludes a resolve).
+    /// Whether the job is a Run (it carries `WEAVER_RUN`, has the advisor, excludes a resolve).
     pub fn is_run(self) -> bool {
         self == JobKind::Run
     }

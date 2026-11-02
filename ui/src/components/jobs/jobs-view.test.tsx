@@ -115,10 +115,10 @@ describe("JobsView", () => {
     expect(call).toHaveBeenCalledWith("job_answer_permission", { projectId: PROJECT, jobId: "aaaaaaaa", request: 4, option: "allow" });
   });
 
-  it("makes a finished conversation read-only and points to General", async () => {
+  it("makes a finished conversation read-only and points to Chat", async () => {
     mount([job("aaaaaaaa", "done")], { jobId: "aaaaaaaa", seq: 0, entries: [], notes: [] });
-    expect(await screen.findByText("This job has ended. Continue in General.")).toBeInTheDocument();
+    expect(await screen.findByText("This job has ended. Continue in Chat.")).toBeInTheDocument();
     expect(screen.queryByPlaceholderText("Message the agent…")).toBeNull();
-    expect(screen.getByRole("button", { name: "Open General" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open Chat" })).toBeInTheDocument();
   });
 });

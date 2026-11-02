@@ -1,7 +1,7 @@
 //! [`General`]: the General of every open project, over the Machine `general-chat`.
 //!
 //! All state lives here, behind one lock. Everything that changes the state of a General goes
-//! through [`General::dispatch`]: the pure Machine decides ([`trama_core::jobs::general`]), the
+//! through [`General::dispatch`]: the pure Machine decides ([`weaver_core::jobs::general`]), the
 //! conversation and the record are updated, and the effects are carried out: bookkeeping here, I/O
 //! by the actor of the omp process ([`super::actor`]). The events to the UI follow each change.
 //!
@@ -17,14 +17,14 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use serde_json::Value;
 use tokio::sync::{mpsc, watch};
-use trama_core::jobs::general::{
+use weaver_core::jobs::general::{
     self as machine, Effect, GeneralMachine, GeneralRecord, GeneralStore, State,
 };
-use trama_core::jobs::machine::{MessageId, PermissionEnd, RequestId};
-use trama_core::paths::project_hash_of_canonical;
-use trama_core::project::clock::{now_instant, Clock, SystemClock};
-use trama_core::project::ids;
-use trama_core::project::random::OsRandom;
+use weaver_core::jobs::machine::{MessageId, PermissionEnd, RequestId};
+use weaver_core::paths::project_hash_of_canonical;
+use weaver_core::project::clock::{now_instant, Clock, SystemClock};
+use weaver_core::project::ids;
+use weaver_core::project::random::OsRandom;
 
 use super::actor::{self, Cmd, Msg};
 use super::wire::{GeneralEntries, GeneralEvents, GeneralSnapshot, GeneralState};
@@ -52,7 +52,7 @@ struct Slot {
     loaded: bool,
     /// The kept session.
     record: Option<GeneralRecord>,
-    /// The identity of the live omp (`TRAMA_GENERAL`).
+    /// The identity of the live omp (`WEAVER_GENERAL`).
     identity: Option<String>,
     /// The actor of the latest start: what an older actor reports is ignored.
     generation: u64,
@@ -95,6 +95,7 @@ impl Slot {
             project_id: project_id.to_owned(),
             working: self.machine.state() == State::Working,
             starting: self.machine.starting(),
+            loading: self.machine.state() == State::Loading && !self.loaded,
             kept: self.record.is_some() && !self.loaded,
         }
     }
@@ -193,7 +194,7 @@ impl General {
         let inner = self.lock();
         let slot = inner
             .get(project_id)
-            .ok_or_else(|| "General is not open for this project".to_owned())?;
+            .ok_or_else(|| "Chat is not open for this project".to_owned())?;
         Ok(GeneralSnapshot {
             state: slot.state(project_id),
             seq: slot.conversation.seq(),
@@ -213,30 +214,41 @@ impl General {
     // -----------------------------------------------------------------------------------------
 
     /// `window.OPENED`: reads the record of the project (the first time in this run). A kept
-    /// session is not reloaded now: the first message does it, as the Machine says.
+    /// session is reloaded at once, sending nothing: omp starts now, or as soon as omp-setup is
+    /// Ready. With no record omp starts only with the first message.
     pub async fn open(&self, project_id: &str, root: &Path) {
-        if self.lock().get(project_id).is_some_and(|slot| slot.ready) {
-            self.publish_state(project_id);
-            return;
-        }
-        let (store, hash) = (self.store.clone(), project_id.to_owned());
-        let record = match tauri::async_runtime::spawn_blocking(move || store.read(&hash)).await {
-            Ok(Ok(record)) => record,
-            Ok(Err(error)) => {
-                log_warn!("the record of the General of {project_id} is ignored: {error}");
-                None
-            }
-            Err(_) => None,
-        };
-        {
+        if !self.lock().get(project_id).is_some_and(|slot| slot.ready) {
+            let (store, hash) = (self.store.clone(), project_id.to_owned());
+            let record = match tauri::async_runtime::spawn_blocking(move || store.read(&hash)).await
+            {
+                Ok(Ok(record)) => record,
+                Ok(Err(error)) => {
+                    log_warn!("the record of the General of {project_id} is ignored: {error}");
+                    None
+                }
+                Err(_) => None,
+            };
             let mut inner = self.lock();
             let slot = inner
                 .entry(project_id.to_owned())
                 .or_insert_with(|| Slot::new(root));
-            slot.root = root.to_path_buf();
-            slot.loaded = record.is_none();
-            slot.record = record;
-            slot.ready = true;
+            // Another window may have read it meanwhile: the first reading stands.
+            if !slot.ready {
+                slot.loaded = record.is_none();
+                slot.record = record;
+                slot.ready = true;
+            }
+        }
+        let mut inner = self.lock();
+        let Some(slot) = inner.get_mut(project_id) else {
+            return;
+        };
+        slot.root = root.to_path_buf();
+        slot.last_state = None;
+        if slot.record.is_some() {
+            let omp_ready = self.host.omp_is_ready();
+            self.apply(project_id, slot, machine::Event::WindowOpened { omp_ready });
+        } else {
             self.emit(project_id, slot);
         }
         log_info!("the General of a project is open");
@@ -276,7 +288,7 @@ impl General {
         let slot = inner
             .get_mut(project_id)
             .filter(|slot| slot.ready)
-            .ok_or_else(|| "General is not open for this project".to_owned())?;
+            .ok_or_else(|| "Chat is not open for this project".to_owned())?;
         let message = slot.next_message;
         slot.next_message += 1;
         slot.texts.insert(message, text.to_owned());
@@ -338,7 +350,7 @@ impl General {
         let mut inner = self.lock();
         let slot = inner
             .get_mut(project_id)
-            .ok_or_else(|| "General is not open for this project".to_owned())?;
+            .ok_or_else(|| "Chat is not open for this project".to_owned())?;
         Ok(f(self, slot))
     }
 
@@ -482,14 +494,6 @@ impl General {
         }
     }
 
-    fn publish_state(&self, project_id: &str) {
-        let mut inner = self.lock();
-        if let Some(slot) = inner.get_mut(project_id) {
-            slot.last_state = None;
-            self.emit(project_id, slot);
-        }
-    }
-
     // -----------------------------------------------------------------------------------------
     // What the actor needs
     // -----------------------------------------------------------------------------------------
@@ -581,9 +585,9 @@ impl General {
     }
 
     /// omp opened its session: the history it replayed (when the kept session was reloaded)
-    /// becomes the conversation under the messages already sent, the record is written, and the
+    /// becomes the conversation above the messages already sent, the record is written, and the
     /// Machine goes on. `fallback` is why the kept session could not be reloaded and an empty one
-    /// started.
+    /// started: the notice that says so comes first, above those messages.
     pub(crate) fn session_opened(
         &self,
         project_id: &str,
@@ -593,7 +597,7 @@ impl General {
         fallback: Option<&str>,
     ) {
         let updated = now_instant(self.clock.as_ref())
-            .unwrap_or_else(|_| trama_core::project::clock::format_instant(1));
+            .unwrap_or_else(|_| weaver_core::project::clock::format_instant(1));
         let mut inner = self.lock();
         let Some(slot) = inner
             .get_mut(project_id)
@@ -601,23 +605,30 @@ impl General {
         else {
             return;
         };
-        if let Some(mut replayed) = replay {
-            if !slot.loaded {
-                for entry in slot.conversation.entries() {
-                    replayed.append(entry);
-                }
-                // The merged conversation is new as a whole: the UI fetches it.
-                replayed.mark_sent();
-                slot.conversation = replayed;
-                slot.reset = true;
+        let notice = fallback.map(|reason| {
+            format!("The conversation could not be reloaded ({reason}). A new one started.")
+        });
+        if slot.loaded {
+            // The conversation in memory is the one of the session: a replay is not shown again.
+            if let Some(notice) = &notice {
+                slot.conversation.notice(notice);
             }
+        } else {
+            let mut merged = replay.unwrap_or_else(Conversation::general);
+            // The history ends where omp's did: what the agent says next is a message of its own.
+            merged.end_turn();
+            if let Some(notice) = &notice {
+                merged.notice(notice);
+            }
+            for entry in slot.conversation.entries() {
+                merged.append(entry);
+            }
+            // The merged conversation is new as a whole: the UI fetches it.
+            merged.mark_sent();
+            slot.conversation = merged;
+            slot.reset = true;
         }
         slot.loaded = true;
-        if let Some(reason) = fallback {
-            slot.conversation.notice(&format!(
-                "The conversation could not be reloaded ({reason}). A new one started."
-            ));
-        }
         let record = GeneralRecord {
             project: slot.root.to_string_lossy().into_owned(),
             session_id: session.to_owned(),

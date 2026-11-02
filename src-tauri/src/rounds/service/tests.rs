@@ -3,11 +3,11 @@ use std::sync::mpsc::Receiver;
 use std::thread::{self, JoinHandle};
 
 use serde_json::{json, Value};
-use trama_core::endpoint::new_endpoint;
-use trama_core::ipc::{connect, serve_connection_watched, Listener};
-use trama_core::paths::AppDirs;
-use trama_core::protocol::{encode, Request};
-use trama_core::question::{Action, ActionError, Answer, Position, KIND};
+use weaver_core::endpoint::new_endpoint;
+use weaver_core::ipc::{connect, serve_connection_watched, Listener};
+use weaver_core::paths::AppDirs;
+use weaver_core::protocol::{encode, Request};
+use weaver_core::question::{Action, ActionError, Answer, Position, KIND};
 
 use super::*;
 use crate::rounds::view::OriginView;

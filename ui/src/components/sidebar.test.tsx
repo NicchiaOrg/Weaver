@@ -14,7 +14,7 @@ vi.mock("@/lib/backend", () => ({
   on: vi.fn(() => Promise.resolve(() => {})),
 }));
 
-const ORDER = ["Board", "Diagram", "Requirements", "Specs", "History", "Jobs", "General", "Settings"];
+const ORDER = ["Board", "Chat", "Jobs", "Requirements", "Specs", "History", "Settings"];
 
 function renderSidebar(counts: ShellCounts = { backlog: 0, jobsWaiting: 0 }, selected: ViewId = "board") {
   return render(
@@ -27,7 +27,7 @@ function renderSidebar(counts: ShellCounts = { backlog: 0, jobsWaiting: 0 }, sel
 const navigation = () => screen.getByRole("navigation", { name: "Views" });
 
 describe("sidebar", () => {
-  it("lists Board, Diagram, Requirements, Specs, History, Jobs, General, Settings in this order", () => {
+  it("lists Board, Chat, Jobs, Requirements, Specs, History, Settings in this order", () => {
     expect(VIEWS.map((v) => v.label)).toEqual(ORDER);
     renderSidebar();
     const names = within(navigation())
@@ -81,7 +81,7 @@ describe("sidebar", () => {
     expect(jobs).toHaveAccessibleName("Jobs, 2 jobs waiting for you");
     expect(within(jobs).getByText("2")).toHaveClass("text-amber-600", "dark:text-amber-400");
     expect(within(board).getByText("4")).not.toHaveClass("text-amber-600");
-    for (const other of ["Diagram", "Requirements", "Specs", "History", "General", "Settings"]) {
+    for (const other of ["Chat", "Requirements", "Specs", "History", "Settings"]) {
       expect(screen.getByRole("button", { name: other })).not.toHaveTextContent(/\d/);
     }
   });

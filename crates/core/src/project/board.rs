@@ -393,7 +393,7 @@ fn label_of(numbers: &ShortNumbers, kind: CardKind, id: &str) -> String {
     numbers.label_of(kind, id).unwrap_or_else(|| id.to_owned())
 }
 
-/// Files under `task-images/<id>/`, relative to `.trama/`, in order.
+/// Files under `task-images/<id>/`, relative to `.weaver/`, in order.
 pub(crate) fn task_image_files(project_root: &Path, id: &str) -> Vec<String> {
     fn walk(folder: &Path, rel: &str, out: &mut Vec<String>) {
         let Ok(entries) = fs::read_dir(folder) else {

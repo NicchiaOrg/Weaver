@@ -1,7 +1,7 @@
-//! The request kind `command`: a `trama` command that the app runs in the project's queue.
+//! The request kind `command`: a `weaver` command that the app runs in the project's queue.
 //!
 //! The CLI validates the whole input first, then sends one [`CommandRequest`] (the job identity
-//! `TRAMA_JOB` travels in the envelope, [`crate::protocol::Request::job`]). The app answers with
+//! `WEAVER_JOB` travels in the envelope, [`crate::protocol::Request::job`]). The app answers with
 //! a [`CommandReply`] in `Response::payload`, or with a failure whose `code` is one of [`code`];
 //! [`exit_code`] maps it to the exit code of the command line.
 
@@ -16,7 +16,7 @@ pub const KIND: &str = "command";
 pub struct CommandRequest {
     pub object: String,
     pub verb: String,
-    /// The canonical project root (the folder that holds `.trama/`).
+    /// The canonical project root (the folder that holds `.weaver/`).
     pub root: String,
     /// The card named on the command line, as typed: an identity, a prefix or a short number.
     /// The app turns it into an identity under the project lock.
@@ -28,7 +28,7 @@ pub struct CommandRequest {
     /// The validated input object.
     #[serde(default)]
     pub input: Map<String, Value>,
-    /// `TRAMA_GENERAL`, the token of the project's working General, when set.
+    /// `WEAVER_GENERAL`, the token of the project's working General, when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub general: Option<String>,
 }
@@ -55,7 +55,7 @@ pub mod code {
     pub const USAGE: &str = "usage";
     /// The input is not acceptable; the message lists every problem with its JSON path.
     pub const INVALID_INPUT: &str = "invalid-input";
-    /// The project has no `.trama/`.
+    /// The project has no `.weaver/`.
     pub const NOT_INITIALISED: &str = "not-initialised";
     /// The command is refused: nothing was written.
     pub const REFUSED: &str = "refused";

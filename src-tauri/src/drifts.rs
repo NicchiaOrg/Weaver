@@ -1,7 +1,7 @@
 //! The app side of the Drift: the decisions of the developer on its card (`Resolve`, `Fix the
 //! code`, `Accept Proposal`, `Dismiss Drift`) and the prepared question.
 //!
-//! The rules live in `trama_core::project::drift`. A decision runs through
+//! The rules live in `weaver_core::project::drift`. A decision runs through
 //! [`crate::decisions::decide`]: in the project's queue, under the project lock, with the facts of
 //! that moment, checked again when applied, and written whole or not at all.
 //!
@@ -28,23 +28,23 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Manager, State};
-use trama_core::job_instruction::{Job, ResolveAnswer};
-use trama_core::jobs::admission::StartPlan;
-use trama_core::project::board::AgentFacts;
-use trama_core::project::cards::CardKind;
-use trama_core::project::changes::{self, MutationError};
-use trama_core::project::clock::{now_instant, SystemClock};
-use trama_core::project::drift::answer::{self, Next};
-use trama_core::project::drift::decide::{self, Decision};
-use trama_core::project::drift::prepared::{self, Preparation, Prepared};
-use trama_core::project::drift::{self, reasons};
-use trama_core::project::image::ProjectImage;
-use trama_core::project::proposal::create::read_project_file;
-use trama_core::project::proposal::files;
-use trama_core::project::proposal::transitions::{self, Decider, SubmitContext};
-use trama_core::project::random::OsRandom;
-use trama_core::project::shortnum::{self, ShortNumbers};
-use trama_core::question::{Answer, Outcome, RoundRequest};
+use weaver_core::job_instruction::{Job, ResolveAnswer};
+use weaver_core::jobs::admission::StartPlan;
+use weaver_core::project::board::AgentFacts;
+use weaver_core::project::cards::CardKind;
+use weaver_core::project::changes::{self, MutationError};
+use weaver_core::project::clock::{now_instant, SystemClock};
+use weaver_core::project::drift::answer::{self, Next};
+use weaver_core::project::drift::decide::{self, Decision};
+use weaver_core::project::drift::prepared::{self, Preparation, Prepared};
+use weaver_core::project::drift::{self, reasons};
+use weaver_core::project::image::ProjectImage;
+use weaver_core::project::proposal::create::read_project_file;
+use weaver_core::project::proposal::files;
+use weaver_core::project::proposal::transitions::{self, Decider, SubmitContext};
+use weaver_core::project::random::OsRandom;
+use weaver_core::project::shortnum::{self, ShortNumbers};
+use weaver_core::question::{Answer, Outcome, RoundRequest};
 
 use crate::decisions;
 use crate::error::{AppError, ErrorCode};
@@ -61,13 +61,13 @@ use crate::windows::jobs::BoxFuture;
 // Decisions
 // ---------------------------------------------------------------------------------------------
 
-fn refused(notice: impl Into<String>) -> trama_core::project::board::Refused {
-    trama_core::project::board::Refused {
+fn refused(notice: impl Into<String>) -> weaver_core::project::board::Refused {
+    weaver_core::project::board::Refused {
         notice: notice.into(),
     }
 }
 
-fn now() -> Result<String, MutationError<trama_core::project::board::Refused>> {
+fn now() -> Result<String, MutationError<weaver_core::project::board::Refused>> {
     now_instant(&SystemClock)
         .map_err(|e| MutationError::Refused(refused(format!("the clock gives no valid time: {e}"))))
 }
@@ -441,7 +441,7 @@ impl Drifts {
         root: &Path,
         project_id: &str,
         drift_id: &str,
-        row: &trama_core::project::board::ResolutionRow,
+        row: &weaver_core::project::board::ResolutionRow,
         answer: ResolveAnswer,
     ) -> MutationResult {
         let image = ProjectImage::load(root);
@@ -635,12 +635,12 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use serde_json::json;
-    use trama_core::paths::AppDirs;
-    use trama_core::project::drift::create::{self, EditDrift, NewDrift, PreparedInput};
-    use trama_core::project::drift::prepared::PreparedDecision;
-    use trama_core::project::drift::FixOption;
-    use trama_core::project::proposal::data::{self as proposal_data, Kind, Status};
-    use trama_core::question::{Action, Position};
+    use weaver_core::paths::AppDirs;
+    use weaver_core::project::drift::create::{self, EditDrift, NewDrift, PreparedInput};
+    use weaver_core::project::drift::prepared::PreparedDecision;
+    use weaver_core::project::drift::FixOption;
+    use weaver_core::project::proposal::data::{self as proposal_data, Kind, Status};
+    use weaver_core::question::{Action, Position};
 
     use super::*;
     use crate::agent_work::{AgentWork, Ghost};
@@ -716,13 +716,13 @@ mod tests {
     }
 
     fn put(root: &Path, rel: &str, text: &str) {
-        let path = root.join(".trama").join(rel);
+        let path = root.join(".weaver").join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
     }
 
-    fn apply(root: &Path, changes: &trama_core::project::changes::ChangeSet) {
-        trama_core::project::changes::apply(root, changes, |_| Ok::<(), Infallible>(())).unwrap();
+    fn apply(root: &Path, changes: &weaver_core::project::changes::ChangeSet) {
+        weaver_core::project::changes::apply(root, changes, |_| Ok::<(), Infallible>(())).unwrap();
     }
 
     /// A project with one Open Drift that has two fix options and a valid prepared question
@@ -765,13 +765,13 @@ mod tests {
         )
         .unwrap();
         let text = match filed.changes.get(&filed.path) {
-            Some(trama_core::project::changes::Change::Write(text)) => text.replace(
+            Some(weaver_core::project::changes::Change::Write(text)) => text.replace(
                 "- order\n",
                 &refs.iter().map(|r| format!("- {r}\n")).collect::<String>(),
             ),
             _ => unreachable!(),
         };
-        let mut changes = trama_core::project::changes::ChangeSet::new();
+        let mut changes = weaver_core::project::changes::ChangeSet::new();
         changes.write(&filed.path, text);
         apply(root, &changes);
         let image = ProjectImage::load(root);
@@ -909,7 +909,7 @@ mod tests {
         );
         let image = ProjectImage::load(f.project.path());
         let resolution = image.cards_of(CardKind::Proposal).next().unwrap();
-        let rows = trama_core::project::board::resolution_rows(resolution);
+        let rows = weaver_core::project::board::resolution_rows(resolution);
         assert_eq!(
             (
                 rows[0].decision.as_str(),
@@ -922,7 +922,7 @@ mod tests {
             f.host.started.lock().unwrap().is_empty() && f.host.notices.lock().unwrap().is_empty()
         );
         // Nothing was decided: the Drift is still open, now in a resolution waiting for the developer.
-        assert!(trama_core::project::drift::is_open(
+        assert!(weaver_core::project::drift::is_open(
             image.card(CardKind::Drift, &f.id).unwrap()
         ));
     }
@@ -942,7 +942,7 @@ mod tests {
         let resolution = image.cards_of(CardKind::Proposal).next().unwrap();
         assert_eq!(proposal_data::status_of(resolution), Some(Status::Open));
         assert_eq!(
-            trama_core::project::board::resolution_rows(resolution)[0].decision,
+            weaver_core::project::board::resolution_rows(resolution)[0].decision,
             "dismissed"
         );
         assert!(f.host.started.lock().unwrap().is_empty());
@@ -1055,9 +1055,9 @@ mod tests {
             .unwrap()
             .path
             .clone();
-        let text = fs::read_to_string(f.project.path().join(".trama").join(&path)).unwrap();
+        let text = fs::read_to_string(f.project.path().join(".weaver").join(&path)).unwrap();
         fs::write(
-            f.project.path().join(".trama").join(&path),
+            f.project.path().join(".weaver").join(&path),
             text.replace("status: open", "status: dismissed"),
         )
         .unwrap();
@@ -1108,7 +1108,7 @@ mod tests {
         );
         assert!(f.host.started.lock().unwrap().is_empty());
         assert!(
-            !f.project.path().join(".trama/proposals").exists(),
+            !f.project.path().join(".weaver/proposals").exists(),
             "a refusal writes nothing"
         );
     }
@@ -1121,9 +1121,9 @@ mod tests {
             .unwrap()
             .path
             .clone();
-        let text = fs::read_to_string(f.project.path().join(".trama").join(&path)).unwrap();
+        let text = fs::read_to_string(f.project.path().join(".weaver").join(&path)).unwrap();
         fs::write(
-            f.project.path().join(".trama").join(&path),
+            f.project.path().join(".weaver").join(&path),
             text.replacen("created:", "job: jjjjjjjj\ncreated:", 1),
         )
         .unwrap();
@@ -1142,7 +1142,7 @@ mod tests {
 
     #[test]
     fn a_resolve_job_without_an_answer_is_refused_while_a_valid_question_exists() {
-        use trama_core::jobs::{names, JobKind};
+        use weaver_core::jobs::{names, JobKind};
         let f = fixture();
         let image = ProjectImage::load(f.project.path());
         let plan = |answer: Option<ResolveAnswer>| StartPlan {
@@ -1242,7 +1242,7 @@ mod tests {
         let f = fixture();
         let base = tempfile::tempdir().unwrap();
         let (state, id) = open(&f, base.path()).await;
-        let path = f.project.path().join(".trama").join(
+        let path = f.project.path().join(".weaver").join(
             &state
                 .pictures
                 .get(&id)
@@ -1286,7 +1286,7 @@ mod tests {
                 error.message
             );
         }
-        assert!(!f.project.path().join(".trama/tasks").exists());
+        assert!(!f.project.path().join(".weaver/tasks").exists());
     }
 
     #[tokio::test]
@@ -1317,7 +1317,7 @@ mod tests {
         fs::remove_file(
             f.project
                 .path()
-                .join(".trama/proposals/rrrrrrrr-r/proposal.md"),
+                .join(".weaver/proposals/rrrrrrrr-r/proposal.md"),
         )
         .unwrap();
         state

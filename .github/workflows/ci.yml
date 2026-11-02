@@ -52,7 +52,7 @@ jobs:
           - { name: windows-x64, os: windows-latest }
           - { name: linux-x64, os: ubuntu-22.04 }
     env:
-      BUILT_TRAMA: ${{ github.workspace }}/target/release/trama${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+      BUILT_WEAVER_CLI: ${{ github.workspace }}/target/release/weaver-cli${{ matrix.os == 'windows-latest' && '.exe' || '' }}
     steps:
       - name: Install the Tauri system packages (Linux)
         if: runner.os == 'Linux'
@@ -124,18 +124,18 @@ jobs:
       - name: Vitest
         run: pnpm --dir ui test
 
-      # The release build of the app, with `trama` bundled as its sidecar (built by src-tauri/build.rs
+      # The release build of the app, with `weaver-cli` bundled as its sidecar (built by src-tauri/build.rs
       # and copied next to the app binary). The bundles themselves are made by the release workflow.
-      - name: Build the app in release mode, with trama
+      - name: Build the app in release mode, with weaver-cli
         run: pnpm tauri build --no-bundle --ci
 
-      - name: Smoke of trama
-        run: node scripts/smoke-trama.mjs "$BUILT_TRAMA"
+      - name: Smoke of weaver-cli
+        run: node scripts/smoke-weaver-cli.mjs "$BUILT_WEAVER_CLI"
 
       - name: CLI contract tests
         run: node --test tests/cli-contract/
         env:
-          CLI_CONTRACT_BIN: ${{ env.BUILT_TRAMA }}
+          CLI_CONTRACT_BIN: ${{ env.BUILT_WEAVER_CLI }}
 
       # End-to-end tests with tauri-driver run on Linux and Windows only: macOS has no WebDriver for
       # its webview. They drive the release build above, never a dev server.

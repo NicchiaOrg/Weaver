@@ -15,8 +15,8 @@ vi.mock("@/lib/backend", () => ({
   isAppError: (value: unknown) => typeof value === "object" && value !== null && "code" in value && "message" in value,
 }));
 
-const toasts = vi.hoisted(() => ({ notice: vi.fn(), error: vi.fn() }));
-vi.mock("sonner", () => ({ toast: Object.assign(toasts.notice, { error: toasts.error }) }));
+const toasts = vi.hoisted(() => ({ notice: vi.fn(), warning: vi.fn(), error: vi.fn() }));
+vi.mock("sonner", () => ({ toast: Object.assign(toasts.notice, { warning: toasts.warning, error: toasts.error }) }));
 
 const PROJECT = "0123456789abcdef";
 const ID = "2026-11-02T09-30-00";
@@ -126,6 +126,7 @@ describe("the request editor", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     toasts.notice.mockClear();
+    toasts.warning.mockClear();
     toasts.error.mockClear();
     openJob.mockClear();
   });
@@ -271,7 +272,7 @@ describe("the request editor", () => {
     fake.text = "Theirs";
     await act(async () => handlers.get("requests-changed")?.({ projectId: PROJECT }));
     await settle();
-    expect(toasts.notice).toHaveBeenCalledWith("The request changed on disk; Weaver kept your version.");
+    expect(toasts.warning).toHaveBeenCalledWith("The request changed on disk; Weaver kept your version.");
     expect(area()).toHaveValue("Mine, edited");
     expect(fake.text).toBe("Mine, edited");
   });
@@ -282,7 +283,7 @@ describe("the request editor", () => {
     await act(async () => handlers.get("requests-changed")?.({ projectId: PROJECT }));
     await settle();
     expect(area()).toHaveValue("Changed outside");
-    expect(toasts.notice).not.toHaveBeenCalled();
+    expect(toasts.warning).not.toHaveBeenCalled();
   });
 
   it("does not take its own write for an outside change", async () => {
@@ -293,7 +294,7 @@ describe("the request editor", () => {
     await act(async () => handlers.get("requests-changed")?.({ projectId: PROJECT }));
     await settle();
     expect(area()).toHaveValue("Mine\n");
-    expect(toasts.notice).not.toHaveBeenCalled();
+    expect(toasts.warning).not.toHaveBeenCalled();
   });
 
   it("tells when the request was deleted outside Weaver", async () => {
@@ -301,7 +302,7 @@ describe("the request editor", () => {
     fake.gone = true;
     await act(async () => handlers.get("requests-changed")?.({ projectId: PROJECT }));
     await settle();
-    expect(toasts.notice).toHaveBeenCalledWith("The request was deleted outside Weaver.");
+    expect(toasts.warning).toHaveBeenCalledWith("The request was deleted outside Weaver.");
   });
 
   it("shows a sent request read-only, with its job, and opens the conversation", async () => {

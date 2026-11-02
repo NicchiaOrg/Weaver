@@ -48,7 +48,7 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 use tauri_plugin_window_state::StateFlags;
-use trama_core::project::clock::SystemClock;
+use weaver_core::project::clock::SystemClock;
 
 pub use jobs::{BoxFuture, CloseReason, NoJobs, OpenReason, WindowJobs, WindowOpened};
 pub use manager::{CloseOutcome, OpenFailure, OpenOutcome, ShowRequest, ShowView, WindowManager};

@@ -2,8 +2,8 @@
 //! what to show from the code.
 
 use serde::Serialize;
-use trama_core::lock::LockError;
 use ts_rs::TS;
+use weaver_core::lock::LockError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]

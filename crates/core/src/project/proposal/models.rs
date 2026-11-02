@@ -108,7 +108,7 @@ mod tests {
     }
 
     #[test]
-    fn a_choice_is_kept_in_the_local_data_and_never_under_trama() {
+    fn a_choice_is_kept_in_the_local_data_and_never_under_weaver() {
         let (base, project) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         proposal(
             project.path(),
@@ -130,7 +130,7 @@ mod tests {
             ProposalModels::load(&dirs(base.path()), "0123456789abcdef"),
             models
         );
-        // Nothing under `.trama/` names it.
+        // Nothing under `.weaver/` names it.
         fn walk(dir: &std::path::Path, found: &mut bool) {
             for item in std::fs::read_dir(dir).unwrap() {
                 let path = item.unwrap().path();
@@ -142,7 +142,7 @@ mod tests {
             }
         }
         let mut found = false;
-        walk(&project.path().join(".trama"), &mut found);
+        walk(&project.path().join(".weaver"), &mut found);
         assert!(!found);
 
         models.set("pppppppp", None);

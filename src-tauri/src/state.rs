@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use trama_core::paths::AppDirs;
+use weaver_core::paths::AppDirs;
 
 use crate::agent_work::AgentWorkSlot;
 use crate::mutations::MutationQueues;
@@ -44,7 +44,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use tauri::Manager;
-    use trama_core::paths::{AppDirs, APP_IDENTIFIER};
+    use weaver_core::paths::{AppDirs, APP_IDENTIFIER};
 
     /// The CLI resolves its folders with `AppDirs::resolve` with the app closed; they must be the
     /// folders Tauri gives the app for the identifier in `tauri.conf.json`.

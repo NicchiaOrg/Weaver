@@ -143,7 +143,7 @@ test("the build matrix is the one of the release requirements, with a 25 minute 
   assert.doesNotMatch(workflow, /msi/i);
   assert.equal([...workflow.matchAll(/timeout-minutes: 25/g)].length, 1);
   assert.equal([...workflow.matchAll(/timeout-minutes: 15/g)].length, 4);
-  assert.match(workflow, /lipo -create -output src-tauri\/binaries\/trama-universal-apple-darwin/);
+  assert.match(workflow, /lipo -create -output src-tauri\/binaries\/weaver-cli-universal-apple-darwin/);
   assert.match(workflow, /uses: tauri-apps\/tauri-action@/);
 });
 

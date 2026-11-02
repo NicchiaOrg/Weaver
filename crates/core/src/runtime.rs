@@ -1,7 +1,7 @@
 //! `<app local data>/runtime.json`: how the CLI finds the running app.
 //!
 //! The app writes it atomically at each launch (mode `0600`); the CLI reads it and connects to
-//! `endpoint` with `secret`. The secret never goes to env vars, arguments, logs or `.trama/`.
+//! `endpoint` with `secret`. The secret never goes to env vars, arguments, logs or `.weaver/`.
 
 use std::io;
 

@@ -54,7 +54,7 @@ pub struct Card {
     pub slug: String,
     /// The Proposal identity, for a `ProposalTask`.
     pub parent: Option<String>,
-    /// Path relative to `.trama/`: the card file (`proposal.md` for a Proposal).
+    /// Path relative to `.weaver/`: the card file (`proposal.md` for a Proposal).
     pub path: String,
     /// The first H1 of the body.
     pub title: String,

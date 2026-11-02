@@ -4,7 +4,7 @@
 //! General is not a job: it holds no Task, announces no card, asks no question round, notifies
 //! nothing and shows nothing on the Board. It has no instruction, skill or written request; the
 //! developer writes what he wants, and on his explicit request the agent starts a job of Weaver
-//! with `trama job new`, which is a normal job with a conversation of its own.
+//! with `weaver job new`, which is a normal job with a conversation of its own.
 //!
 //! | Module | Responsibility |
 //! |--------|----------------|
@@ -14,16 +14,17 @@
 //! | [`wire`] | The state and the conversation as the UI gets them, and where the events go |
 //!
 //! The pure part (the Machine, the command line of omp, the instruction, the record) is
-//! `trama_core::jobs::general`. The process, the JSON-RPC, the ACP calls and the conversation are
+//! `weaver_core::jobs::general`. The process, the JSON-RPC, the ACP calls and the conversation are
 //! the jobs' own ([`crate::jobs`]).
 //!
 //! # Where it plugs in
 //!
 //! * [`install`] (called by [`crate::jobs::install`]): the state `Arc<General>`, and
-//!   [`crate::jobs::Jobs::set_general`], which lets `trama job new` work from the General that is
+//!   [`crate::jobs::Jobs::set_general`], which lets `weaver job new` work from the General that is
 //!   working and from no other caller.
 //! * [`with_windows`] (called by [`crate::jobs::install_windows`]): the window of a project
-//!   opening reads its record; the window closing cancels the turn and ends omp.
+//!   opening reads its record and, when a session is kept, starts omp to reload it (sending no
+//!   prompt); the window closing cancels the turn and ends omp.
 
 pub mod actor;
 pub mod commands;

@@ -1,6 +1,6 @@
 [package]
-name = "trama-core"
-description = "Shared core of Weaver and the `trama` command line: folders, CLI-app protocol, locks and processes."
+name = "weaver-core"
+description = "Shared core of Weaver and the `weaver` command line: folders, CLI-app protocol, locks and processes."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

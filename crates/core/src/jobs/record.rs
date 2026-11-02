@@ -90,14 +90,14 @@ impl JobRecord {
         crate::paths::project_hash_of_canonical(Path::new(&self.project))
     }
 
-    /// `TRAMA_TASK` of a Run of one Task.
+    /// `WEAVER_TASK` of a Run of one Task.
     pub fn run_task(&self) -> Option<&str> {
-        self.env.get("TRAMA_TASK").map(String::as_str)
+        self.env.get("WEAVER_TASK").map(String::as_str)
     }
 
-    /// Whether the session is a Run (`TRAMA_RUN`).
+    /// Whether the session is a Run (`WEAVER_RUN`).
     pub fn is_run(&self) -> bool {
-        self.env.contains_key("TRAMA_RUN")
+        self.env.contains_key("WEAVER_RUN")
     }
 
     /// The latest note, when there is one.
@@ -260,8 +260,8 @@ mod tests {
             omp: "/bin/omp".to_owned(),
             args: vec!["acp".to_owned()],
             env: BTreeMap::from([
-                ("TRAMA_JOB".to_owned(), id.to_owned()),
-                ("TRAMA_RUN".to_owned(), "1".to_owned()),
+                ("WEAVER_JOB".to_owned(), id.to_owned()),
+                ("WEAVER_RUN".to_owned(), "1".to_owned()),
             ]),
             announcements: vec![AnnouncementRecord {
                 id: "aaaaaaaa".into(),

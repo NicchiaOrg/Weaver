@@ -1,4 +1,4 @@
-//! The single function every child process of Weaver and of the `trama` CLI is started with.
+//! The single function every child process of Weaver and of the `weaver` CLI is started with.
 //!
 //! A child starts without a shell, from a program path and an array of arguments; no user text
 //! is ever interpolated into a command line. On Windows it gets `CREATE_NO_WINDOW`.

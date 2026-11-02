@@ -1,7 +1,7 @@
 //! omp in the app: the one Machine `omp-setup`, the processes it asks for, the timers it needs and
 //! the commands and event of the UI (`requirements/tech#omp`, `requirements/tech#omp-setup`).
 //!
-//! The Machine itself is `trama_core::omp::machine` (pure: events in, effects out). This module
+//! The Machine itself is `weaver_core::omp::machine` (pure: events in, effects out). This module
 //! is the glue: [`OmpSetup`] holds it, runs each [`Effect`] on the blocking pool, turns what comes
 //! back into an [`Event`], keeps the 3 s re-check timer alive only while the Machine wants it,
 //! tells every window ([`events::emit_omp_changed`]) and tells the backend whether omp is ready.
@@ -32,18 +32,18 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Manager, State};
 use tokio::sync::watch;
-use trama_core::omp::failure::Failure;
-use trama_core::omp::lookup::{LookupEnv, Os};
-use trama_core::omp::machine::{
+use weaver_core::omp::failure::Failure;
+use weaver_core::omp::lookup::{LookupEnv, Os};
+use weaver_core::omp::machine::{
     Effect, Event, Machine, OmpStatus, ReadyOmp, Ticket, RECHECK_EVERY,
 };
-use trama_core::omp::path_env;
-use trama_core::omp::probe::{self, ProbeResult};
-use trama_core::omp::providers::{provider, Provider};
-use trama_core::omp::run::{which, SystemExec};
-use trama_core::omp::terminal;
-use trama_core::project::clock::{Clock, SystemClock};
-use trama_core::settings::SettingKey;
+use weaver_core::omp::path_env;
+use weaver_core::omp::probe::{self, ProbeResult};
+use weaver_core::omp::providers::{provider, Provider};
+use weaver_core::omp::run::{which, SystemExec};
+use weaver_core::omp::terminal;
+use weaver_core::project::clock::{Clock, SystemClock};
+use weaver_core::settings::SettingKey;
 
 use crate::error::{AppError, ErrorCode};
 use crate::{blocking, events, log_info, log_warn};
@@ -632,8 +632,8 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
-    use trama_core::omp::machine::Phase;
-    use trama_core::omp::probe::OmpModel;
+    use weaver_core::omp::machine::Phase;
+    use weaver_core::omp::probe::OmpModel;
 
     use super::*;
 
@@ -1005,7 +1005,7 @@ mod tests {
         tick();
         assert!(rig.scheduler.jobs.lock().unwrap().is_empty());
         rig.clock.0.fetch_add(
-            trama_core::omp::machine::UPDATE_CHECK_INTERVAL_MS,
+            weaver_core::omp::machine::UPDATE_CHECK_INTERVAL_MS,
             Ordering::SeqCst,
         );
         rig.ops.update_checks.lock().unwrap().push_back(Ok(None));

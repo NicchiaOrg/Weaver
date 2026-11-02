@@ -1,4 +1,4 @@
-//! `trama-core`: the library shared by the Weaver app and the `trama` command line.
+//! `weaver-core`: the library shared by the Weaver app and the `weaver` command line.
 //!
 //! It has no Tauri dependency, no async runtime and does synchronous `std` I/O only.
 //! Modules extended by later work (project files, rules, mutations, skills) are added
@@ -14,11 +14,11 @@
 //! | [`ipc`]     | Local-socket transport (`interprocess`) and one-request-per-connection serving |
 //! | [`lock`]    | OS advisory project lock shared by the app and the CLI |
 //! | [`process`] | The one function every child process is started with |
-//! | [`project`] | Project files under `.trama/`: parsers, rules, changes, in-memory image |
+//! | [`project`] | Project files under `.weaver/`: parsers, rules, changes, in-memory image |
 //! | [`settings`]| Weaver's settings: typed schema, defaults, validation, `settings.json` store |
 //! | [`agent_files`] | The texts installed for the agent (skills, sub-agent definitions, advisor instructions), embedded |
 //! | [`job_instruction`] | The one-line instruction of each job |
-//! | [`command`] | The request kind `command`: a `trama` command run by the app, and its reply |
+//! | [`command`] | The request kind `command`: a `weaver` command run by the app, and its reply |
 //! | [`jobs`]    | Jobs of the agent: kinds, the Machine `job`, admission, launch, registry record |
 //! | [`process_group`] | Children that never outlive Weaver, ended as a group |
 //! | [`omp`]     | omp: lookup, version, models, the Machine `omp-setup`, the system terminal |

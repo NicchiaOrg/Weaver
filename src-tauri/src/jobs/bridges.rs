@@ -5,14 +5,14 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tauri::{AppHandle, Manager};
-use trama_cli::spec::{Call, Failure};
-use trama_core::command::CommandReply;
-use trama_core::jobs::JobKind;
-use trama_core::project::board::AgentFacts;
-use trama_core::project::clock::{now_instant, SystemClock};
-use trama_core::project::image::ProjectImage;
-use trama_core::project::proposal::transitions::{self, SubmitContext};
-use trama_core::project::random::OsRandom;
+use weaver_cli::spec::{Call, Failure};
+use weaver_core::command::CommandReply;
+use weaver_core::jobs::JobKind;
+use weaver_core::project::board::AgentFacts;
+use weaver_core::project::clock::{now_instant, SystemClock};
+use weaver_core::project::image::ProjectImage;
+use weaver_core::project::proposal::transitions::{self, SubmitContext};
+use weaver_core::project::random::OsRandom;
 
 use super::authority::{AppAuthority, CommandExtension};
 use super::host::{MutationResult, TauriHost};
@@ -148,7 +148,7 @@ impl JobObserver for ProposalFollowUp {
                     if changes.is_empty() {
                         return Ok(None);
                     }
-                    trama_core::project::changes::apply(root, &changes, |_| Ok::<(), ()>(()))
+                    weaver_core::project::changes::apply(root, &changes, |_| Ok::<(), ()>(()))
                         .map(Some)
                         .map_err(|error| error.to_string())
                 });
@@ -170,7 +170,7 @@ impl JobObserver for ProposalFollowUp {
                         })
                     };
                     let waiting: Vec<String> = image
-                        .cards_of(trama_core::project::cards::CardKind::Proposal)
+                        .cards_of(weaver_core::project::cards::CardKind::Proposal)
                         .filter(|card| {
                             card.str_key("status") == Some("refining") && !working(&card.id)
                         })
@@ -216,7 +216,7 @@ impl ProposalFollowUp {
     }
 }
 
-/// The commands of the Proposals that need the app (`trama proposal move <id> approved|rejected|open`).
+/// The commands of the Proposals that need the app (`weaver proposal move <id> approved|rejected|open`).
 struct ProposalCli {
     app: AppHandle,
 }

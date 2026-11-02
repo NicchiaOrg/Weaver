@@ -10,7 +10,7 @@
 //! | [`state`]     | App-wide state managed by Tauri |
 //! | [`mutations`] | One serial mutation queue per project, holding the OS project lock |
 //! | [`server`]    | The CLI↔app socket server and `runtime.json` |
-//! | [`sidecar`]   | Copy of the bundled `trama` into `<app local data>/bin/` |
+//! | [`sidecar`]   | Copy of the bundled `weaver-cli` as `weaver` into `<app local data>/bin/` |
 //! | [`blocking`]  | `spawn_blocking` helper: disk work never runs on the main or IPC thread |
 //! | [`error`]     | The typed error of commands |
 //! | [`logging`]   | The log file: daily, rotated at 10 MB, 7 kept, no contents |
@@ -20,7 +20,7 @@
 //! | [`pictures`]  | The in-memory picture of each open project, with its revision; opened and closed with its window (`Pictures::open(root)` when the window is created) |
 //! | [`decisions`] | Applies a decision of the developer in the project's queue, checked again when applied |
 //! | [`board`]     | The Board snapshot and the Delete decision |
-//! | [`project_view`]| The Diagram, Requirements and Specs snapshot, with a Proposal drawn over the Model |
+//! | [`project_view`]| The Requirements and Specs snapshot, with a Proposal drawn over the Model |
 //! | [`project_setup`]| Get Started, the files installed for the agent kept up to date, Update skills, Import from Code |
 //! | [`proposal_view`]| What the card and the details of a Proposal show, worked out in the core |
 //! | [`proposals`] | The decisions on a Proposal (Approve, Reject, Rework, Discard, model) and what they start |
@@ -28,14 +28,14 @@
 //! | [`agent_work`]| Ghosts and facts about the agent's work, installed by the jobs |
 //! | [`history`]   | The History view: the entries of a project, newest first, with the Tasks they cite |
 //! | [`jobs`]      | The jobs of the agent: omp over ACP, the registry, the Jobs view, Run, Run all, Scan |
-//! | [`general`]   | General: the free conversation with omp of each project, its kept session, and `trama job new` from it |
-//! | [`cli_handler`]| The app side of the `trama` commands that write: runs them in the project's queue |
+//! | [`general`]   | General: the free conversation with omp of each project, its kept session, and `weaver job new` from it |
+//! | [`cli_handler`]| The app side of the `weaver` commands that write: runs them in the project's queue |
 //! | [`omp`]       | The Machine `omp-setup`: where omp is, whether it is ready, installing, updating and logging in |
 //! | [`rounds`]    | Question rounds: the queue of each project, the agents waiting for the developer, the prepared question of a Drift |
 //! | [`windows`]   | The Machine `window`: one window per project, the welcome window, restore at start, close and quit confirmations, `Open in editor` |
 //!
-//! Folders, protocol, locks and process spawning come from `trama-core`, so the app and the
-//! `trama` command line agree on them.
+//! Folders, protocol, locks and process spawning come from `weaver-core`, so the app and the
+//! `weaver` command line agree on them.
 
 pub mod agent_work;
 pub mod bindings;
@@ -76,7 +76,7 @@ use std::sync::Arc;
 use crate::startup::{StartupReport, Step};
 use crate::state::AppState;
 use tauri::{AppHandle, Manager, RunEvent};
-use trama_core::paths::AppDirs;
+use weaver_core::paths::AppDirs;
 
 /// Starts the app. Returns when the last window closed and the app exited.
 pub fn run() {
@@ -219,14 +219,14 @@ pub fn run() {
             let sidecar_dirs = dirs.clone();
             startup::spawn(
                 &handle,
-                Step::app("trama command line", move || {
+                Step::app("weaver command line", move || {
                     match sidecar::install(&sidecar_dirs) {
-                        Ok(sidecar::SyncOutcome::SourceMissing) => {
-                            Err("the bundled `trama` is missing or empty; it was not copied"
-                                .to_owned())
-                        }
+                        Ok(sidecar::SyncOutcome::SourceMissing) => Err(
+                            "the bundled `weaver-cli` is missing or empty; it was not copied"
+                                .to_owned(),
+                        ),
                         Ok(_) => Ok(()),
-                        Err(error) => Err(format!("cannot install `trama`: {error}")),
+                        Err(error) => Err(format!("cannot install `weaver`: {error}")),
                     }
                 }),
             );

@@ -52,18 +52,12 @@ describe("the Requirements page", () => {
     expect(within(orders).getAllByRole("heading", { level: 4 }).map((h) => h.textContent)).toEqual(["General", "order"]);
   });
 
-  it("has the reference as a chip that opens the element on the Diagram", async () => {
-    const user = userEvent.setup();
+  it("shows a section's title as plain text with `Open in editor` as its only control, and no reference chip", async () => {
     await show();
-    await user.click(screen.getByRole("button", { name: "View on diagram: order" }));
-    expect(showView).toHaveBeenCalledWith("diagram");
-  });
-
-  it("does not make a chip of General, nor of a reference the Diagram does not draw", async () => {
-    current = snapshot({}, { targets: {} });
-    await show();
+    const section = screen.getByRole("region", { name: "Orders, order" });
+    expect(within(section).getByRole("heading", { level: 4, name: "order" })).toBeInTheDocument();
+    expect(within(section).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual(["Open in editor"]);
     expect(screen.queryByRole("button", { name: /View on diagram/ })).not.toBeInTheDocument();
-    expect(screen.getByText("order")).toBeInTheDocument();
   });
 
   it("opens the file at the line of a section's heading", async () => {
@@ -71,11 +65,11 @@ describe("the Requirements page", () => {
     await show();
     const section = screen.getByRole("region", { name: "Orders, order" });
     await user.click(within(section).getByRole("button", { name: "Open in editor" }));
-    await waitFor(() => expect(backend.opened).toEqual([{ file: ".trama/requirements/orders/checkout.md", line: 9 }]));
+    await waitFor(() => expect(backend.opened).toEqual([{ file: ".weaver/requirements/orders/checkout.md", line: 9 }]));
   });
 
   it("shows the errors of an invalid Requirement at the top", async () => {
-    current = snapshot({}, { errors: [{ message: "Two sections are titled `order`.", file: ".trama/requirements/orders/checkout.md", line: 20 }] });
+    current = snapshot({}, { errors: [{ message: "Two sections are titled `order`.", file: ".weaver/requirements/orders/checkout.md", line: 20 }] });
     await show();
     expect(await screen.findByText("The Model has 1 error")).toBeInTheDocument();
   });

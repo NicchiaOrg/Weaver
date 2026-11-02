@@ -23,7 +23,7 @@ pub struct Request {
     pub version: u32,
     /// The per-launch secret from `runtime.json`.
     pub secret: String,
-    /// Job identity (`TRAMA_JOB`), when the request comes from a job.
+    /// Job identity (`WEAVER_JOB`), when the request comes from a job.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job: Option<String>,
     /// What is asked, for example `question.new`.

@@ -27,8 +27,8 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_updater::UpdaterExt;
-use trama_core::project::clock::{now_instant, Clock, SystemClock};
 use ts_rs::TS;
+use weaver_core::project::clock::{now_instant, Clock, SystemClock};
 
 use crate::blocking;
 use crate::error::{AppError, ErrorCode};
@@ -518,7 +518,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use trama_core::project::clock::ManualClock;
+    use weaver_core::project::clock::ManualClock;
 
     use super::*;
 

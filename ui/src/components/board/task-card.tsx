@@ -1,4 +1,4 @@
-import { ListChecks, Network, Package, Play, Trash2 } from "lucide-react";
+import { ListChecks, Package, Play, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 
 import type { TitledRef } from "@/bindings/TitledRef";
@@ -168,13 +168,12 @@ function TaskCard({ card }: { card: TaskCardData }) {
   );
 }
 
-/** `View on diagram`, `View requirements` (each only when its focus has at least one step) and `Run`. */
+/** `View requirements` (only when its focus has at least one step) and `Run`. */
 function TaskControls({ card }: { card: TaskCardData }) {
   const actions = useBoardActions();
   const subject: FocusSubject = { kind: "task", id: card.head.id, number: card.head.shortNumber, title: card.head.title };
   return (
     <>
-      <FocusButton view="diagram" refs={card.refs} subject={subject} />
       <FocusButton view="requirements" refs={card.refs} subject={subject} />
       <GuardedButton variant="outline" size="sm" reasons={card.runReasons} onClick={() => actions.runTask?.(card.head.id)}>
         <Play aria-hidden />
@@ -184,8 +183,7 @@ function TaskControls({ card }: { card: TaskCardData }) {
   );
 }
 
-const FOCUS_BUTTONS: Record<FocusView, { label: string; icon: typeof Network }> = {
-  diagram: { label: "View on diagram", icon: Network },
+const FOCUS_BUTTONS: Record<FocusView, { label: string; icon: typeof ListChecks }> = {
   requirements: { label: "View requirements", icon: ListChecks },
   specs: { label: "View specs", icon: Package },
 };
@@ -203,12 +201,12 @@ export function FocusButton({ view, refs, subject }: { view: FocusView; refs: re
   );
 }
 
-/** A reference as a chip: it focuses the diagram (or the requirements) on that one reference. */
+/** A reference as a chip: it focuses the first of Requirements and Specs where that reference has a step. */
 export function RefChip({ reference }: { reference: string }) {
   const { focusSteps, viewOn } = useBoardActions();
   const single = [reference];
   const view: FocusView | null =
-    viewOn && focusSteps ? (["diagram", "requirements", "specs"] as const).find((v) => focusSteps(v, single) >= 1) ?? null : null;
+    viewOn && focusSteps ? (["requirements", "specs"] as const).find((v) => focusSteps(v, single) >= 1) ?? null : null;
   const chip = cn(badgeVariants({ variant: "outline" }), "font-mono font-normal");
   if (!view) return <span className={chip}>{reference}</span>;
   return (
@@ -259,7 +257,7 @@ function TaskDetails({ card }: { card: TaskCardData }) {
   );
 }
 
-/** `View on diagram`, `View requirements`, `Run` and, only in To do, `Delete` (confirmed). */
+/** `View requirements`, `Run` and, only in To do, `Delete` (confirmed). */
 function TaskFooter({ card }: { card: TaskCardData }) {
   const { deleteTask } = useBoard();
   const [confirming, setConfirming] = useState(false);

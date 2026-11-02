@@ -1,14 +1,14 @@
 //! General against the scripted fake ACP agent: the first message starts omp, the kept session is
 //! reloaded after the window closed and after a restart of Weaver, an empty session starts when
-//! the load fails, Stop, the exit of omp, Clear, permissions and forms, and `trama job new` from
+//! the load fails, Stop, the exit of omp, Clear, permissions and forms, and `weaver job new` from
 //! General. No omp, no network.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
-use trama_core::jobs::general::{GeneralRecord, GeneralStore};
-use trama_core::settings::Permissions;
+use weaver_core::jobs::general::{GeneralRecord, GeneralStore};
+use weaver_core::settings::Permissions;
 
 use super::service::General;
 use super::wire::{GeneralEntries, GeneralEvents, GeneralState};
@@ -113,7 +113,7 @@ async fn an_empty_general_keeps_nothing_and_the_first_message_starts_omp_with_th
     let f = fixture().await;
     f.host.script(json!({
         "log": f.host.received_log(),
-        "logEnv": ["TRAMA_GENERAL", "TRAMA_JOB", "TRAMA_ENDPOINT", "TRAMA_RUN", "TRAMA_TASK"],
+        "logEnv": ["WEAVER_GENERAL", "WEAVER_JOB", "WEAVER_ENDPOINT", "WEAVER_RUN", "WEAVER_TASK"],
         "prompts": [[agent("Hello "), agent("there")], [agent("Again")]],
     }));
     let snapshot = f.general.snapshot(f.id()).unwrap();
@@ -168,12 +168,12 @@ async fn an_empty_general_keeps_nothing_and_the_first_message_starts_omp_with_th
     let received = f.host.received();
     let start = &received[0];
     assert_eq!(
-        start["env"]["TRAMA_GENERAL"],
+        start["env"]["WEAVER_GENERAL"],
         json!(f.general.identity(f.id()).unwrap())
     );
-    assert_eq!(start["env"]["TRAMA_ENDPOINT"], "/tmp/weaver-test.sock");
+    assert_eq!(start["env"]["WEAVER_ENDPOINT"], "/tmp/weaver-test.sock");
     // No job variable reaches omp, not even the one Weaver's own environment held.
-    for name in ["TRAMA_JOB", "TRAMA_RUN", "TRAMA_TASK"] {
+    for name in ["WEAVER_JOB", "WEAVER_RUN", "WEAVER_TASK"] {
         assert_eq!(start["env"][name], Value::Null, "{name}");
     }
     let args: Vec<&str> = start["args"]
@@ -182,7 +182,7 @@ async fn an_empty_general_keeps_nothing_and_the_first_message_starts_omp_with_th
         .iter()
         .filter_map(Value::as_str)
         .collect();
-    let file = trama_core::jobs::general::instruction_file(&f.host.dirs);
+    let file = weaver_core::jobs::general::instruction_file(&f.host.dirs);
     assert_eq!(
         args,
         [
@@ -196,7 +196,7 @@ async fn an_empty_general_keeps_nothing_and_the_first_message_starts_omp_with_th
     assert!(
         std::fs::read_to_string(&file)
             .unwrap()
-            .contains("trama job new"),
+            .contains("weaver job new"),
         "the instruction is written to general.md"
     );
     let new = received
@@ -299,14 +299,22 @@ async fn the_conversation_is_reloaded_after_the_window_closed_without_repeating_
     assert!(f.record().is_some());
     assert_eq!(f.entries().len(), 2);
 
+    f.host
+        .script(json!({ "log": f.host.received_log(), "prompts": [[agent("Second answer")]] }));
     f.general.open(f.id(), &f.project.root).await;
+    f.received("the load at window open", |m| m["method"] == "session/load")
+        .await;
     assert_eq!(
         f.entries().len(),
         2,
         "the conversation is there when the window opens again"
     );
-    f.host
-        .script(json!({ "log": f.host.received_log(), "prompts": [[agent("Second answer")]] }));
+    let methods = f.methods();
+    let load = methods.iter().position(|m| m == "session/load").unwrap();
+    assert!(
+        !methods[load..].contains(&"session/prompt".to_owned()),
+        "the window opening sends no prompt"
+    );
     f.send("Second question");
     until("the second turn", LIMIT, || {
         f.entries().contains(&Entry::Agent {
@@ -346,8 +354,8 @@ async fn the_conversation_is_reloaded_after_the_window_closed_without_repeating_
 }
 
 #[tokio::test]
-async fn after_a_restart_of_weaver_the_first_message_reloads_the_session_and_the_history_comes_back(
-) {
+async fn after_a_restart_of_weaver_the_history_comes_back_when_the_window_opens_without_a_message()
+{
     let f = fixture().await;
     f.host.script(json!({ "prompts": [[agent("Answer")]] }));
     f.send("Question");
@@ -361,20 +369,7 @@ async fn after_a_restart_of_weaver_the_first_message_reloads_the_session_and_the
     f.general.window_closed(f.id()).await;
     f.record().unwrap();
 
-    // A new run of Weaver: a new General over the same folders.
-    let events = Arc::new(Recorder::default());
-    let general = General::new(f.host.clone(), events.clone());
-    general.open(f.id(), &f.project.root).await;
-    let snapshot = general.snapshot(f.id()).unwrap();
-    assert!(
-        snapshot.entries.is_empty(),
-        "nothing is shown until the first message reloads the session"
-    );
-    assert!(
-        snapshot.state.kept,
-        "but a kept session waits, so Clear stays usable"
-    );
-
+    // A new run of Weaver: a new General over the same folders. The replay is what omp keeps.
     f.host.script(json!({
         "log": f.host.received_log(),
         "replay": [
@@ -383,6 +378,49 @@ async fn after_a_restart_of_weaver_the_first_message_reloads_the_session_and_the
         ],
         "prompts": [[agent("Newer answer")]],
     }));
+    let events = Arc::new(Recorder::default());
+    let general = General::new(f.host.clone(), events.clone());
+    general.open(f.id(), &f.project.root).await;
+    let snapshot = general.snapshot(f.id()).unwrap();
+    assert!(
+        snapshot.state.loading && snapshot.state.starting && snapshot.state.kept,
+        "the window opening starts the load: {:?}",
+        snapshot.state
+    );
+    assert!(!snapshot.state.working);
+
+    until("the history to come back", LIMIT, || {
+        let state = general.snapshot(f.id()).unwrap().state;
+        !state.loading && !general.entries(f.id()).is_empty()
+    })
+    .await;
+    let entries = general.entries(f.id());
+    assert!(
+        matches!(&entries[0], Entry::Developer { text, delivery: Delivery::Delivered, .. } if text == "Question")
+    );
+    assert_eq!(
+        entries[1],
+        Entry::Agent {
+            text: "Answer".into(),
+            complete: true
+        }
+    );
+    assert_eq!(entries.len(), 2);
+    assert!(
+        events.entries.lock().unwrap().iter().any(|e| e.reset),
+        "the UI is told to fetch the rebuilt conversation"
+    );
+    let state = general.snapshot(f.id()).unwrap().state;
+    assert!(!state.kept && !state.loading && !state.working && !state.starting);
+    let methods = f.methods();
+    let load = methods.iter().position(|m| m == "session/load").unwrap();
+    assert!(
+        !methods[load..].contains(&"session/prompt".to_owned()),
+        "nothing is sent to the agent while the conversation comes back"
+    );
+
+    // The first message after the history is the first prompt of the reloaded session, and the
+    // answer opens a new entry instead of continuing the replayed one.
     general.send_message(f.id(), "Newer question").unwrap();
     until("the reloaded turn", LIMIT, || {
         general.entries(f.id()).contains(&Entry::Agent {
@@ -399,7 +437,8 @@ async fn after_a_restart_of_weaver_the_first_message_reloads_the_session_and_the
         "a General has no instruction, so the first user message is the developer's"
     );
     assert!(
-        matches!(&entries[0], Entry::Developer { text, delivery: Delivery::Delivered, .. } if text == "Question")
+        matches!(&entries[2], Entry::Developer { text, .. } if text == "Newer question"),
+        "the message stays after the history"
     );
     assert_eq!(
         entries[1],
@@ -408,24 +447,22 @@ async fn after_a_restart_of_weaver_the_first_message_reloads_the_session_and_the
             complete: true
         }
     );
-    assert!(
-        matches!(&entries[2], Entry::Developer { text, .. } if text == "Newer question"),
-        "the message sent while it reloaded stays after the history"
-    );
-    assert!(
-        events.entries.lock().unwrap().iter().any(|e| e.reset),
-        "the UI is told to fetch the rebuilt conversation"
-    );
-    assert!(!general.snapshot(f.id()).unwrap().state.kept);
-    assert!(f
-        .host
-        .received()
-        .iter()
-        .any(|m| m["method"] == "session/load"));
 }
 
 #[tokio::test]
-async fn when_the_kept_session_cannot_be_loaded_an_empty_one_starts_with_a_notice() {
+async fn a_window_opening_with_no_kept_session_starts_no_omp() {
+    let f = fixture().await;
+    let state = f.general.snapshot(f.id()).unwrap().state;
+    assert!(!state.loading && !state.starting && !state.kept && !state.working);
+    assert!(
+        f.general.identity(f.id()).is_none(),
+        "omp starts only with the first message"
+    );
+    assert!(f.host.received().is_empty());
+}
+
+#[tokio::test]
+async fn a_message_sent_while_the_conversation_loads_waits_and_goes_out_below_the_history() {
     let f = fixture().await;
     f.host.script(json!({ "prompts": [[agent("Answer")]] }));
     f.send("Question");
@@ -439,9 +476,190 @@ async fn when_the_kept_session_cannot_be_loaded_an_empty_one_starts_with_a_notic
     f.general.window_closed(f.id()).await;
     f.record().unwrap();
 
+    // The agent holds the load until the gate file exists: nothing else orders the test.
+    let gate = f.host.dirs.local_data_dir().join("load.gate");
+    f.host.script(json!({
+        "log": f.host.received_log(),
+        "loadGate": gate,
+        "replay": [
+            { "sessionUpdate": "user_message_chunk", "content": { "type": "text", "text": "Question" } },
+            { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "Answer" } },
+        ],
+        "prompts": [[agent("Second answer")]],
+    }));
+    let events = Arc::new(Recorder::default());
+    let general = General::new(f.host.clone(), events.clone());
+    general.open(f.id(), &f.project.root).await;
+    f.received("the load request", |m| m["method"] == "session/load")
+        .await;
+    general.send_message(f.id(), "Meanwhile").unwrap();
+    let state = general.snapshot(f.id()).unwrap().state;
+    assert!(
+        state.loading && state.starting && !state.working,
+        "the message waits in Loading, it is not Working: {state:?}"
+    );
+    assert!(
+        matches!(&general.entries(f.id())[..], [Entry::Developer { text, delivery: Delivery::Queued, .. }] if text == "Meanwhile")
+    );
+    assert!(
+        !f.methods()
+            .iter()
+            .skip_while(|m| *m != "session/load")
+            .any(|m| m == "session/prompt" || m == "_session/steering"),
+        "nothing is sent to the agent while the conversation loads"
+    );
+
+    std::fs::write(&gate, "open").unwrap();
+    until("the message to be answered", LIMIT, || {
+        general.entries(f.id()).contains(&Entry::Agent {
+            text: "Second answer".into(),
+            complete: true,
+        })
+    })
+    .await;
+    let entries = general.entries(f.id());
+    assert!(matches!(&entries[0], Entry::Developer { text, .. } if text == "Question"));
+    assert_eq!(
+        entries[1],
+        Entry::Agent {
+            text: "Answer".into(),
+            complete: true
+        }
+    );
+    assert!(
+        matches!(&entries[2], Entry::Developer { text, delivery: Delivery::Delivered, .. } if text == "Meanwhile"),
+        "the history is above the message sent meanwhile: {entries:?}"
+    );
+    let methods = f.methods();
+    let load = methods.iter().position(|m| m == "session/load").unwrap();
+    assert!(
+        methods[load..]
+            .iter()
+            .filter(|m| *m == "session/prompt")
+            .count()
+            == 1,
+        "the waiting message is one prompt, after the load"
+    );
+}
+
+#[tokio::test]
+async fn clear_while_the_conversation_loads_ends_that_omp_and_starts_empty() {
+    let f = fixture().await;
+    f.host.script(json!({ "prompts": [[agent("Answer")]] }));
+    f.send("Question");
+    until("the turn", LIMIT, || {
+        f.entries().contains(&Entry::Agent {
+            text: "Answer".into(),
+            complete: true,
+        })
+    })
+    .await;
+    f.general.window_closed(f.id()).await;
+    f.record().unwrap();
+
+    let gate = f.host.dirs.local_data_dir().join("never.gate");
+    f.host.script(json!({
+        "log": f.host.received_log(),
+        "loadGate": gate,
+        "replay": [
+            { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "Answer" } },
+        ],
+    }));
     let general = General::new(f.host.clone(), Arc::new(Recorder::default()));
     general.open(f.id(), &f.project.root).await;
+    f.received("the load request", |m| m["method"] == "session/load")
+        .await;
+    general.send_message(f.id(), "Meanwhile").unwrap();
+
+    general.clear(f.id()).unwrap();
+    let state = general.snapshot(f.id()).unwrap().state;
+    assert!(!state.loading && !state.starting && !state.kept && !state.working);
+    assert!(
+        general.entries(f.id()).is_empty(),
+        "the conversation starts empty"
+    );
+    general.flush();
+    assert!(
+        GeneralStore::new(&f.host.dirs)
+            .read(f.id())
+            .unwrap()
+            .is_none(),
+        "the kept entry is deleted"
+    );
+    assert!(
+        general.identity(f.id()).is_none(),
+        "that omp is ended, its identity no longer accepted"
+    );
+    // The ended omp never answers the load: nothing comes back into the empty conversation.
+    general.window_closed(f.id()).await;
+    std::fs::write(&gate, "open").unwrap();
+    assert!(general.entries(f.id()).is_empty());
+    assert!(!general.snapshot(f.id()).unwrap().state.kept);
+}
+
+#[tokio::test]
+async fn closing_the_window_while_the_conversation_loads_ends_omp_and_keeps_the_record() {
+    let f = fixture().await;
+    f.host.script(json!({ "prompts": [[agent("Answer")]] }));
+    f.send("Question");
+    until("the turn", LIMIT, || {
+        f.entries().contains(&Entry::Agent {
+            text: "Answer".into(),
+            complete: true,
+        })
+    })
+    .await;
+    f.general.window_closed(f.id()).await;
+    f.record().unwrap();
+
+    let gate = f.host.dirs.local_data_dir().join("never.gate");
+    f.host
+        .script(json!({ "log": f.host.received_log(), "loadGate": gate }));
+    let general = General::new(f.host.clone(), Arc::new(Recorder::default()));
+    general.open(f.id(), &f.project.root).await;
+    f.received("the load request", |m| m["method"] == "session/load")
+        .await;
+    general.window_closed(f.id()).await;
+    let state = general.snapshot(f.id()).unwrap().state;
+    assert!(!state.loading && !state.starting && !state.working);
+    assert!(
+        state.kept,
+        "the conversation is kept and loads again when the window opens"
+    );
+    general.flush();
+    assert!(GeneralStore::new(&f.host.dirs)
+        .read(f.id())
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
+async fn when_the_kept_session_cannot_be_loaded_an_empty_one_starts_with_a_notice_above_the_waiting_messages(
+) {
+    let f = fixture().await;
+    f.host.script(json!({ "prompts": [[agent("Answer")]] }));
+    f.send("Question");
+    until("the turn", LIMIT, || {
+        f.entries().contains(&Entry::Agent {
+            text: "Answer".into(),
+            complete: true,
+        })
+    })
+    .await;
+    f.general.window_closed(f.id()).await;
+    f.record().unwrap();
+
     f.host.script(json!({ "log": f.host.received_log(), "loadError": "session not found", "sessionId": "fresh", "prompts": [[agent("Fresh answer")]] }));
+    let general = General::new(f.host.clone(), Arc::new(Recorder::default()));
+    general.open(f.id(), &f.project.root).await;
+    until("the empty session with the notice", LIMIT, || {
+        general.entries(f.id()).iter().any(|e| matches!(e, Entry::Notice { text } if text.contains("could not be reloaded") && text.contains("session not found")))
+    })
+    .await;
+    assert!(
+        !general.snapshot(f.id()).unwrap().state.loading,
+        "the loading ends with the empty session"
+    );
     general.send_message(f.id(), "Hello again").unwrap();
     until("the turn", LIMIT, || {
         general.entries(f.id()).contains(&Entry::Agent {
@@ -452,8 +670,8 @@ async fn when_the_kept_session_cannot_be_loaded_an_empty_one_starts_with_a_notic
     .await;
     let entries = general.entries(f.id());
     assert!(
-        entries.iter().any(|e| matches!(e, Entry::Notice { text } if text.contains("could not be reloaded") && text.contains("session not found"))),
-        "{entries:?}"
+        matches!(&entries[0], Entry::Notice { .. }),
+        "the notice comes first: {entries:?}"
     );
     let methods: Vec<String> = f.methods();
     let load = methods.iter().position(|m| m == "session/load").unwrap();
@@ -763,13 +981,13 @@ async fn a_permission_waits_for_the_developer_in_working_and_a_form_is_declined_
 }
 
 // -----------------------------------------------------------------------------------------------
-// `trama job new` from General
+// `weaver job new` from General
 // -----------------------------------------------------------------------------------------------
 
 mod job_new {
-    use trama_cli::exec::{execute, Authority};
-    use trama_cli::spec::Caller;
-    use trama_core::command::{code, CommandRequest};
+    use weaver_cli::exec::{execute, Authority};
+    use weaver_cli::spec::Caller;
+    use weaver_core::command::{code, CommandRequest};
 
     use super::*;
     use crate::jobs::authority::AppAuthority;
@@ -826,7 +1044,7 @@ mod job_new {
         s: &Setup,
         input: Value,
         token: Option<&str>,
-    ) -> Result<trama_core::command::CommandReply, trama_cli::spec::Failure> {
+    ) -> Result<weaver_core::command::CommandReply, weaver_cli::spec::Failure> {
         let caller = Caller {
             general: token.map(str::to_owned),
             ..Caller::default()
@@ -1010,5 +1228,65 @@ mod job_new {
                 .code,
             code::FORBIDDEN
         );
+    }
+}
+
+/// Whether the process is alive (a zombie already reaped counts as gone).
+#[cfg(unix)]
+fn alive(pid: &str) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", pid])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn clear_right_after_the_window_opened_leaves_no_omp_alive_however_far_it_had_started() {
+    let f = fixture().await;
+    f.host.script(json!({ "prompts": [[agent("Answer")]] }));
+    f.send("Question");
+    until("the turn", LIMIT, || {
+        f.entries().contains(&Entry::Agent {
+            text: "Answer".into(),
+            complete: true,
+        })
+    })
+    .await;
+    f.general.window_closed(f.id()).await;
+    f.record().unwrap();
+
+    for round in 0..5 {
+        let pid_file = f
+            .host
+            .dirs
+            .local_data_dir()
+            .join(format!("omp-{round}.pid"));
+        let gate = f.host.dirs.local_data_dir().join("never.gate");
+        f.host
+            .script(json!({ "loadGate": gate, "pidFile": pid_file }));
+        let general = General::new(f.host.clone(), Arc::new(Recorder::default()));
+        general.open(f.id(), &f.project.root).await;
+        // Clear while omp may be waited for, being spawned, or loading.
+        general.clear(f.id()).unwrap();
+        // Every omp of that actor is ended when it is done.
+        general.window_closed(f.id()).await;
+        if let Ok(pid) = std::fs::read_to_string(&pid_file) {
+            until("the omp to be gone", LIMIT, || !alive(pid.trim())).await;
+        }
+        // Clear deleted the record: put one back for the next round.
+        f.general.flush();
+        general.flush();
+        weaver_core::jobs::general::GeneralStore::new(&f.host.dirs)
+            .write(
+                f.id(),
+                &GeneralRecord {
+                    project: f.project.root.to_string_lossy().into_owned(),
+                    session_id: "fake-session".into(),
+                    updated: "2026-11-02T07:00:01.000Z".into(),
+                },
+            )
+            .unwrap();
     }
 }

@@ -111,14 +111,14 @@ export interface Commands {
   /** The whole History of an open project (entries newest first), worked out at one revision. */
   history_snapshot: { args: { projectId: string }; result: HistorySnapshot };
   /**
-   * The Diagram, Requirements and Specs of an open project at one revision, with the Proposal `overlay`
+   * The Requirements and Specs of an open project at one revision, with the Proposal `overlay`
    * drawn over the Model when it is still open (`null`: the current Model). The answer names the
    * Proposal it really drew.
    */
   view_snapshot: { args: { projectId: string; overlay: string | null }; result: ViewSnapshot };
   /** The state of the project (Not initialised, Empty Model, Has a Model), what Get Started lists and the opening check. */
   project_status: { args: { projectId: string }; result: ProjectStatus };
-  /** **Initialise**: creates `.trama` and the agent files; `force` confirms overwriting agent files that differ (else they come back as `conflicts`). */
+  /** **Initialise**: creates `.weaver` and the agent files; `force` confirms overwriting agent files that differ (else they come back as `conflicts`). */
   initialise_project: { args: { projectId: string; force: boolean }; result: InitialiseResult };
   /** **Update skills**: the structured report the command line prints too. */
   update_skills: { args: { projectId: string }; result: SkillsReport };

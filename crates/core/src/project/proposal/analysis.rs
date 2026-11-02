@@ -535,7 +535,7 @@ pub fn analyse(
     let base = data::base_of(card);
     for (path, _) in folder.held() {
         if !base.contains_key(path) {
-            handover_only.push(format!("`{path}` is not registered: make a file editable with `trama proposal edit`, never by creating it in the folder"));
+            handover_only.push(format!("`{path}` is not registered: make a file editable with `weaver proposal edit`, never by creating it in the folder"));
         }
     }
     for path in base.keys() {

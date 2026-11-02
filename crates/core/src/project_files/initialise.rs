@@ -1,7 +1,7 @@
 //! `developer.INITIALISE_PROJECT` of the Machine `project`: the one function that turns a folder
-//! with no `.trama/` into a project, for the app (`Initialise`) and the command line (`trama project new`).
+//! with no `.weaver/` into a project, for the app (`Initialise`) and the command line (`weaver project new`).
 //!
-//! It creates `.trama/` with an empty Model (the System named after the folder), the starting
+//! It creates `.weaver/` with an empty Model (the System named after the folder), the starting
 //! Areas with `area.md` only, and every file installed for the agent. When agent files it would
 //! install already exist with other content, nothing is created unless the overwrite is
 //! confirmed (`force`); a failure leaves nothing behind.
@@ -10,7 +10,7 @@ use std::path::Path;
 
 use crate::project::changes::{self, ChangeSet};
 use crate::project::init::{initial_changes, STARTING_AREAS};
-use crate::project::layout::trama_dir;
+use crate::project::layout::weaver_dir;
 
 use super::plan::{Differing, Plan};
 use crate::agent_files;
@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 /// Why a folder was not initialised.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InitialiseError {
-    /// `.trama/` exists: the folder is already a project.
+    /// `.weaver/` exists: the folder is already a project.
     Exists,
     /// Agent files exist with other content and the overwrite was not confirmed: every one of
     /// them, relative to the project folder, sorted. Nothing was created.
@@ -31,7 +31,7 @@ pub enum InitialiseError {
 /// What an initialisation created.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Initialised {
-    /// The files created in `.trama/`, relative to it.
+    /// The files created in `.weaver/`, relative to it.
     pub files: Vec<String>,
     /// The ids of the starting Areas.
     pub areas: Vec<&'static str>,
@@ -64,7 +64,7 @@ pub fn conflicts(root: &Path) -> Vec<String> {
 /// Initialises the project at `root` (the project's lock is held by the caller). `force` confirms
 /// overwriting the agent files that differ.
 pub fn initialise(root: &Path, force: bool) -> Result<Initialised, InitialiseError> {
-    if trama_dir(root).exists() {
+    if weaver_dir(root).exists() {
         return Err(InitialiseError::Exists);
     }
     let mut plan = Plan::new(root);
@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(image.areas().len(), 5);
         // Each Area holds `area.md` and nothing else.
         for (id, _, _) in STARTING_AREAS {
-            let names: Vec<_> = fs::read_dir(root.join(".trama/requirements").join(id))
+            let names: Vec<_> = fs::read_dir(root.join(".weaver/requirements").join(id))
                 .unwrap()
                 .map(|e| e.unwrap().file_name())
                 .collect();
@@ -193,7 +193,7 @@ mod tests {
         );
 
         initialise(dir.path(), true).unwrap();
-        assert!(dir.path().join(".trama/model/system.md").is_file());
+        assert!(dir.path().join(".weaver/model/system.md").is_file());
         assert_ne!(
             fs::read_to_string(dir.path().join(".omp/WATCHDOG.yml")).unwrap(),
             "mine"
@@ -216,9 +216,9 @@ mod tests {
         );
         // The folder we put there stays (it is the developer's); every file written before is undone.
         let mut expected = before.clone();
-        expected.retain(|p| !p.starts_with(".trama"));
+        expected.retain(|p| !p.starts_with(".weaver"));
         assert_eq!(snapshot(dir.path()), expected);
-        assert!(!dir.path().join(".trama").exists());
+        assert!(!dir.path().join(".weaver").exists());
     }
 
     #[test]
@@ -230,5 +230,48 @@ mod tests {
         let done = initialise(dir.path(), false).unwrap();
         assert_eq!(done.removed, [".agents/skills/trama-req-ui-old/SKILL.md"]);
         assert!(!old.exists());
+    }
+
+    #[test]
+    fn an_old_trama_folder_means_nothing_initialising_creates_weaver_and_leaves_it_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join(".trama/model/system.md");
+        fs::create_dir_all(old.parent().unwrap()).unwrap();
+        fs::write(&old, "# Old shop\n").unwrap();
+        assert!(!crate::project_files::has_weaver(dir.path()));
+        let before = snapshot(dir.path());
+
+        initialise(dir.path(), false).unwrap();
+
+        assert!(dir.path().join(".weaver/model/system.md").is_file());
+        assert_eq!(fs::read_to_string(&old).unwrap(), "# Old shop\n");
+        let kept: Vec<String> = snapshot(dir.path())
+            .into_iter()
+            .filter(|p| p.starts_with(".trama"))
+            .collect();
+        let expected: Vec<String> = before
+            .into_iter()
+            .filter(|p| p.starts_with(".trama"))
+            .collect();
+        assert_eq!(kept, expected);
+        // The project is the one in `.weaver`, whatever `.trama` holds.
+        let image = ProjectImage::load(dir.path());
+        assert!(image.diagnostics().is_empty(), "{:?}", image.diagnostics());
+        assert!(image.model().system.is_some());
+        assert!(image.model().is_empty());
+    }
+
+    #[test]
+    fn a_folder_with_both_is_the_project_in_weaver() {
+        let dir = tempfile::tempdir().unwrap();
+        initialise(dir.path(), false).unwrap();
+        let old = dir.path().join(".trama/model/system.md");
+        fs::create_dir_all(old.parent().unwrap()).unwrap();
+        fs::write(&old, "not even a title\n").unwrap();
+        assert!(crate::project_files::has_weaver(dir.path()));
+        assert_eq!(initialise(dir.path(), false), Err(InitialiseError::Exists));
+        let image = ProjectImage::load(dir.path());
+        assert!(image.diagnostics().is_empty(), "{:?}", image.diagnostics());
+        assert_eq!(fs::read_to_string(&old).unwrap(), "not even a title\n");
     }
 }

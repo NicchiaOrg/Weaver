@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use trama_core::lock::{self, LOCK_TIMEOUT};
-use trama_core::paths::AppDirs;
+use weaver_core::lock::{self, LOCK_TIMEOUT};
+use weaver_core::paths::AppDirs;
 
 use crate::blocking;
 use crate::error::AppError;

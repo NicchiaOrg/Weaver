@@ -3,7 +3,7 @@
 //! the handler of its entry (or replaces the entry) and touches nothing else.
 
 use serde_json::Value;
-use trama_core::command::CommandReply;
+use weaver_core::command::CommandReply;
 
 use crate::spec::*;
 
@@ -87,9 +87,9 @@ pub fn in_app(_input: &serde_json::Map<String, Value>, _arg: Option<&str>) -> Pl
 /// this kind is reached only with no app at hand.
 pub fn app_only(call: &Call) -> Result<CommandReply, Failure> {
     Err(Failure::new(
-        trama_core::command::code::APP_NOT_RUNNING,
+        weaver_core::command::code::APP_NOT_RUNNING,
         format!(
-            "`trama {}` needs Weaver, and Weaver is not running.",
+            "`weaver {}` needs Weaver, and Weaver is not running.",
             call.command.name()
         ),
     ))

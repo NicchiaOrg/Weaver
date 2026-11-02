@@ -5,9 +5,9 @@
 use std::path::Path;
 
 use serde_json::{Map, Value};
-use trama_core::command::{code, CommandReply};
-use trama_core::project::cards::CardKind;
-use trama_core::project::image::ProjectImage;
+use weaver_core::command::{code, CommandReply};
+use weaver_core::project::cards::CardKind;
+use weaver_core::project::image::ProjectImage;
 
 // ---------------------------------------------------------------------------------------------
 // Types of input and output fields
@@ -164,12 +164,12 @@ pub fn opt(name: &'static str, ty: Ty, doc: &'static str) -> Field {
 pub enum Access {
     /// Any caller.
     Anyone,
-    /// Only the agent of a Weaver job (`TRAMA_JOB`, accepted by the app); refused for any other
+    /// Only the agent of a Weaver job (`WEAVER_JOB`, accepted by the app); refused for any other
     /// caller.
     Job,
     /// Like [`Access::Job`], but any other caller gets the outcome `unavailable` (exit 0).
     JobOrUnavailable,
-    /// Only the agent of the project's working General (`TRAMA_GENERAL`).
+    /// Only the agent of the project's working General (`WEAVER_GENERAL`).
     General,
 }
 
@@ -199,7 +199,7 @@ pub enum Arg {
 /// What a handler may use.
 pub struct Call<'a> {
     pub command: &'a Command,
-    /// The project root (holds `.trama/`), canonical.
+    /// The project root (holds `.weaver/`), canonical.
     pub root: &'a Path,
     /// The image of the project, read when the command started (under the lock for writes).
     pub image: &'a ProjectImage,
@@ -215,25 +215,25 @@ pub struct Call<'a> {
 /// Who runs the command, from the environment of the process that typed it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Caller {
-    /// `TRAMA_JOB`.
+    /// `WEAVER_JOB`.
     pub job: Option<String>,
-    /// `TRAMA_GENERAL`.
+    /// `WEAVER_GENERAL`.
     pub general: Option<String>,
-    /// `TRAMA_RUN`.
+    /// `WEAVER_RUN`.
     pub run: Option<String>,
-    /// `TRAMA_TASK`.
+    /// `WEAVER_TASK`.
     pub task: Option<String>,
     /// What the app knows about the agent's work in the project (which jobs work); empty when no
     /// app answers, so a command run by the CLI itself sees no working job.
-    pub agent: trama_core::project::board::AgentFacts,
-    /// The registry record of `TRAMA_JOB`, when the job has one that could be read.
-    pub job_record: Option<trama_core::jobs::JobRecord>,
+    pub agent: weaver_core::project::board::AgentFacts,
+    /// The registry record of `WEAVER_JOB`, when the job has one that could be read.
+    pub job_record: Option<weaver_core::jobs::JobRecord>,
 }
 
 /// A command that did not do its work.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Failure {
-    /// One of [`trama_core::command::code`], or `not-implemented`.
+    /// One of [`weaver_core::command::code`], or `not-implemented`.
     pub code: String,
     pub message: String,
 }
@@ -261,7 +261,7 @@ impl Failure {
     }
 
     pub fn exit_code(&self) -> u8 {
-        trama_core::command::exit_code(&self.code)
+        weaver_core::command::exit_code(&self.code)
     }
 }
 
@@ -276,7 +276,7 @@ pub fn not_implemented(call: &Call) -> Result<CommandReply, Failure> {
     Err(Failure::new(
         NOT_IMPLEMENTED,
         format!(
-            "`trama {} {}` is not available in this version of Weaver yet",
+            "`weaver {} {}` is not available in this version of Weaver yet",
             call.command.object, call.command.verb
         ),
     ))
@@ -317,7 +317,7 @@ pub struct Command {
     pub states: &'static [&'static str],
     pub input: Vec<Field>,
     pub output: Vec<Field>,
-    /// A full command line, `trama ...`.
+    /// A full command line, `weaver ...`.
     pub example: &'static str,
     pub access: Access,
     /// Output is always JSON, with or without `--json` (`question new`).
@@ -409,9 +409,9 @@ impl Command {
         format!("{} {}", self.object, self.verb)
     }
 
-    /// The usage line: `trama <object> <verb> [<id>] ...`.
+    /// The usage line: `weaver <object> <verb> [<id>] ...`.
     pub fn usage(&self) -> String {
-        let mut usage = format!("trama {} {}", self.object, self.verb);
+        let mut usage = format!("weaver {} {}", self.object, self.verb);
         match self.arg {
             Arg::None => {}
             Arg::Card(_) => usage.push_str(" <id>"),

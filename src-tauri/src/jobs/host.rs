@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, Manager};
-use trama_core::omp::machine::ReadyOmp;
-use trama_core::paths::AppDirs;
-use trama_core::project::image::ProjectImage;
-use trama_core::settings::Settings;
+use weaver_core::omp::machine::ReadyOmp;
+use weaver_core::paths::AppDirs;
+use weaver_core::project::image::ProjectImage;
+use weaver_core::settings::Settings;
 
 use super::wire::{EntriesEvent, JobsSnapshot};
 use crate::error::{AppError, ErrorCode};
@@ -35,7 +35,7 @@ pub trait Host: Send + Sync + 'static {
     fn child_path(&self, omp: &Path) -> OsString;
     /// `omp.MISSING`: a job could not start omp.
     fn report_omp_missing(&self, reason: Option<String>);
-    /// The environment Weaver itself runs in, to be inherited by omp (minus `TRAMA_*`).
+    /// The environment Weaver itself runs in, to be inherited by omp (minus `WEAVER_*`).
     fn inherited_env(&self) -> Vec<(OsString, OsString)> {
         std::env::vars_os().collect()
     }

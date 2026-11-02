@@ -8,7 +8,7 @@ The technologies this project is built, tested and released with, from the devel
 
 ## Languages
 
-- Rust stable (edition 2021): the core crate shared by the Tauri backend and the `trama` command line, the command line itself and the app backend
+- Rust stable (edition 2021): the core crate shared by the Tauri backend and the `weaver` command line, the command line itself and the app backend
 - TypeScript 5: the interface only; strict mode, ES modules, `noUncheckedIndexedAccess`; type-checked with `tsc --noEmit`
 
 ## Frameworks and libraries
@@ -17,7 +17,7 @@ The technologies this project is built, tested and released with, from the devel
 - Tauri plugins: single-instance, window-state, notification, dialog, opener, updater (chosen by the agent: the official plugins for the single process, window memory, system notifications, folder picking, opening files in the developer's editor and updates)
 - Agent Client Protocol: the `agent-client-protocol` Rust crate, client side of ACP towards `omp acp`
 - tokio (chosen by the agent: async runtime required by Tauri and the ACP client)
-- clap (chosen by the agent: argument parsing of the `trama` command line, driven by one command registry)
+- clap (chosen by the agent: argument parsing of the `weaver` command line, driven by one command registry)
 - serde: with `serde_json` and `serde_yaml`, for front matter, Specs, settings and command line JSON (chosen by the agent: the standard serialisation of Rust)
 - schemars (chosen by the agent: produces the JSON Schemas printed by `--help --json` from the same input types)
 - notify (chosen by the agent: cross-platform file watching of each open project)
@@ -40,7 +40,7 @@ The technologies this project is built, tested and released with, from the devel
 
 ## Data and persistence
 
-- Project files: Markdown and YAML under `.trama/` in the developer's repository; no database
+- Project files: Markdown and YAML under `.weaver/` in the developer's repository; no database
 - OS configuration folder: settings, recent projects and the registry of jobs to resume, outside every repository
 - OS keychain: the only place for secrets; none are kept in the first version
 

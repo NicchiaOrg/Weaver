@@ -223,22 +223,22 @@ jobs:
       - name: Install the JS dependencies from the lockfile
         run: pnpm install --frozen-lockfile
 
-      # `trama` is built for the same target as the app and bundled as its sidecar: src-tauri/build.rs
+      # `weaver-cli` is built for the same target as the app and bundled as its sidecar: src-tauri/build.rs
       # does it for each target Cargo builds the app for. The universal macOS app needs one more file,
-      # `binaries/trama-universal-apple-darwin`: the arm64 and x64 builds joined with lipo. They are
+      # `binaries/weaver-cli-universal-apple-darwin`: the arm64 and x64 builds joined with lipo. They are
       # built into the folder build.rs uses (target/sidecar), so build.rs finds them up to date.
-      - name: Join the arm64 and x64 builds of trama with lipo (macOS)
+      - name: Join the arm64 and x64 builds of weaver-cli with lipo (macOS)
         if: runner.os == 'macOS'
         run: |
           for triple in aarch64-apple-darwin x86_64-apple-darwin; do
-            cargo build --release --locked --package trama-cli --bin trama --target "$triple" --target-dir target/sidecar
+            cargo build --release --locked --package weaver-cli --bin weaver-cli --target "$triple" --target-dir target/sidecar
           done
           mkdir -p src-tauri/binaries
-          lipo -create -output src-tauri/binaries/trama-universal-apple-darwin \
-            target/sidecar/aarch64-apple-darwin/release/trama \
-            target/sidecar/x86_64-apple-darwin/release/trama
-          chmod +x src-tauri/binaries/trama-universal-apple-darwin
-          lipo -info src-tauri/binaries/trama-universal-apple-darwin
+          lipo -create -output src-tauri/binaries/weaver-cli-universal-apple-darwin \
+            target/sidecar/aarch64-apple-darwin/release/weaver-cli \
+            target/sidecar/x86_64-apple-darwin/release/weaver-cli
+          chmod +x src-tauri/binaries/weaver-cli-universal-apple-darwin
+          lipo -info src-tauri/binaries/weaver-cli-universal-apple-darwin
 
       - name: Build the bundles and upload them to the draft release
         uses: tauri-apps/tauri-action@v0

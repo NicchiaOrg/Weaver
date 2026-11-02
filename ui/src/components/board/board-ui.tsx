@@ -34,8 +34,8 @@ export interface BoardActions {
   /** `Run` on one Task, by its permanent id. */
   runTask?: (taskId: string) => void;
   /**
-   * How many steps the focus on these references has in a view. `View on diagram` and `View
-   * requirements` exist only when `viewOn` is set and this answers at least 1 for their view.
+   * How many steps the focus on these references has in a view. `View requirements` exists only
+   * when `viewOn` is set and this answers at least 1 for its view.
    * `subject` names what the focus is about when it is a Proposal or a Task.
    */
   focusSteps?: (view: FocusView, refs: readonly string[], subject?: FocusSubject) => number;

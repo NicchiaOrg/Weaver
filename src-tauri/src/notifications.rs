@@ -1,6 +1,6 @@
 //! System notifications (Machine `notification`, feature `app`): the app side.
 //!
-//! The decisions are the core's ([`trama_core::notification`]): whether the project window is in the
+//! The decisions are the core's ([`weaver_core::notification`]): whether the project window is in the
 //! foreground, which text each event gets, how finished jobs group, where a click leads. This
 //! module listens to the jobs ([`JobObserver`]: `job.ENDED`, and the waits of a round of questions
 //! and of a permission), to the focus of the windows, and to the clicks of the system, and sends
@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_notification::{NotificationExt, PermissionState};
-use trama_core::notification::{
+use weaver_core::notification::{
     decide_end, decide_wait, in_foreground, kind_of_end, Book, Click, Destination, Focus, Kind,
     Notice, WindowFacts,
 };
@@ -309,7 +309,7 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
-    use trama_core::jobs::{JobKind, JobState};
+    use weaver_core::jobs::{JobKind, JobState};
 
     use super::*;
 

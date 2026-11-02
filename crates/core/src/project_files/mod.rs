@@ -5,12 +5,12 @@
 //! | [`requirement_skills`] | The `trama-req-*` skills: budget, mode, generated text (pure) |
 //! | [`plan`] | A set of files to write and remove, applied whole or not at all |
 //! | [`sync`] | The one function that keeps the installed files and the Requirement skills right, and its structured report |
-//! | [`initialise`] | `developer.INITIALISE_PROJECT`: `.trama/`, the starting Areas and every agent file |
+//! | [`initialise`] | `developer.INITIALISE_PROJECT`: `.weaver/`, the starting Areas and every agent file |
 //! | [`schedule`] | At most one check per project at a time; requests meanwhile coalesce |
 //! | [`folder_tree`] | The folders of `Import from Code`: no dot names, nothing git ignores |
 //!
 //! The embedded list of installed files is [`crate::agent_files`]; the starting Areas are in
-//! [`crate::project::init`]. The app and the `trama` command line call these same functions, so
+//! [`crate::project::init`]. The app and the `weaver` command line call these same functions, so
 //! both write identical bytes.
 
 pub mod folder_tree;
@@ -23,7 +23,7 @@ pub mod sync;
 use serde::Serialize;
 use ts_rs::TS;
 
-use crate::project::layout::trama_dir;
+use crate::project::layout::weaver_dir;
 use crate::project::model::Model;
 
 pub use initialise::{initialise, InitialiseError, Initialised};
@@ -35,33 +35,33 @@ pub use sync::{regenerate_requirement_skills, sync, SyncError, SyncOptions, Sync
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProjectState {
-    /// The folder has no `.trama/`.
+    /// The folder has no `.weaver/`.
     NotInitialised,
-    /// `.trama/` exists and its Model has no Feature and no Actor (open Drifts and Requirements do not count).
+    /// `.weaver/` exists and its Model has no Feature and no Actor (open Drifts and Requirements do not count).
     EmptyModel,
     /// The Model has at least one Feature or one Actor.
     HasModel,
 }
 
 impl ProjectState {
-    /// The state of a folder: whether `.trama/` exists, and its Model.
-    pub fn of(trama_exists: bool, model: &Model) -> Self {
-        match (trama_exists, model.is_empty()) {
+    /// The state of a folder: whether `.weaver/` exists, and its Model.
+    pub fn of(weaver_exists: bool, model: &Model) -> Self {
+        match (weaver_exists, model.is_empty()) {
             (false, _) => ProjectState::NotInitialised,
             (true, true) => ProjectState::EmptyModel,
             (true, false) => ProjectState::HasModel,
         }
     }
 
-    /// Whether the folder has a `.trama/` (the project exists).
+    /// Whether the folder has a `.weaver/` (the project exists).
     pub fn is_initialised(self) -> bool {
         self != ProjectState::NotInitialised
     }
 }
 
-/// Whether `<root>/.trama` is a folder.
-pub fn has_trama(root: &std::path::Path) -> bool {
-    trama_dir(root).is_dir()
+/// Whether `<root>/.weaver` is a folder.
+pub fn has_weaver(root: &std::path::Path) -> bool {
+    weaver_dir(root).is_dir()
 }
 
 #[cfg(test)]

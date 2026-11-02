@@ -4,16 +4,16 @@
 //! decides anything: it shows these.
 
 use serde::Serialize;
-use trama_core::project::board::AgentFacts;
-use trama_core::project::cards::{Card, CardKind};
-use trama_core::project::image::ProjectImage;
-use trama_core::project::proposal::analysis::{self, Analysis, Gate, Reason, RequiredProblem};
-use trama_core::project::proposal::data::{self, Kind, Status};
-use trama_core::project::proposal::files::Folders;
-use trama_core::project::proposal::models::ProposalModels;
-use trama_core::project::proposal::transitions::gate_of;
-use trama_core::project::shortnum::ShortNumbers;
 use ts_rs::TS;
+use weaver_core::project::board::AgentFacts;
+use weaver_core::project::cards::{Card, CardKind};
+use weaver_core::project::image::ProjectImage;
+use weaver_core::project::proposal::analysis::{self, Analysis, Gate, Reason, RequiredProblem};
+use weaver_core::project::proposal::data::{self, Kind, Status};
+use weaver_core::project::proposal::files::Folders;
+use weaver_core::project::proposal::models::ProposalModels;
+use weaver_core::project::proposal::transitions::gate_of;
+use weaver_core::project::shortnum::ShortNumbers;
 
 /// `Being refined`: the second reason of Approve (after the agent and a Run) and the only one of
 /// Reject and Rework with feedback besides the agent.
@@ -23,13 +23,17 @@ pub const TOOLTIP_REFINE: &str = "Refine on the current Model, then approve";
 /// The tooltip of Approve on a Draft a refinement left half-way.
 pub const TOOLTIP_CONTINUE: &str = "Continue refining, then approve";
 
-/// A Task a Proposal creates.
+/// A Task a Proposal creates: its title and its body, for the compact row and the nested Dialog
+/// of the details dialog.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProposalTask {
+    /// Stable among the Tasks of the Proposal, so that Tasks with the same title stay apart: the
+    /// identity of a Task it carries, `removal:<ref>` for a code-removal Task.
+    pub id: String,
     pub title: String,
-    pub technical: bool,
-    pub refs: Vec<String>,
+    /// The Markdown after the title; empty for a code-removal Task.
+    pub body: String,
 }
 
 /// A Proposal named in `requires`, with its state.
@@ -46,7 +50,7 @@ pub struct RequiredProposal {
     pub problem: Option<String>,
 }
 
-/// The paths a Proposal adds, changes and removes, relative to `.trama/`.
+/// The paths a Proposal adds, changes and removes, relative to `.weaver/`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProposalFiles {
@@ -55,13 +59,16 @@ pub struct ProposalFiles {
     pub removed: Vec<String>,
 }
 
-/// A button: why it is disabled, one reason per line in the fixed order, and the tooltip it has
-/// while enabled.
+/// A button: why it is disabled, the tooltip it has while enabled and whether a click starts a
+/// refinement job (`Refine`, solid yellow) instead of approving.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProposalControl {
     pub reasons: Vec<String>,
     pub tooltip: Option<String>,
+    /// A click starts a refinement job: the control is `Refine`, not `Approve`. Decided here, never
+    /// guessed from the tooltip.
+    pub refines: bool,
 }
 
 /// The rest of the card of a Proposal, beyond the head every card has.
@@ -91,7 +98,7 @@ pub struct ProposalView {
     pub reject_reasons: Vec<String>,
     /// It is not itself a rework: `Rework with feedback…` exists.
     pub can_rework: bool,
-    /// The references of its scope, for `View on diagram` and `View requirements`.
+    /// The references of its scope, for `View requirements`.
     pub scope_refs: Vec<String>,
 }
 
@@ -151,6 +158,7 @@ fn controls(
         Some(Status::Draft) => ProposalControl {
             reasons: finishing().into_iter().collect(),
             tooltip: Some(TOOLTIP_CONTINUE.to_owned()),
+            refines: true,
         },
         Some(Status::Refining) => {
             let mut reasons: Vec<String> = finishing().into_iter().collect();
@@ -162,6 +170,7 @@ fn controls(
             ProposalControl {
                 reasons,
                 tooltip: None,
+                refines: false,
             }
         }
         _ => {
@@ -169,6 +178,7 @@ fn controls(
                 ProposalControl {
                     reasons: Vec::new(),
                     tooltip: Some(TOOLTIP_REFINE.to_owned()),
+                    refines: true,
                 }
             } else {
                 ProposalControl {
@@ -178,6 +188,7 @@ fn controls(
                         .map(|r| r.text(numbers))
                         .collect(),
                     tooltip: None,
+                    refines: false,
                 }
             }
         }
@@ -199,20 +210,22 @@ pub fn view(
     let gate = gate_of(facts, card);
     let (approve, reject_reasons) = controls(&analysis, numbers, card, gate);
     let carries_tasks = analysis.kind.carries_tasks() && analysis.kind != Kind::Resolution;
-    let row = |title: String, technical: bool, refs: Vec<String>| ProposalTask {
-        title,
-        technical,
-        refs,
-    };
-    let tasks: Vec<ProposalTask> = analysis
-        .tasks
-        .iter()
-        .map(|t| row(t.title.clone(), t.technical, t.refs.clone()))
+    let tasks: Vec<ProposalTask> = data::tasks_of(image, id)
+        .into_iter()
+        .map(|t| ProposalTask {
+            id: t.id.clone(),
+            title: t.title.clone(),
+            body: crate::board::body_after_title(t),
+        })
         .collect();
     let removal_tasks: Vec<ProposalTask> = analysis
         .removals
         .iter()
-        .map(|r| row(r.title(), r.technical(), r.refs()))
+        .map(|r| ProposalTask {
+            id: format!("removal:{}", r.removed),
+            title: r.title(),
+            body: String::new(),
+        })
         .collect();
     let blocked: Vec<String> = analysis
         .blocking()
@@ -246,20 +259,20 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    use trama_core::project::shortnum;
+    use weaver_core::project::shortnum;
 
     use super::*;
 
     const ORDER: &str = "# Order\n\nAn order.\n\n## States\n\n### Draft (initial)\nChoosing.\n- `CONFIRM` → Paid\n\n### Paid\n\n## Events\n\n### CONFIRM\nConfirmed.\n";
 
     fn put(root: &Path, rel: &str, text: &str) {
-        let path = root.join(".trama").join(rel);
+        let path = root.join(".weaver").join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
     }
 
     fn hash(text: &str) -> String {
-        trama_core::project::text::sha256_hex(&trama_core::project::text::file_content(text))
+        weaver_core::project::text::sha256_hex(&weaver_core::project::text::file_content(text))
     }
 
     fn project() -> tempfile::TempDir {
@@ -284,7 +297,7 @@ mod tests {
             &ORDER.replace("### Paid\n", "### Paid\nPaid.\n"),
         );
         let front =
-            fs::read_to_string(root.join(format!(".trama/proposals/{id}-t/proposal.md"))).unwrap();
+            fs::read_to_string(root.join(format!(".weaver/proposals/{id}-t/proposal.md"))).unwrap();
         put(
             root,
             &format!("proposals/{id}-t/proposal.md"),
@@ -305,7 +318,7 @@ mod tests {
 
     fn view_of(root: &Path, facts: &AgentFacts, models: &ProposalModels) -> ProposalView {
         let image = ProjectImage::load(root);
-        let folders = trama_core::project::proposal::files::read_folders(root, &image);
+        let folders = weaver_core::project::proposal::files::read_folders(root, &image);
         let numbers = shortnum::peek(root, image.cards());
         view(&image, &folders, &numbers, facts, models, "pppppppp").unwrap()
     }
@@ -330,6 +343,14 @@ mod tests {
             (view.creates, view.tasks.len(), view.removal_tasks.len()),
             (1, 1, 0)
         );
+        assert_eq!(
+            view.tasks,
+            [ProposalTask {
+                id: "tttttttt".to_owned(),
+                title: "Pay".to_owned(),
+                body: "Do it.\n".to_owned(),
+            }]
+        );
         assert_eq!(view.model.as_deref(), Some("anthropic/claude-opus"));
         assert_eq!(view.approve, ProposalControl::default());
         assert!(view.reject_reasons.is_empty() && view.can_rework);
@@ -350,8 +371,8 @@ mod tests {
         let mut facts = AgentFacts::default();
         facts.working_jobs.insert("jjjjjjjj".into());
         facts.run_in_progress = true;
-        let text =
-            fs::read_to_string(dir.path().join(".trama/proposals/pppppppp-t/proposal.md")).unwrap();
+        let text = fs::read_to_string(dir.path().join(".weaver/proposals/pppppppp-t/proposal.md"))
+            .unwrap();
         put(
             dir.path(),
             "proposals/pppppppp-t/proposal.md",
@@ -398,7 +419,8 @@ mod tests {
             view.approve,
             ProposalControl {
                 reasons: Vec::new(),
-                tooltip: Some(TOOLTIP_REFINE.to_owned())
+                tooltip: Some(TOOLTIP_REFINE.to_owned()),
+                refines: true,
             }
         );
     }
@@ -435,6 +457,7 @@ mod tests {
         );
         assert!(view.approve.reasons.is_empty());
         assert_eq!(view.approve.tooltip.as_deref(), Some(TOOLTIP_CONTINUE));
+        assert!(view.approve.refines);
     }
 
     #[test]

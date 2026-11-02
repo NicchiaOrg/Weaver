@@ -27,7 +27,7 @@ function PathList({ paths, label }: { paths: readonly string[]; label: string })
 
 /**
  * `Not initialised`: what every view of the window except Settings shows. `Initialise` creates the
- * `.trama` folder and the agent files; when agent files exist with other content nothing is created
+ * `.weaver` folder and the agent files; when agent files exist with other content nothing is created
  * until the developer confirms overwriting them.
  */
 export function GetStarted() {
@@ -54,7 +54,7 @@ export function GetStarted() {
       <div className="flex w-full max-w-[560px] flex-col gap-5">
         <h2 className="text-xl font-semibold">Set up Weaver in this folder</h2>
         <p className="text-sm">
-          Weaver will create a .trama folder that describes this project. It holds no secrets and is meant to be committed, like the
+          Weaver will create a .weaver folder that describes this project. It holds no secrets and is meant to be committed, like the
           agent files it installs.
         </p>
         {status ? (

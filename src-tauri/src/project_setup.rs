@@ -2,7 +2,7 @@
 //! a folder is a project and whether its Model is empty, the files Weaver installs for the agent
 //! and the commands of Get Started, `Import from Code` and `Update skills`.
 //!
-//! The rules are in `trama_core::project_files` (what is written, the one report, at most one check
+//! The rules are in `weaver_core::project_files` (what is written, the one report, at most one check
 //! at a time); this module keeps one small record per open project, runs the work in the project's
 //! queue and tells the window with one `project-state` event per change:
 //!
@@ -14,7 +14,7 @@
 //! | `workspace.FILES_CHANGED`, `PROJECT_FOLDER_APPEARED`, `PROJECT_FOLDER_REMOVED` | [`ProjectHooks::batch_applied`] |
 //! | `proposal.APPROVED` | the approval regenerates the Requirement skills itself (`transitions::approve_with`) |
 //!
-//! The state is never stored apart from the files: it is worked out from whether `.trama/` exists
+//! The state is never stored apart from the files: it is worked out from whether `.weaver/` exists
 //! and from what the project's picture holds, after every batch of changes.
 
 use std::path::{Path, PathBuf};
@@ -24,13 +24,13 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::oneshot;
-use trama_core::project::image::ProjectImage;
-use trama_core::project_files::folder_tree::{self, TreeEntry};
-use trama_core::project_files::schedule::{Runs, Want};
-use trama_core::project_files::{
-    self, has_trama, InitialiseError, ProjectState, SyncOptions, SyncReport,
-};
 use ts_rs::TS;
+use weaver_core::project::image::ProjectImage;
+use weaver_core::project_files::folder_tree::{self, TreeEntry};
+use weaver_core::project_files::schedule::{Runs, Want};
+use weaver_core::project_files::{
+    self, has_weaver, InitialiseError, ProjectState, SyncOptions, SyncReport,
+};
 
 use crate::blocking;
 use crate::error::{AppError, ErrorCode};
@@ -44,7 +44,7 @@ use crate::windows::project::ProjectHooks;
 use crate::windows::WindowManager;
 use crate::{log_info, log_warn};
 
-/// How long after the last change under `.trama/requirements/` the Requirement skills are generated again.
+/// How long after the last change under `.weaver/requirements/` the Requirement skills are generated again.
 pub const REGENERATION_DELAY: Duration = Duration::from_secs(1);
 
 /// What the check of the installed files did when the window opened, as the window shows it.
@@ -137,7 +137,7 @@ pub trait Environment: Send + Sync + 'static {
         project_id: &str,
         work: Box<dyn FnOnce() + Send>,
     ) -> BoxFuture<Result<(), String>>;
-    /// Reads the project again and tells the windows what changed (after `.trama/` appeared).
+    /// Reads the project again and tells the windows what changed (after `.weaver/` appeared).
     fn rebuilt(&self, project_id: &str) -> BoxFuture<()>;
     fn emit(&self, status: &ProjectStatus);
 }
@@ -171,7 +171,7 @@ struct Entry {
     /// Requests waiting for the next run, and those the running one serves.
     waiting: Vec<Waiter>,
     serving: Vec<Waiter>,
-    /// Grows with every change under `.trama/requirements/`: only the last one regenerates.
+    /// Grows with every change under `.weaver/requirements/`: only the last one regenerates.
     regeneration: u64,
 }
 
@@ -200,14 +200,14 @@ fn folder_has_files(root: &Path) -> bool {
 /// The state of the folder and whether it holds files of its own, from the disk and the picture.
 fn measure(root: &Path, image: &ProjectImage) -> (ProjectState, bool) {
     (
-        ProjectState::of(has_trama(root), image.model()),
+        ProjectState::of(has_weaver(root), image.model()),
         folder_has_files(root),
     )
 }
 
 /// What a run of `want` does to the project at `root`, in the project's queue.
 fn run_work(root: &Path, want: Want) -> Result<SyncReport, String> {
-    if !has_trama(root) {
+    if !has_weaver(root) {
         return Err("the folder is not a project yet: initialise it first".to_owned());
     }
     let options = match want {
@@ -692,7 +692,7 @@ mod tests {
     use std::time::Duration;
 
     use tokio::sync::Notify;
-    use trama_core::project_files::initialise;
+    use weaver_core::project_files::initialise;
 
     use super::*;
 
@@ -767,7 +767,7 @@ mod tests {
     }
 
     fn feature(root: &Path) {
-        let path = root.join(".trama/model/shop/feature.md");
+        let path = root.join(".weaver/model/shop/feature.md");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, "# Shop\n\nSells things.\n").unwrap();
     }
@@ -786,7 +786,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_folder_without_trama_offers_the_files_and_initialising_it_makes_an_empty_model() {
+    async fn a_folder_without_weaver_offers_the_files_and_initialising_it_makes_an_empty_model() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("main.c"), "int main;").unwrap();
         let env = FakeEnvironment::new(dir.path());
@@ -808,13 +808,55 @@ mod tests {
                 .is_some_and(|s| s.state == ProjectState::EmptyModel)
         })
         .await;
-        assert!(dir.path().join(".trama/model/system.md").is_file());
+        assert!(dir.path().join(".weaver/model/system.md").is_file());
         assert!(dir
             .path()
             .join(".agents/skills/trama-design/SKILL.md")
             .is_file());
         // An Empty Model is not checked when the window opens, and nothing is reported.
         assert_eq!(env.last().unwrap().check, SkillsCheck::none());
+    }
+
+    #[tokio::test]
+    async fn an_old_trama_folder_means_nothing_to_the_window() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".trama/model")).unwrap();
+        fs::write(dir.path().join(".trama/model/system.md"), "# Old\n").unwrap();
+        let env = FakeEnvironment::new(dir.path());
+        let setup = setup(&env);
+        open(&setup, dir.path());
+        until(&env, |all| !all.is_empty()).await;
+        // Not initialised, and the folder holds no file of its own: `.trama` is a name with a dot.
+        let first = env.last().unwrap();
+        assert_eq!(
+            (first.state, first.folder_has_files),
+            (ProjectState::NotInitialised, false)
+        );
+        assert!(setup.update_skills(ID).await.is_err());
+        assert!(!dir.path().join(".weaver").exists());
+
+        setup.initialise(ID, false).await.unwrap();
+        until(&env, |all| {
+            all.last()
+                .is_some_and(|s| s.state == ProjectState::EmptyModel)
+        })
+        .await;
+        assert!(dir.path().join(".weaver/model/system.md").is_file());
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".trama/model/system.md")).unwrap(),
+            "# Old\n"
+        );
+    }
+
+    #[test]
+    fn a_folder_with_both_is_the_project_in_weaver_and_the_trama_folder_adds_no_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        project_with_a_model(dir.path());
+        fs::create_dir_all(dir.path().join(".trama/model")).unwrap();
+        fs::write(dir.path().join(".trama/model/system.md"), "no title here\n").unwrap();
+        let image = ProjectImage::load(dir.path());
+        assert!(image.diagnostics().is_empty(), "{:?}", image.diagnostics());
+        assert_eq!(measure(dir.path(), &image), (ProjectState::HasModel, false));
     }
 
     #[tokio::test]
@@ -830,7 +872,7 @@ mod tests {
 
         let answer = setup.initialise(ID, false).await.unwrap();
         assert_eq!(answer.conflicts, [".omp/WATCHDOG.yml"]);
-        assert!(!dir.path().join(".trama").exists());
+        assert!(!dir.path().join(".weaver").exists());
         assert_eq!(
             fs::read_to_string(dir.path().join(".omp/WATCHDOG.yml")).unwrap(),
             "mine"
@@ -917,7 +959,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deleting_and_creating_trama_goes_to_get_started_and_back() {
+    async fn deleting_and_creating_weaver_goes_to_get_started_and_back() {
         let dir = tempfile::tempdir().unwrap();
         project_with_a_model(dir.path());
         let env = FakeEnvironment::new(dir.path());
@@ -926,7 +968,7 @@ mod tests {
         until(&env, |all| all.last().is_some_and(|s| s.check.opening == 1)).await;
         assert_eq!(env.last().unwrap().state, ProjectState::HasModel);
 
-        fs::remove_dir_all(dir.path().join(".trama")).unwrap();
+        fs::remove_dir_all(dir.path().join(".weaver")).unwrap();
         setup.batch_applied(ID, None);
         until(&env, |all| {
             all.last()
@@ -934,9 +976,9 @@ mod tests {
         })
         .await;
 
-        fs::create_dir_all(dir.path().join(".trama/model")).unwrap();
+        fs::create_dir_all(dir.path().join(".weaver/model")).unwrap();
         fs::write(
-            dir.path().join(".trama/model/system.md"),
+            dir.path().join(".weaver/model/system.md"),
             "# Shop\n\nA shop.\n",
         )
         .unwrap();
@@ -969,7 +1011,7 @@ mod tests {
         assert!(!skill.exists());
 
         fs::write(
-            dir.path().join(".trama/requirements/ui/main.md"),
+            dir.path().join(".weaver/requirements/ui/main.md"),
             "---\ndescription: Use when building screens.\n---\n# Main\n\n## General\n- A line.\n",
         )
         .unwrap();
@@ -1013,7 +1055,7 @@ mod tests {
 
     #[test]
     fn the_check_reports_what_the_opening_run_did_and_update_skills_ends_a_failure() {
-        use trama_core::project_files::{FileAction, FileChange};
+        use weaver_core::project_files::{FileAction, FileChange};
         let changed = SyncReport {
             changes: vec![FileChange {
                 path: "a".into(),

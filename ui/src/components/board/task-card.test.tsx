@@ -215,14 +215,19 @@ describe("Run", () => {
     expect(runTask).toHaveBeenCalledWith("aaaaaaaa");
   });
 
-  it("shows `View on diagram` and `View requirements` only when their focus has a step", async () => {
+  it("shows `View requirements` only when its focus has a step, and never `View on diagram`", async () => {
     const user = userEvent.setup();
     const viewOn = vi.fn();
-    const focusSteps = vi.fn((view: string) => (view === "diagram" ? 2 : 0));
+    const focusSteps = vi.fn((view: string) => (view === "requirements" ? 2 : 0));
     await show(snapshot({ active: [task("aaaaaaaa", "T1", "First", { refs: ["order/Paid"] })] }), { viewOn, focusSteps });
+    expect(within(active()).queryByRole("button", { name: "View on diagram" })).not.toBeInTheDocument();
+    await user.click(within(active()).getByRole("button", { name: "View requirements" }));
+    expect(viewOn).toHaveBeenCalledWith("requirements", ["order/Paid"], { kind: "task", id: "aaaaaaaa", number: "T1", title: "First" });
+  });
+
+  it("has no `View requirements` when its focus has no step", async () => {
+    await show(snapshot({ active: [task("aaaaaaaa", "T1", "First", { refs: ["order/Paid"] })] }), { viewOn: vi.fn(), focusSteps: () => 0 });
     expect(within(active()).queryByRole("button", { name: "View requirements" })).not.toBeInTheDocument();
-    await user.click(within(active()).getByRole("button", { name: "View on diagram" }));
-    expect(viewOn).toHaveBeenCalledWith("diagram", ["order/Paid"], { kind: "task", id: "aaaaaaaa", number: "T1", title: "First" });
   });
 });
 
@@ -244,11 +249,27 @@ describe("the details of a Task", () => {
     expect(within(dialog).getByRole("list", { name: "References" })).toHaveTextContent("user");
   });
 
-  it("a chip focuses the diagram on that one reference", async () => {
+  it("a chip focuses the first of Requirements and Specs where the reference has a step", async () => {
+    const viewOn = vi.fn();
+    const { user, dialog } = await details(task("aaaaaaaa", "T1", "First", { refs: ["order/Paid", "user"] }), {
+      viewOn,
+      focusSteps: (view) => (view === "specs" ? 1 : 0),
+    });
+    await user.click(within(dialog).getByRole("button", { name: "View specs: user" }));
+    expect(viewOn).toHaveBeenCalledWith("specs", ["user"]);
+  });
+
+  it("a chip opens Requirements first when both views have a step", async () => {
     const viewOn = vi.fn();
     const { user, dialog } = await details(task("aaaaaaaa", "T1", "First", { refs: ["order/Paid", "user"] }), { viewOn, focusSteps: () => 1 });
-    await user.click(within(dialog).getByRole("button", { name: "View on diagram: user" }));
-    expect(viewOn).toHaveBeenCalledWith("diagram", ["user"]);
+    await user.click(within(dialog).getByRole("button", { name: "View requirements: user" }));
+    expect(viewOn).toHaveBeenCalledWith("requirements", ["user"]);
+    expect(within(dialog).queryByRole("button", { name: /View on diagram/ })).not.toBeInTheDocument();
+  });
+
+  it("a chip is plain text when no view has a step for it", async () => {
+    const { dialog } = await details(task("aaaaaaaa", "T1", "First", { refs: ["user"] }), { viewOn: vi.fn(), focusSteps: () => 0 });
+    expect(within(within(dialog).getByRole("list", { name: "References" })).queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("has Delete only in To do, lists its reasons in order, and confirms with `Delete T1 for good?`", async () => {

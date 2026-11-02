@@ -2,7 +2,7 @@
 //! the agents and Weaver waiting for their results, and what each change does to the jobs and the
 //! window.
 //!
-//! The decisions are the core's ([`trama_core::question::Queue`]); this module keeps the queues
+//! The decisions are the core's ([`weaver_core::question::Queue`]); this module keeps the queues
 //! and the waiters in memory, never on disk and never in a log, and carries out the effects
 //! outside its lock.
 
@@ -11,9 +11,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use trama_core::ipc::Peer;
-use trama_core::protocol::{Request, Response};
-use trama_core::question::{
+use weaver_core::ipc::Peer;
+use weaver_core::protocol::{Request, Response};
+use weaver_core::question::{
     self, code, Action, ActionError, Effect, Ending, Origin, Outcome, Queue, Round, RoundId,
     RoundRequest, CANCELLED_MESSAGE, INTERRUPTED_MESSAGE,
 };

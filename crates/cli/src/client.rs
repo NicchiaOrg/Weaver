@@ -5,10 +5,10 @@
 //! were running. A different protocol version counts the same way.
 
 use serde_json::Value;
-use trama_core::ipc::{self, SendError};
-use trama_core::paths::AppDirs;
-use trama_core::protocol::{ProtocolError, Request, Response};
-use trama_core::runtime;
+use weaver_core::ipc::{self, SendError};
+use weaver_core::paths::AppDirs;
+use weaver_core::protocol::{ProtocolError, Request, Response};
+use weaver_core::runtime;
 
 /// Why no app can be used.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,7 +17,7 @@ pub enum Unavailable {
     RuntimeFileMissing,
     /// `runtime.json` cannot be read or parsed.
     RuntimeFileInvalid(String),
-    /// `TRAMA_ENDPOINT` names another endpoint than `runtime.json`.
+    /// `WEAVER_ENDPOINT` names another endpoint than `runtime.json`.
     EndpointMismatch,
     /// Nobody listens at the endpoint.
     ConnectionFailed(String),
@@ -49,11 +49,11 @@ pub enum CallError {
 
 /// What to send.
 pub struct Call<'a> {
-    /// Job identity (`TRAMA_JOB`), when the request comes from a job.
+    /// Job identity (`WEAVER_JOB`), when the request comes from a job.
     pub job: Option<&'a str>,
     pub kind: &'a str,
     pub payload: Value,
-    /// `TRAMA_ENDPOINT` when set: the call is unavailable if `runtime.json` names another one.
+    /// `WEAVER_ENDPOINT` when set: the call is unavailable if `runtime.json` names another one.
     pub expected_endpoint: Option<&'a str>,
 }
 
@@ -115,9 +115,9 @@ mod tests {
     use std::thread;
 
     use serde_json::json;
-    use trama_core::endpoint::{new_endpoint, new_secret};
-    use trama_core::ipc::{serve_connection, Listener};
-    use trama_core::runtime::RuntimeInfo;
+    use weaver_core::endpoint::{new_endpoint, new_secret};
+    use weaver_core::ipc::{serve_connection, Listener};
+    use weaver_core::runtime::RuntimeInfo;
 
     use super::*;
 

@@ -1,5 +1,5 @@
-//! The texts Weaver installs for the agent: one list, embedded in `trama-core`, so that the
-//! app and the `trama` command line write the same bytes.
+//! The texts Weaver installs for the agent: one list, embedded in `weaver-core`, so that the
+//! app and the `weaver` command line write the same bytes.
 //!
 //! The sources live in `crates/core/assets/` and are embedded with `include_dir`. Their
 //! layout mirrors the installed one with the dots left out of the folder names:
@@ -16,20 +16,20 @@
 //!
 //! # The command reference
 //!
-//! The skills point to one generated reference of every `trama` command,
+//! The skills point to one generated reference of every `weaver` command,
 //! [`COMMAND_REFERENCE_ASSET`]. The command registry of the CLI crate is the source of that
 //! text, and a test of that crate fails when [`command_reference`] differs from what the
 //! registry renders. The registry must therefore expose:
 //!
 //! ```text
-//! trama_cli::registry::command_reference() -> String
+//! weaver_cli::registry::command_reference() -> String
 //! ```
 //!
 //! returning the whole file: Markdown, LF, a final newline. The CLI crate also owns the way
 //! the file is regenerated (it writes [`COMMAND_REFERENCE_ASSET`], relative to the folder of
-//! `trama-core`, i.e. `crates/core/assets/skills/trama-design/COMMANDS.md`).
+//! `weaver-core`, i.e. `crates/core/assets/skills/trama-design/COMMANDS.md`).
 //! Nothing in this crate depends on the format, only on the reference naming every command
-//! as `trama <object> <verb>` (see the tests).
+//! as `weaver <object> <verb>` (see the tests).
 
 use std::sync::LazyLock;
 
@@ -157,7 +157,7 @@ mod tests {
     ];
 
     /// Words and phrases of the features Weaver does not have; none may remain in an installed text.
-    const OUT_OF_SCOPE_WORDS: [&str; 10] = [
+    const OUT_OF_SCOPE_WORDS: [&str; 12] = [
         "comparison",
         "handoff",
         "hand-off",
@@ -168,6 +168,8 @@ mod tests {
         "timing",
         "team",
         "solo",
+        "diagram",
+        "diagrams",
     ];
     const OUT_OF_SCOPE_PHRASES: [&str; 13] = [
         "trama-merge",
@@ -179,10 +181,10 @@ mod tests {
         "\"kind\":\"check\"",
         "announcement move",
         "announcement edit",
-        "trama task check",
-        "trama merge",
-        "trama timing",
-        "trama comparison",
+        "weaver task check",
+        "weaver merge",
+        "weaver timing",
+        "weaver comparison",
     ];
 
     fn all_words(text: &str) -> impl Iterator<Item = &str> {
@@ -344,17 +346,17 @@ mod tests {
         }
     }
 
-    /// Every `trama <object> <verb>` an installed text quotes.
+    /// Every `weaver <object> <verb>` an installed text quotes.
     fn quoted_commands(text: &str) -> Vec<(String, Option<String>, String)> {
         let mut found = Vec::new();
         for (line_no, line) in text.lines().enumerate() {
-            for (at, _) in line.match_indices("trama ") {
+            for (at, _) in line.match_indices("weaver ") {
                 // A command is quoted in a code span (or starts a line of a code block).
                 let before = line[..at].trim_end_matches([' ', '$']);
                 if !((before.ends_with('`') && line[..at].ends_with('`')) || before.is_empty()) {
                     continue;
                 }
-                let mut tokens = line[at + "trama ".len()..].split_whitespace().map(|t| {
+                let mut tokens = line[at + "weaver ".len()..].split_whitespace().map(|t| {
                     t.trim_matches(|c: char| {
                         matches!(c, '`' | '.' | ',' | ';' | ':' | ')' | '(' | '"')
                     })
@@ -388,14 +390,17 @@ mod tests {
         for file in files() {
             for (object, verb, place) in quoted_commands(&file.contents) {
                 let Some((_, verbs)) = REGISTRY.iter().find(|(name, _)| *name == object) else {
-                    panic!("{}: `trama {object}` is not a command ({place})", file.path);
+                    panic!(
+                        "{}: `weaver {object}` is not a command ({place})",
+                        file.path
+                    );
                 };
                 let Some(verb) = verb else {
-                    panic!("{}: `trama {object}` has no verb ({place})", file.path)
+                    panic!("{}: `weaver {object}` has no verb ({place})", file.path)
                 };
                 assert!(
                     verbs.contains(&verb.as_str()),
-                    "{}: `trama {object} {verb}` is not a command ({place})",
+                    "{}: `weaver {object} {verb}` is not a command ({place})",
                     file.path
                 );
                 quoted += 1;
@@ -414,8 +419,8 @@ mod tests {
         for (object, verbs) in REGISTRY {
             for verb in verbs {
                 assert!(
-                    reference.contains(&format!("trama {object} {verb}")),
-                    "reference lacks `trama {object} {verb}`"
+                    reference.contains(&format!("weaver {object} {verb}")),
+                    "reference lacks `weaver {object} {verb}`"
                 );
             }
         }
@@ -499,7 +504,7 @@ mod tests {
         let file = installed_file(".omp/WATCHDOG.yml").expect("watchdog");
         let doc: serde_yaml::Value = serde_yaml::from_str(&file.contents).expect("valid YAML");
         let instructions = doc["instructions"].as_str().expect("instructions");
-        assert!(instructions.contains("run `trama job show` before any other command"));
+        assert!(instructions.contains("run `weaver job show` before any other command"));
         assert!(instructions.contains("stay silent"));
         let advisors = doc["advisors"].as_sequence().expect("advisors");
         assert_eq!(advisors.len(), 2);

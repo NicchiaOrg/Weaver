@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use tauri::State;
-use trama_core::project::image::ProjectImage;
+use weaver_core::project::image::ProjectImage;
 
 use super::registry::Jobs;
 use super::starts::Ctx;
@@ -123,9 +123,9 @@ pub async fn run_task(
 ) -> Result<(), AppError> {
     let jobs = jobs.inner().clone();
     start_in_queue(&jobs, &project_id, move |jobs, ctx| {
-        let label = trama_core::jobs::names::card_label(
-            &trama_core::project::shortnum::peek(ctx.root, ctx.image.cards()),
-            trama_core::project::cards::CardKind::Task,
+        let label = weaver_core::jobs::names::card_label(
+            &weaver_core::project::shortnum::peek(ctx.root, ctx.image.cards()),
+            weaver_core::project::cards::CardKind::Task,
             &task_id,
         );
         jobs.start_run_task(ctx, &task_id)

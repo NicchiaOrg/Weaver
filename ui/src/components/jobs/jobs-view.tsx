@@ -293,9 +293,9 @@ function MessageBox({ projectId, job }: { projectId: string; job: JobRow }) {
   if (finished) {
     return (
       <div className="flex items-center gap-2 border-t p-3 text-sm text-muted-foreground">
-        This job has ended. Continue in General.
+        This job has ended. Continue in Chat.
         <Button variant="outline" size="sm" onClick={() => showView("general")}>
-          Open General
+          Open Chat
         </Button>
       </div>
     );

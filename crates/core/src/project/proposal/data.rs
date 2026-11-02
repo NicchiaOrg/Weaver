@@ -180,12 +180,12 @@ pub fn is_interrupted(card: &Card) -> bool {
     status_of(card) == Some(Status::Draft) && refining_flag(card)
 }
 
-/// `proposals/<id>-<slug>`, relative to `.trama/`.
+/// `proposals/<id>-<slug>`, relative to `.weaver/`.
 pub fn folder_of(card: &Card) -> String {
     format!("{PROPOSALS_DIR}/{}", card_stem(&card.id, &card.slug))
 }
 
-/// The path of `rel` (a path under `.trama/`) inside the Proposal's folder.
+/// The path of `rel` (a path under `.weaver/`) inside the Proposal's folder.
 pub fn held_path(card: &Card, rel: &str) -> String {
     format!("{}/{rel}", folder_of(card))
 }

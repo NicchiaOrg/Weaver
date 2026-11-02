@@ -1,4 +1,4 @@
-//! The requests of one project on disk: `.trama/requests/<id>.md`, `<id>.images/` and
+//! The requests of one project on disk: `.weaver/requests/<id>.md`, `<id>.images/` and
 //! `.state.json`.
 //!
 //! Every operation reads the state of the request from the files, asks the Machine
@@ -47,13 +47,13 @@ pub enum RequestError {
     NotAnId(String),
     #[error("{0}")]
     Image(#[from] ImageError),
-    #[error("cannot read the record of sent requests (`.trama/requests/.state.json`): {0}")]
+    #[error("cannot read the record of sent requests (`.weaver/requests/.state.json`): {0}")]
     State(String),
     #[error("{0}")]
     Io(#[from] io::Error),
 }
 
-/// What `.trama/requests/.state.json` holds.
+/// What `.weaver/requests/.state.json` holds.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestsState {
     /// Request id → the id of the job that received it.
@@ -124,9 +124,9 @@ impl RequestStore {
         }
     }
 
-    /// `.trama/requests`.
+    /// `.weaver/requests`.
     pub fn dir(&self) -> PathBuf {
-        layout::trama_dir(&self.project_root).join(REQUESTS_DIR)
+        layout::weaver_dir(&self.project_root).join(REQUESTS_DIR)
     }
 
     fn file(&self, id: &str) -> PathBuf {
@@ -499,7 +499,7 @@ impl RequestStore {
         }
     }
 
-    /// The link, relative to `.trama/requests/`, of a file inside the project.
+    /// The link, relative to `.weaver/requests/`, of a file inside the project.
     fn link_inside_project(&self, id: &str, source: &Path) -> Option<String> {
         let root = paths::canonical_root(&self.project_root).ok()?;
         let source = paths::canonical_root(source).ok()?;
@@ -512,7 +512,7 @@ impl RequestStore {
             })
             .collect::<Option<_>>()?;
         let own_images = format!("{id}{IMAGES_SUFFIX}");
-        let own = [layout::TRAMA_DIR, REQUESTS_DIR, own_images.as_str()];
+        let own = [layout::WEAVER_DIR, REQUESTS_DIR, own_images.as_str()];
         let link = if parts.len() == own.len() + 1
             && parts[..own.len()].iter().zip(own).all(|(a, b)| a == b)
         {
@@ -587,13 +587,13 @@ mod tests {
         let (dir, store) = store();
         let id = store.create(&at(9)).unwrap();
         assert_eq!(id, "2026-11-02T07-05-09");
-        let folder = dir.path().join(".trama/requests");
+        let folder = dir.path().join(".weaver/requests");
         assert!(folder.join(format!("{id}.md")).is_file());
         assert_eq!(fs::read(folder.join(".gitignore")).unwrap(), b"*\n");
         assert_eq!(store.state_of(&id).unwrap(), RequestState::Writing);
         assert_eq!(store.read(&id).unwrap(), "");
-        // Nothing else of `.trama/` is created or ignored.
-        assert!(!dir.path().join(".trama/.gitignore").exists());
+        // Nothing else of `.weaver/` is created or ignored.
+        assert!(!dir.path().join(".weaver/.gitignore").exists());
     }
 
     #[test]
@@ -638,7 +638,7 @@ mod tests {
         // LF only, one final newline, no BOM.
         store.save(&id, "a\r\nb").unwrap();
         assert_eq!(
-            fs::read(dir.path().join(format!(".trama/requests/{id}.md"))).unwrap(),
+            fs::read(dir.path().join(format!(".weaver/requests/{id}.md"))).unwrap(),
             b"a\nb\n"
         );
     }
@@ -679,7 +679,7 @@ mod tests {
     fn files_that_are_not_requests_are_not_listed() {
         let (dir, store) = store();
         let id = written(&store, 1, "x");
-        let folder = dir.path().join(".trama/requests");
+        let folder = dir.path().join(".weaver/requests");
         fs::write(folder.join("notes.md"), "x").unwrap();
         fs::write(folder.join("2026-11-02T07-05-01.txt"), "x").unwrap();
         fs::create_dir_all(folder.join("2026-11-02T07-05-02.md")).unwrap();
@@ -780,7 +780,7 @@ mod tests {
         let id = written(&store, 9, "Add orders");
         store.add_image(&id, &PNG).unwrap();
         store.record_sent(&id, "jjjjjjjj").unwrap();
-        let folder = dir.path().join(".trama/requests");
+        let folder = dir.path().join(".weaver/requests");
 
         assert!(store.consume(&id).unwrap());
         assert!(!folder.join(format!("{id}.md")).exists());
@@ -851,7 +851,7 @@ mod tests {
     fn a_file_deleted_from_outside_is_never_sent_afterwards() {
         let (dir, store) = store();
         let id = written(&store, 9, "x");
-        fs::remove_file(dir.path().join(format!(".trama/requests/{id}.md"))).unwrap();
+        fs::remove_file(dir.path().join(format!(".weaver/requests/{id}.md"))).unwrap();
         // Weaver still showed it: Send, Save and image paste all find it gone and write nothing.
         assert!(matches!(
             store.plan_send(&id, false),
@@ -866,7 +866,10 @@ mod tests {
             store.record_sent(&id, "jjjjjjjj"),
             Err(RequestError::Gone)
         ));
-        assert!(!dir.path().join(format!(".trama/requests/{id}.md")).exists());
+        assert!(!dir
+            .path()
+            .join(format!(".weaver/requests/{id}.md"))
+            .exists());
         assert!(store.state().unwrap().sent.is_empty());
         assert!(store.list().unwrap().is_empty());
     }
@@ -876,7 +879,7 @@ mod tests {
         let (dir, store) = store();
         let id = written(&store, 9, "x");
         store.record_sent(&id, "jjjjjjjj").unwrap();
-        fs::remove_file(dir.path().join(format!(".trama/requests/{id}.md"))).unwrap();
+        fs::remove_file(dir.path().join(format!(".weaver/requests/{id}.md"))).unwrap();
         assert_eq!(store.reconcile().unwrap(), std::slice::from_ref(&id));
         assert!(store.state().unwrap().sent.is_empty());
         assert!(store.list().unwrap().is_empty());
@@ -896,7 +899,7 @@ mod tests {
         assert!(store.consume(&id).unwrap());
         // An editor saves the file again.
         fs::write(
-            dir.path().join(format!(".trama/requests/{id}.md")),
+            dir.path().join(format!(".weaver/requests/{id}.md")),
             "back\n",
         )
         .unwrap();
@@ -917,7 +920,7 @@ mod tests {
         let id = written(&store, 9, "x");
         let link = store.add_image(&id, &PNG).unwrap();
         assert_eq!(link, format!("{id}.images/image-1.png"));
-        let folder = dir.path().join(".trama/requests");
+        let folder = dir.path().join(".weaver/requests");
         assert!(folder.join(&link).is_file());
         store.discard(&id).unwrap();
         assert!(!folder.join(format!("{id}.md")).exists());
@@ -966,7 +969,7 @@ mod tests {
         ));
         assert!(!dir
             .path()
-            .join(format!(".trama/requests/{id}.images"))
+            .join(format!(".weaver/requests/{id}.images"))
             .exists());
     }
 
@@ -975,7 +978,7 @@ mod tests {
         let (dir, store) = store();
         let id = written(&store, 9, "x");
         store.add_image(&id, &PNG).unwrap();
-        fs::write(dir.path().join(".trama/requests/secret.png"), PNG).unwrap();
+        fs::write(dir.path().join(".weaver/requests/secret.png"), PNG).unwrap();
         for link in [
             "secret.png",
             "../secret.png",
@@ -1006,7 +1009,7 @@ mod tests {
         );
         assert!(
             !dir.path()
-                .join(format!(".trama/requests/{id}.images"))
+                .join(format!(".weaver/requests/{id}.images"))
                 .exists(),
             "linked, not copied"
         );
@@ -1023,7 +1026,7 @@ mod tests {
         // A file already in the request's images folder keeps its link.
         let own = dir
             .path()
-            .join(format!(".trama/requests/{id}.images/image-1.png"));
+            .join(format!(".weaver/requests/{id}.images/image-1.png"));
         assert_eq!(
             store.import_image(&id, &own).unwrap(),
             format!("{id}.images/image-1.png")
@@ -1046,7 +1049,7 @@ mod tests {
     #[test]
     fn a_name_that_is_not_a_request_id_never_reaches_the_disk() {
         let (dir, store) = store();
-        fs::create_dir_all(dir.path().join(".trama")).unwrap();
+        fs::create_dir_all(dir.path().join(".weaver")).unwrap();
         for bad in ["../x", "", "x/y", ".state"] {
             assert!(
                 matches!(store.read(bad), Err(RequestError::NotAnId(_))),
@@ -1071,7 +1074,7 @@ mod tests {
     fn an_unreadable_record_is_reported_and_never_overwritten() {
         let (dir, store) = store();
         let id = written(&store, 9, "x");
-        let state = dir.path().join(".trama/requests/.state.json");
+        let state = dir.path().join(".weaver/requests/.state.json");
         fs::write(&state, "{ not json").unwrap();
         assert!(matches!(store.list(), Err(RequestError::State(_))));
         assert!(matches!(
@@ -1087,7 +1090,7 @@ mod tests {
         let id = written(&store, 9, "x");
         store.record_sent(&id, "jjjjjjjj").unwrap();
         let json: serde_json::Value = serde_json::from_slice(
-            &fs::read(dir.path().join(".trama/requests/.state.json")).unwrap(),
+            &fs::read(dir.path().join(".weaver/requests/.state.json")).unwrap(),
         )
         .unwrap();
         assert_eq!(
@@ -1096,7 +1099,7 @@ mod tests {
         );
         // A record written by hand with a missing key still reads.
         fs::write(
-            dir.path().join(".trama/requests/.state.json"),
+            dir.path().join(".weaver/requests/.state.json"),
             "{\"consumed\": [\"2026-11-02T07-05-10\"]}",
         )
         .unwrap();

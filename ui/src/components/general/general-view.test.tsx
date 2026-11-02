@@ -22,7 +22,7 @@ vi.mock("@/hooks/use-omp", () => ({ useOmp: () => ({ status: ompStatus.current }
 const PROJECT = "0123456789abcdef";
 
 function state(patch: Partial<GeneralState> = {}): GeneralState {
-  return { projectId: PROJECT, working: false, starting: false, kept: false, ...patch };
+  return { projectId: PROJECT, working: false, starting: false, loading: false, kept: false, ...patch };
 }
 
 const handlers = new Map<string, (payload: never) => void>();
@@ -68,10 +68,56 @@ describe("GeneralView", () => {
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
   });
 
-  it("keeps Clear usable while a kept session waits for the first message", async () => {
+  it("keeps Clear usable while a kept conversation has not come back", async () => {
     mount([], state({ kept: true }));
     await screen.findByText(/Talk with omp/);
     await waitFor(() => expect(screen.getByRole("button", { name: "Clear" })).not.toHaveAttribute("aria-disabled"));
+  });
+
+  it("says Loading conversation… in place of the invitation while the kept conversation loads, with Clear usable", async () => {
+    mount([], state({ kept: true, loading: true, starting: true }));
+    expect(await screen.findByText("Loading conversation…")).toBeInTheDocument();
+    expect(screen.queryByText(/Talk with omp/)).toBeNull();
+    expect(screen.queryByText("omp is not installed.")).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Message omp" })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Clear" })).not.toHaveAttribute("aria-disabled"));
+  });
+
+  it("shows the message sent while loading below the loading text, with Starting omp… under it", async () => {
+    mount([developer("Meanwhile", "queued")], state({ kept: true, loading: true, starting: true }));
+    const loading = await screen.findByText("Loading conversation…");
+    const message = screen.getByText("Meanwhile");
+    expect(loading.compareDocumentPosition(message) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("Starting omp…")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+  });
+
+  it("adds the missing-omp line and Install omp to the loading text at once, and shows the loading text alone otherwise", async () => {
+    ompStatus.current = { state: "missing" } as OmpStatus;
+    mount([], state({ kept: true, loading: true, starting: true }));
+    expect(await screen.findByText("Loading conversation…")).toBeInTheDocument();
+    expect(screen.getByText("omp is not installed.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Install omp" })).toBeInTheDocument();
+  });
+
+  it("shows the loading text alone while omp is only checking", async () => {
+    ompStatus.current = { state: "checking" } as OmpStatus;
+    mount([], state({ kept: true, loading: true, starting: true }));
+    expect(await screen.findByText("Loading conversation…")).toBeInTheDocument();
+    expect(screen.queryByText("omp is not installed.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Install omp" })).toBeNull();
+  });
+
+  it("keeps the plain Clear text while loading, even with a message waiting", async () => {
+    mount([developer("Meanwhile", "queued")], state({ kept: true, loading: true, starting: true }));
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Clear" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Clear Chat?")).toBeInTheDocument();
+    expect(within(dialog).getByText("The conversation is deleted and a new one starts.")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await user.click(within(dialog).getByRole("button", { name: "Clear" }));
+    await waitFor(() => expect(call).toHaveBeenCalledWith("general_clear", { projectId: PROJECT }));
   });
 
   it("sends the message with Enter and keeps Shift+Enter for a new line", async () => {
@@ -102,7 +148,7 @@ describe("GeneralView", () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Clear" }));
     let dialog = await screen.findByRole("alertdialog");
-    expect(within(dialog).getByText("Clear General?")).toBeInTheDocument();
+    expect(within(dialog).getByText("Clear Chat?")).toBeInTheDocument();
     expect(within(dialog).getByText("The conversation is deleted and a new one starts.")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus();
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -155,7 +201,7 @@ describe("GeneralView", () => {
     expect(line).toHaveClass("text-amber-600");
   });
 
-  it("answers a permission card through General", async () => {
+  it("answers a permission card through Chat", async () => {
     mount([
       {
         kind: "permission",

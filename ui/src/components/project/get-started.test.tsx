@@ -60,7 +60,7 @@ describe("Get Started", () => {
     expect(await screen.findByRole("heading", { name: "Set up Weaver in this folder" })).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Weaver will create a .trama folder that describes this project. It holds no secrets and is meant to be committed, like the agent files it installs.",
+        "Weaver will create a .weaver folder that describes this project. It holds no secrets and is meant to be committed, like the agent files it installs.",
       ),
     ).toBeInTheDocument();
     const files = within(screen.getByRole("list", { name: "Agent files" })).getAllByRole("listitem");

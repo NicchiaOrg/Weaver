@@ -6,7 +6,7 @@ import { useViews } from "@/components/views/views-state";
 const CURRENT = "current";
 
 /**
- * The overlay picker the Diagram, Requirements and Specs of a window share: `Current Model`, then
+ * The overlay picker the Requirements and Specs of a window share: `Current Model`, then
  * every open Proposal not attached to a Drift (the backend decides which), by id and title.
  */
 export function OverlayPicker() {

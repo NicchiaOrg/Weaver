@@ -169,7 +169,7 @@ export function RequestPane({ projectId, requestId, modelEmpty, wide, onGone, on
         // An outside change is a disk text that is neither the typed one nor one this pane wrote.
         if (sameText(latest.current, next.text) || written.current.some((own) => sameText(own, next.text))) return;
         if (dirty.current) {
-          toast(TOAST_KEPT);
+          toast.warning(TOAST_KEPT);
           await save();
         } else {
           latest.current = next.text;

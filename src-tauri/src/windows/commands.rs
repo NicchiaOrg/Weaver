@@ -198,8 +198,8 @@ mod tests {
             absolute
         );
         assert_eq!(
-            absolute_file(".trama/model/system.md", Some(root)).unwrap(),
-            root.join(".trama/model/system.md")
+            absolute_file(".weaver/model/system.md", Some(root)).unwrap(),
+            root.join(".weaver/model/system.md")
         );
         assert_eq!(
             absolute_file("a.md", None).unwrap_err().code,

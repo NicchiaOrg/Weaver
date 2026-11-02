@@ -10,7 +10,7 @@ repository = "https://github.com/nicchia-code/weaver"
 authors = ["Weaver contributors"]
 
 [workspace.dependencies]
-trama-core = { path = "crates/core" }
+weaver-core = { path = "crates/core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

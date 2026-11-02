@@ -1,7 +1,7 @@
 //! The app side of the Proposal: the decisions of the developer on its card (`Approve`, `Reject`,
 //! `Rework with feedback…`, `Discard`, the model control) and what a decision starts.
 //!
-//! The rules live in `trama_core::project::proposal`. A decision runs through
+//! The rules live in `weaver_core::project::proposal`. A decision runs through
 //! [`crate::decisions::decide`]: in the project's queue, under the project lock, with the facts of
 //! that moment, checked again when applied, and written whole or not at all. What it starts (a
 //! refinement job, a rework job, Run all after a setup) goes through [`ProposalJobs`], which the
@@ -12,12 +12,12 @@
 //!
 //! * `Approve` on a stale change, or on a Draft a refinement left half-way, writes `Refining` and
 //!   then calls [`ProposalJobs::start_refinement`]; the job's agent rewrites the Proposal on the
-//!   current Model (`trama proposal edit <id> {rebase: true, …}`) and hands it over again. When the
+//!   current Model (`weaver proposal edit <id> {rebase: true, …}`) and hands it over again. When the
 //!   job ends without handing it over, the jobs call
 //!   `proposal::transitions::plan_refinement_ended`;
 //! * `Rework with feedback…` writes `Rejected` (with `reworkRequested`) and then calls
 //!   [`ProposalJobs::start_rework`]; the agent writes the new Proposals with
-//!   `trama proposal new {reworks: <id>}`;
+//!   `weaver proposal new {reworks: <id>}`;
 //! * a refined Proposal handed over while a Run works stays Refining without a job (the hand-over
 //!   answers `waits for the Run`): when the Run ends the jobs hand over again every Refining
 //!   Proposal that has no working job, with `transitions::submit`;
@@ -29,18 +29,18 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use serde_json::json;
 use tauri::{AppHandle, State};
-use trama_cli::spec::{Call, Failure};
-use trama_core::command::{CommandReply, CommandRequest};
-use trama_core::project::board::Refused;
-use trama_core::project::cards::CardKind;
-use trama_core::project::changes::MutationError;
-use trama_core::project::clock::{now_instant, SystemClock};
-use trama_core::project::image::ProjectImage;
-use trama_core::project::proposal::data::{self, Kind, Status};
-use trama_core::project::proposal::models::ProposalModels;
-use trama_core::project::proposal::transitions::{self, Approval, Decider};
-use trama_core::project::random::OsRandom;
-use trama_core::project::shortnum;
+use weaver_cli::spec::{Call, Failure};
+use weaver_core::command::{CommandReply, CommandRequest};
+use weaver_core::project::board::Refused;
+use weaver_core::project::cards::CardKind;
+use weaver_core::project::changes::MutationError;
+use weaver_core::project::clock::{now_instant, SystemClock};
+use weaver_core::project::image::ProjectImage;
+use weaver_core::project::proposal::data::{self, Kind, Status};
+use weaver_core::project::proposal::models::ProposalModels;
+use weaver_core::project::proposal::transitions::{self, Approval, Decider};
+use weaver_core::project::random::OsRandom;
+use weaver_core::project::shortnum;
 
 use crate::decisions;
 use crate::error::{AppError, ErrorCode};
@@ -377,7 +377,7 @@ fn label(call: &Call, id: &str) -> String {
         .unwrap_or_else(|| id.to_owned())
 }
 
-/// `trama proposal move <id> approved` inside the app: it can start the refinement job a stale
+/// `weaver proposal move <id> approved` inside the app: it can start the refinement job a stale
 /// change needs. Runs in the project's queue; the facts are the app's.
 fn approve_from_cli(
     call: &Call,
@@ -412,7 +412,7 @@ fn approve_from_cli(
     Ok(answer(call, &image, id, markdown))
 }
 
-/// `trama proposal move <id> rejected {rework: true}` inside the app: it starts the rework job.
+/// `weaver proposal move <id> rejected {rework: true}` inside the app: it starts the rework job.
 fn rework_from_cli(
     call: &Call,
     jobs: &dyn ProposalJobs,
@@ -435,7 +435,7 @@ fn rework_from_cli(
     Ok(answer(call, &image, id, format!("# {name} rejected\n\n{name} is Rejected: a rework job writes it again from the feedback.\n")))
 }
 
-/// What the running app does for `trama proposal move`, instead of the handler of the registry:
+/// What the running app does for `weaver proposal move`, instead of the handler of the registry:
 ///
 /// * `approved` and `rejected` with `rework`: they start jobs, which only the app can do;
 /// * `open`: the handler hands the Proposal over; an approved setup then starts Run all.
@@ -447,7 +447,7 @@ pub fn answer_cli(call: &Call, jobs: &dyn ProposalJobs) -> Option<Result<Command
         return None;
     }
     let id = call.arg?;
-    let project_id = trama_core::paths::project_hash_of_canonical(call.root);
+    let project_id = weaver_core::paths::project_hash_of_canonical(call.root);
     match call.state? {
         "approved" => Some(approve_from_cli(call, jobs, &project_id, id)),
         "rejected" if call.input.get("rework").and_then(|v| v.as_bool()) == Some(true) => {
@@ -490,7 +490,7 @@ pub fn notice_of_command(request: &CommandRequest, reply: &CommandReply) -> Opti
         .as_u64()
         .map_or_else(|| id.to_owned(), |n| format!("P{n}"));
     Some(Notice {
-        project_id: trama_core::paths::project_hash_of_canonical(Path::new(&request.root)),
+        project_id: weaver_core::paths::project_hash_of_canonical(Path::new(&request.root)),
         id: format!("sent-back-{id}"),
         text: format!("{name} went back to Draft: the agent is editing it. It returns to the Board when the agent hands it over again."),
     })
@@ -502,9 +502,9 @@ mod tests {
     use std::path::Path;
 
     use serde_json::{json, Map, Value};
-    use trama_cli::spec::Caller;
-    use trama_core::paths::{project_hash_of_canonical, AppDirs};
-    use trama_core::project::text::{file_content, sha256_hex};
+    use weaver_cli::spec::Caller;
+    use weaver_core::paths::{project_hash_of_canonical, AppDirs};
+    use weaver_core::project::text::{file_content, sha256_hex};
 
     use super::*;
 
@@ -546,7 +546,7 @@ mod tests {
     }
 
     fn put(root: &Path, rel: &str, text: &str) {
-        let path = root.join(".trama").join(rel);
+        let path = root.join(".weaver").join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
     }
@@ -619,7 +619,7 @@ mod tests {
         let text = fs::read_to_string(
             f.project
                 .path()
-                .join(format!(".trama/proposals/{id}-t/proposal.md")),
+                .join(format!(".weaver/proposals/{id}-t/proposal.md")),
         )
         .unwrap();
         text.lines()
@@ -635,14 +635,14 @@ mod tests {
         assert!(revision.is_some());
         assert_eq!(status(&f, "pppppppp"), "approved");
         assert!(
-            fs::read_to_string(f.project.path().join(".trama/model/shop/order.md"))
+            fs::read_to_string(f.project.path().join(".weaver/model/shop/order.md"))
                 .unwrap()
                 .contains("Paid.")
         );
         assert!(f
             .project
             .path()
-            .join(".trama/tasks/tttttttt-pay.md")
+            .join(".weaver/tasks/tttttttt-pay.md")
             .is_file());
         assert!(f.jobs.calls().is_empty());
     }
@@ -659,7 +659,7 @@ mod tests {
         assert_eq!(status(&f, "pppppppp"), "refining");
         assert_eq!(f.jobs.calls(), ["refine pppppppp"]);
         assert!(
-            !f.project.path().join(".trama/tasks").exists(),
+            !f.project.path().join(".weaver/tasks").exists(),
             "nothing is approved yet"
         );
         // Being refined: Approve is refused now.
@@ -695,7 +695,7 @@ mod tests {
         let text = fs::read_to_string(
             f.project
                 .path()
-                .join(".trama/proposals/pppppppp-t/proposal.md"),
+                .join(".weaver/proposals/pppppppp-t/proposal.md"),
         )
         .unwrap();
         put(
@@ -708,8 +708,8 @@ mod tests {
             fn ghosts(&self, _: &str) -> Vec<crate::agent_work::Ghost> {
                 Vec::new()
             }
-            fn facts(&self, _: &str) -> trama_core::project::board::AgentFacts {
-                let mut facts = trama_core::project::board::AgentFacts::default();
+            fn facts(&self, _: &str) -> weaver_core::project::board::AgentFacts {
+                let mut facts = weaver_core::project::board::AgentFacts::default();
                 facts.working_jobs.insert("jjjjjjjj".to_owned());
                 facts
             }
@@ -744,7 +744,7 @@ mod tests {
         assert!(fs::read_to_string(
             f.project
                 .path()
-                .join(".trama/proposals/pppppppp-t/proposal.md")
+                .join(".weaver/proposals/pppppppp-t/proposal.md")
         )
         .unwrap()
         .ends_with("## Feedback\n\nToo big\n"));
@@ -760,7 +760,7 @@ mod tests {
         let text = fs::read_to_string(
             f.project
                 .path()
-                .join(".trama/proposals/qqqqqqqq-t/proposal.md"),
+                .join(".weaver/proposals/qqqqqqqq-t/proposal.md"),
         )
         .unwrap();
         assert!(text.contains("reworkRequested: true"), "{text}");
@@ -815,7 +815,7 @@ mod tests {
         assert_eq!(jobs.calls(), ["run all"]);
         assert!(project
             .path()
-            .join(".trama/tasks/tttttttt-pay.md")
+            .join(".weaver/tasks/tttttttt-pay.md")
             .is_file());
     }
 
@@ -838,7 +838,7 @@ mod tests {
         let before = fs::read(
             f.project
                 .path()
-                .join(".trama/proposals/pppppppp-t/proposal.md"),
+                .join(".weaver/proposals/pppppppp-t/proposal.md"),
         )
         .unwrap();
         let revision = choose_model(
@@ -858,7 +858,7 @@ mod tests {
             fs::read(
                 f.project
                     .path()
-                    .join(".trama/proposals/pppppppp-t/proposal.md")
+                    .join(".weaver/proposals/pppppppp-t/proposal.md")
             )
             .unwrap(),
             before
@@ -868,7 +868,7 @@ mod tests {
             "open",
             "choosing a model never sends it back to Draft"
         );
-        let everything = trama_core::project::proposal::files::read_folder(
+        let everything = weaver_core::project::proposal::files::read_folder(
             f.project.path(),
             ProjectImage::load(f.project.path())
                 .card(CardKind::Proposal, "pppppppp")
@@ -878,7 +878,9 @@ mod tests {
             .files
             .values()
             .all(|t| !t.contains("claude-opus")));
-        assert!(trama_core::project::proposal::models::models_file(&f.state.dirs, &f.id).is_file());
+        assert!(
+            weaver_core::project::proposal::models::models_file(&f.state.dirs, &f.id).is_file()
+        );
         assert!(
             f.state.dirs.local_data_dir().starts_with(f.base.path()),
             "the local data of the app, not the project"
@@ -912,7 +914,7 @@ mod tests {
     }
 
     fn cli_call<'a>(
-        command: &'a trama_cli::spec::Command,
+        command: &'a weaver_cli::spec::Command,
         root: &'a Path,
         image: &'a ProjectImage,
         arg: &'a str,
@@ -931,8 +933,8 @@ mod tests {
         }
     }
 
-    fn move_command() -> &'static trama_cli::spec::Command {
-        trama_cli::registry::find("proposal", "move").expect("the command")
+    fn move_command() -> &'static weaver_cli::spec::Command {
+        weaver_cli::registry::find("proposal", "move").expect("the command")
     }
 
     #[test]
@@ -945,7 +947,7 @@ mod tests {
             "model/shop/order.md",
             &ORDER.replace("Choosing.", "Browsing."),
         );
-        let root = trama_core::paths::canonical_root(project.path()).unwrap();
+        let root = weaver_core::paths::canonical_root(project.path()).unwrap();
         let jobs = FakeJobs::default();
         let command = move_command();
         let image = ProjectImage::load(&root);
@@ -1016,7 +1018,7 @@ mod tests {
             &jobs
         )
         .is_none());
-        let show = trama_cli::registry::find("proposal", "show").unwrap();
+        let show = weaver_cli::registry::find("proposal", "show").unwrap();
         assert!(answer_cli(
             &cli_call(show, &root, &image, "rrrrrrrr", "x", &none, &caller),
             &jobs
@@ -1031,7 +1033,7 @@ mod tests {
         change(project.path(), "pppppppp", "draft");
         let proposal = project
             .path()
-            .join(".trama/proposals/pppppppp-t/proposal.md");
+            .join(".weaver/proposals/pppppppp-t/proposal.md");
         let text = fs::read_to_string(&proposal).unwrap();
         let request = "2026-11-02T09-30-00";
         fs::write(
@@ -1042,14 +1044,14 @@ mod tests {
             ),
         )
         .unwrap();
-        let store = trama_core::project::requests::store::RequestStore::new(project.path());
+        let store = weaver_core::project::requests::store::RequestStore::new(project.path());
         let time =
-            trama_core::project::requests::id::LocalTime::parse("2026-11-02T09:30:00").unwrap();
+            weaver_core::project::requests::id::LocalTime::parse("2026-11-02T09:30:00").unwrap();
         assert_eq!(store.create(&time).unwrap(), request);
         store.save(request, "Add a cart").unwrap();
         store.record_sent(request, "jjjjjjjj").unwrap();
 
-        let root = trama_core::paths::canonical_root(project.path()).unwrap();
+        let root = weaver_core::paths::canonical_root(project.path()).unwrap();
         let image = ProjectImage::load(&root);
         let caller = Caller::default();
         let input = Map::new();
@@ -1070,18 +1072,18 @@ mod tests {
         .unwrap();
         assert_eq!(reply.json["status"], "open");
 
-        let store = trama_core::project::requests::store::RequestStore::new(&root);
+        let store = weaver_core::project::requests::store::RequestStore::new(&root);
         assert!(
-            !root.join(format!(".trama/requests/{request}.md")).exists(),
+            !root.join(format!(".weaver/requests/{request}.md")).exists(),
             "the hand-over deletes the file"
         );
         assert_eq!(
             store.state_of(request).unwrap(),
-            trama_core::project::requests::machine::RequestState::Consumed
+            weaver_core::project::requests::machine::RequestState::Consumed
         );
         // It never comes back, even if an editor writes the file again.
         fs::write(
-            root.join(format!(".trama/requests/{request}.md")),
+            root.join(format!(".weaver/requests/{request}.md")),
             "Again\n",
         )
         .unwrap();

@@ -151,7 +151,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         put(dir.path(), "src/main.rs");
         put(dir.path(), "docs/a.md");
-        put(dir.path(), ".trama/model/system.md");
+        put(dir.path(), ".weaver/model/system.md");
         put(dir.path(), ".env");
         put(dir.path(), "README.md");
         put(dir.path(), "Zeta.txt");

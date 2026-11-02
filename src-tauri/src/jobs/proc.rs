@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use serde_json::json;
 use tokio::sync::{mpsc, watch};
-use trama_core::omp::Failure;
-use trama_core::process_group::ProcessGroup;
+use weaver_core::omp::Failure;
+use weaver_core::process_group::ProcessGroup;
 
 use super::rpc::{Incoming, Rpc};
 
@@ -103,7 +103,7 @@ impl OmpProcess {
         std::thread::Builder::new()
             .name(format!("{name}-omp"))
             .spawn(move || {
-                let mut command = trama_core::process::command(&spec.program, &spec.args);
+                let mut command = weaver_core::process::command(&spec.program, &spec.args);
                 command
                     .env_clear()
                     .envs(spec.env.iter().map(|(n, v)| (n, v)))
@@ -112,7 +112,7 @@ impl OmpProcess {
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped());
-                match trama_core::process_group::spawn(&mut command) {
+                match weaver_core::process_group::spawn(&mut command) {
                     Ok((mut child, group)) => {
                         let (stdin, stdout, stderr) =
                             (child.stdin.take(), child.stdout.take(), child.stderr.take());

@@ -7,7 +7,7 @@
 //! <config>/dev.nicchia.weaver/            settings, recent projects (later Tasks)
 //! <local data>/dev.nicchia.weaver/
 //!   runtime.json                          endpoint, secret, pid, version of the running app
-//!   bin/trama                             copy of the bundled CLI (only file in this folder)
+//!   bin/weaver                            copy of the bundled `weaver-cli` (only file in this folder)
 //!   locks/<project hash>.lock             advisory lock of a project
 //!   run/                                  socket folder when XDG_RUNTIME_DIR is not set (Unix)
 //! ```
@@ -92,7 +92,7 @@ impl AppDirs {
         self.local_data.join(RUNTIME_FILE_NAME)
     }
 
-    /// `<local data>/bin`: holds only the `trama` copy.
+    /// `<local data>/bin`: holds only the `weaver` copy.
     pub fn bin_dir(&self) -> PathBuf {
         self.local_data.join("bin")
     }

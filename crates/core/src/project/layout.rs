@@ -1,7 +1,7 @@
-//! The layout of `.trama/`, and which file is what.
+//! The layout of `.weaver/`, and which file is what.
 //!
 //! ```text
-//! .trama/
+//! .weaver/
 //!   model/                       system.md, actors/<actor>.md, <feature>/feature.md, <feature>/<machine>.md
 //!   requirements/<area>/         area.md and <fragment>.md
 //!   specs.yaml                   optional
@@ -14,7 +14,7 @@
 //!   task-images/<task id>/       local only
 //! ```
 //!
-//! Paths in this crate's project API are relative to `.trama/` and use `/`, whatever the
+//! Paths in this crate's project API are relative to `.weaver/` and use `/`, whatever the
 //! operating system. Files and folders whose name starts with `.` are never read.
 
 use std::io;
@@ -26,8 +26,8 @@ use super::model::is_element_id;
 use super::requirements::AREA_FILE;
 use super::text;
 
-/// The project folder holding everything Trama keeps.
-pub const TRAMA_DIR: &str = ".trama";
+/// The project folder holding everything Weaver keeps.
+pub const WEAVER_DIR: &str = ".weaver";
 
 pub const MODEL_DIR: &str = "model";
 pub const REQUIREMENTS_DIR: &str = "requirements";
@@ -44,7 +44,7 @@ pub const SHORT_NUMBERS_DIR: &str = "short-numbers";
 pub const TASK_IMAGES_DIR: &str = "task-images";
 pub const LOCAL_ONLY_DIRS: [&str; 3] = [REQUESTS_DIR, SHORT_NUMBERS_DIR, TASK_IMAGES_DIR];
 
-/// The versioned entries of `.trama/` that the project image reads.
+/// The versioned entries of `.weaver/` that the project image reads.
 pub const VERSIONED_ENTRIES: [&str; 7] = [
     MODEL_DIR,
     REQUIREMENTS_DIR,
@@ -57,14 +57,14 @@ pub const VERSIONED_ENTRIES: [&str; 7] = [
 
 const GITIGNORE: &str = ".gitignore";
 
-/// `<project root>/.trama`.
-pub fn trama_dir(project_root: &Path) -> PathBuf {
-    project_root.join(TRAMA_DIR)
+/// `<project root>/.weaver`.
+pub fn weaver_dir(project_root: &Path) -> PathBuf {
+    project_root.join(WEAVER_DIR)
 }
 
-/// The absolute path of a `.trama/`-relative path (with `/` or `\` separators).
+/// The absolute path of a `.weaver/`-relative path (with `/` or `\` separators).
 pub fn absolute(project_root: &Path, rel: &str) -> PathBuf {
-    let mut path = trama_dir(project_root);
+    let mut path = weaver_dir(project_root);
     path.extend(
         normalize_rel(rel)
             .split('/')
@@ -78,9 +78,9 @@ pub fn normalize_rel(rel: &str) -> String {
     rel.replace('\\', "/")
 }
 
-/// The `.trama/`-relative key of an absolute path, or `None` when it is outside `.trama/`.
+/// The `.weaver/`-relative key of an absolute path, or `None` when it is outside `.weaver/`.
 pub fn rel_key(project_root: &Path, path: &Path) -> Option<String> {
-    let rel = path.strip_prefix(trama_dir(project_root)).ok()?;
+    let rel = path.strip_prefix(weaver_dir(project_root)).ok()?;
     let mut parts = Vec::new();
     for component in rel.components() {
         match component {
@@ -99,7 +99,7 @@ pub fn is_hidden(rel: &str) -> bool {
 /// Makes sure the local-only folder `name` exists and holds its `.gitignore` with `*`,
 /// writing the file again whenever it is missing. Returns the folder.
 pub fn ensure_local_folder(project_root: &Path, name: &str) -> io::Result<PathBuf> {
-    let folder = trama_dir(project_root).join(name);
+    let folder = weaver_dir(project_root).join(name);
     std::fs::create_dir_all(&folder)?;
     let ignore = folder.join(GITIGNORE);
     if !ignore.exists() {
@@ -108,7 +108,7 @@ pub fn ensure_local_folder(project_root: &Path, name: &str) -> io::Result<PathBu
     Ok(folder)
 }
 
-/// What the file at a `.trama/`-relative path is.
+/// What the file at a `.weaver/`-relative path is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileClass {
     /// Not read: hidden, local-only, a copy inside a Proposal folder, or another file type.
@@ -142,7 +142,7 @@ pub enum FileClass {
     Misplaced(String),
 }
 
-/// Classifies the file at `rel` (a `/`-separated path relative to `.trama/`).
+/// Classifies the file at `rel` (a `/`-separated path relative to `.weaver/`).
 pub fn classify(rel: &str) -> FileClass {
     if is_hidden(rel) {
         return FileClass::Ignored;
@@ -219,7 +219,7 @@ fn classify_model(rest: &[&str], md_stem: &dyn Fn(&str) -> Option<String>) -> Fi
 fn classify_requirements(rest: &[&str], md_stem: &dyn Fn(&str) -> Option<String>) -> FileClass {
     match rest {
         [name] if name.ends_with(".md") => FileClass::Misplaced(
-            "a `.md` directly in `requirements/` is an error: an Area is a folder with `area.md` and fragments (`trama project edit` converts it)".to_owned(),
+            "a `.md` directly in `requirements/` is an error: an Area is a folder with `area.md` and fragments (`weaver project edit` converts it)".to_owned(),
         ),
         [area, name] if name.ends_with(".md") && !is_element_id(area) => {
             FileClass::Misplaced(format!("Area folder `{area}` must be kebab-case"))
@@ -291,7 +291,7 @@ mod tests {
             }
         );
         assert!(
-            matches!(classify("requirements/ui.md"), FileClass::Misplaced(m) if m.contains("trama project edit"))
+            matches!(classify("requirements/ui.md"), FileClass::Misplaced(m) if m.contains("weaver project edit"))
         );
         assert!(
             matches!(classify("requirements/ui/sub/x.md"), FileClass::Misplaced(m) if m.contains("no subfolders"))
@@ -371,14 +371,14 @@ mod tests {
         let abs = absolute(root, "model\\shop\\ordine così.md");
         assert_eq!(
             abs,
-            Path::new("project root ü/.trama/model/shop/ordine così.md")
+            Path::new("project root ü/.weaver/model/shop/ordine così.md")
         );
         assert_eq!(
             rel_key(root, &abs).as_deref(),
             Some("model/shop/ordine così.md")
         );
         assert_eq!(rel_key(root, Path::new("elsewhere/x.md")), None);
-        assert_eq!(rel_key(root, &trama_dir(root)), None);
+        assert_eq!(rel_key(root, &weaver_dir(root)), None);
     }
 
     #[test]
@@ -388,12 +388,12 @@ mod tests {
             let folder = ensure_local_folder(dir.path(), name).unwrap();
             assert_eq!(std::fs::read(folder.join(".gitignore")).unwrap(), b"*\n");
         }
-        let ignore = trama_dir(dir.path()).join("requests/.gitignore");
+        let ignore = weaver_dir(dir.path()).join("requests/.gitignore");
         std::fs::remove_file(&ignore).unwrap();
         ensure_local_folder(dir.path(), "requests").unwrap();
         assert_eq!(std::fs::read(&ignore).unwrap(), b"*\n");
-        // Nothing else of `.trama/` is ignored.
-        assert!(!trama_dir(dir.path()).join(".gitignore").exists());
-        assert!(!trama_dir(dir.path()).join("tasks").exists());
+        // Nothing else of `.weaver/` is ignored.
+        assert!(!weaver_dir(dir.path()).join(".gitignore").exists());
+        assert!(!weaver_dir(dir.path()).join("tasks").exists());
     }
 }

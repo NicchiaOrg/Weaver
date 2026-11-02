@@ -4,10 +4,10 @@
 use std::sync::Arc;
 
 use serde_json::{json, Value};
-use trama_core::jobs::machine::RESUME_PROMPT;
-use trama_core::jobs::{JobState, JobStore};
-use trama_core::project::image::ProjectImage;
-use trama_core::settings::Permissions;
+use weaver_core::jobs::machine::RESUME_PROMPT;
+use weaver_core::jobs::{JobState, JobStore};
+use weaver_core::project::image::ProjectImage;
+use weaver_core::settings::Permissions;
 
 use super::conversation::{Delivery, EndLine, Entry, PermissionState};
 use super::registry::Jobs;
@@ -62,7 +62,7 @@ async fn a_run_goes_from_queued_through_running_to_done_with_its_conversation_an
     let (host, jobs, _dir, project) = one_task().await;
     host.script(json!({
         "log": host.received_log(),
-        "logEnv": ["TRAMA_JOB", "TRAMA_RUN", "TRAMA_TASK", "TRAMA_ENDPOINT"],
+        "logEnv": ["WEAVER_JOB", "WEAVER_RUN", "WEAVER_TASK", "WEAVER_ENDPOINT"],
         "prompts": [[
             agent("Reading "), agent("the Task."),
             { "update": { "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Read a.rs", "kind": "read", "status": "in_progress" } },
@@ -97,11 +97,11 @@ async fn a_run_goes_from_queued_through_running_to_done_with_its_conversation_an
 
     let received = host.received();
     let env = &received[0];
-    // The inherited TRAMA_JOB never reaches omp; Weaver's own variables do.
-    assert_eq!(env["env"]["TRAMA_JOB"], json!(id));
-    assert_eq!(env["env"]["TRAMA_RUN"], "1");
-    assert_eq!(env["env"]["TRAMA_TASK"], "aaaaaaaa");
-    assert_eq!(env["env"]["TRAMA_ENDPOINT"], "/tmp/weaver-test.sock");
+    // The inherited WEAVER_JOB never reaches omp; Weaver's own variables do.
+    assert_eq!(env["env"]["WEAVER_JOB"], json!(id));
+    assert_eq!(env["env"]["WEAVER_RUN"], "1");
+    assert_eq!(env["env"]["WEAVER_TASK"], "aaaaaaaa");
+    assert_eq!(env["env"]["WEAVER_ENDPOINT"], "/tmp/weaver-test.sock");
     let args: Vec<&str> = env["args"]
         .as_array()
         .unwrap()
@@ -156,9 +156,9 @@ async fn a_run_goes_from_queued_through_running_to_done_with_its_conversation_an
         (record.state, record.session_id.as_deref()),
         (JobState::Done, Some("fake-session"))
     );
-    assert!(record.args.contains(&"--advisor".to_owned()) && record.env["TRAMA_JOB"] == id);
+    assert!(record.args.contains(&"--advisor".to_owned()) && record.env["WEAVER_JOB"] == id);
     until("the overlay to be deleted", LIMIT, || {
-        !trama_core::jobs::record::overlay_file(&host.dirs, &id).exists()
+        !weaver_core::jobs::record::overlay_file(&host.dirs, &id).exists()
     })
     .await;
 }
@@ -563,7 +563,7 @@ async fn forms_and_asks_are_declined_at_once_with_the_fixed_text_and_the_ui_hear
     assert_eq!(answer["result"]["action"], "decline");
     assert_eq!(
         answer["result"]["_meta"]["message"],
-        "In Weaver jobs, ask the developer only with `trama question new` (bash timeout 0). Do not ask in any other way."
+        "In Weaver jobs, ask the developer only with `weaver question new` (bash timeout 0). Do not ask in any other way."
     );
     assert!(!entries(&jobs, &project, &id)
         .iter()
@@ -618,7 +618,7 @@ async fn a_job_that_ends_gives_back_the_tasks_it_held_in_the_same_step() {
     let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
     state_of(&host, &project, &id, JobState::Running).await;
     // The agent takes the Task: In progress, held by this job.
-    let file = project.root.join(".trama/tasks/aaaaaaaa-first-task.md");
+    let file = project.root.join(".weaver/tasks/aaaaaaaa-first-task.md");
     std::fs::write(
         &file,
         TASK.replace("column: todo", "column: doing")
@@ -744,7 +744,7 @@ async fn a_job_left_working_by_a_crash_is_suspended_at_the_next_start_and_resume
     record.id = "crashed1".to_owned();
     record
         .env
-        .insert("TRAMA_JOB".to_owned(), "crashed1".to_owned());
+        .insert("WEAVER_JOB".to_owned(), "crashed1".to_owned());
     store.write(&record).unwrap();
     first.stop(&project.id, &id).unwrap();
     state_of(&host, &project, &id, JobState::Stopped).await;
@@ -870,7 +870,7 @@ async fn notes_announcements_and_ghosts_follow_the_job_until_the_card_arrives_or
     std::fs::write(
         project
             .root
-            .join(".trama/tasks/bbbbbbbb-cancel-an-order.md"),
+            .join(".weaver/tasks/bbbbbbbb-cancel-an-order.md"),
         TASK.replace("First task", "Cancel an order"),
     )
     .unwrap();
@@ -898,9 +898,9 @@ async fn notes_announcements_and_ghosts_follow_the_job_until_the_card_arrives_or
 
 #[tokio::test]
 async fn the_authority_accepts_only_a_working_job_of_the_project_and_runs_the_job_commands() {
-    use trama_cli::exec::{execute, Authority};
-    use trama_cli::spec::Caller;
-    use trama_core::command::CommandRequest;
+    use weaver_cli::exec::{execute, Authority};
+    use weaver_cli::spec::Caller;
+    use weaver_core::command::CommandRequest;
 
     let (host, jobs, _dir, project) = one_task().await;
     host.script(json!({ "prompts": [[{ "wait_steer": 1 }]] }));
@@ -1002,7 +1002,7 @@ async fn the_authority_accepts_only_a_working_job_of_the_project_and_runs_the_jo
         )
         .unwrap_err()
         .code,
-        trama_core::command::code::FORBIDDEN
+        weaver_core::command::code::FORBIDDEN
     );
     // `job new` is for the working General only.
     assert_eq!(
@@ -1013,7 +1013,7 @@ async fn the_authority_accepts_only_a_working_job_of_the_project_and_runs_the_jo
         )
         .unwrap_err()
         .code,
-        trama_core::command::code::FORBIDDEN
+        weaver_core::command::code::FORBIDDEN
     );
 
     jobs.send_message(&project.id, &id, "Wrap up").unwrap();
@@ -1026,15 +1026,15 @@ async fn the_authority_accepts_only_a_working_job_of_the_project_and_runs_the_jo
         )
         .unwrap_err()
         .code,
-        trama_core::command::code::FORBIDDEN
+        weaver_core::command::code::FORBIDDEN
     );
 }
 
 #[tokio::test]
 async fn the_general_starts_a_job_with_the_developers_refusals() {
-    use trama_cli::exec::execute;
-    use trama_cli::spec::Caller;
-    use trama_core::command::CommandRequest;
+    use weaver_cli::exec::execute;
+    use weaver_cli::spec::Caller;
+    use weaver_core::command::CommandRequest;
 
     struct Always;
     impl super::authority::GeneralAuthority for Always {
@@ -1078,7 +1078,7 @@ async fn the_general_starts_a_job_with_the_developers_refusals() {
     assert_eq!(jobs.record(&id).unwrap().name, "Run T1");
     // The developer's refusal: another Run works.
     let refused = execute(&request(json!({ "kind": "run" })), &general, &authority).unwrap_err();
-    assert_eq!(refused.code, trama_core::command::code::REFUSED);
+    assert_eq!(refused.code, weaver_core::command::code::REFUSED);
     assert!(
         refused.message.contains("A run is in progress"),
         "{}",
@@ -1096,7 +1096,7 @@ async fn the_general_starts_a_job_with_the_developers_refusals() {
         execute(&request(json!({ "kind": "scan" })), &wrong, &authority)
             .unwrap_err()
             .code,
-        trama_core::command::code::FORBIDDEN
+        weaver_core::command::code::FORBIDDEN
     );
     // A design request cannot be sent before the design requests install their sender.
     assert!(execute(

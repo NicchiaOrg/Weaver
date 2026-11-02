@@ -386,4 +386,21 @@ describe("History warnings", () => {
     await show();
     expect(screen.getByRole("alert")).toHaveTextContent(text);
   });
+
+  it("closes a warning with its close button, keeps it closed through Board updates, and shows a changed text", async () => {
+    const first = "Could not record abcd1234 in History: it has no `finished` instant. The Task stays until its copy can be made.";
+    const second = "Could not record efgh5678 in History: it has no `finished` instant. The Task stays until its copy can be made.";
+    install(board(1, { warnings: [first, second] }));
+    await show();
+    expect(screen.getAllByRole("alert")).toHaveLength(2);
+    const closeFirst = within(screen.getAllByRole("alert")[0]!).getByRole("button", { name: "Close" });
+    await userEvent.setup().click(closeFirst);
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByRole("alert")).toHaveTextContent(second);
+
+    // The Board changes: the closed warning stays hidden, a warning with another text shows at once.
+    const changed = "Could not record abcd1234 in History: the copy was refused. The Task stays until its copy can be made.";
+    await publish(board(2, { warnings: [first, second, changed] }));
+    expect(screen.getAllByRole("alert").map((alert) => alert.textContent)).toEqual([expect.stringContaining(second), expect.stringContaining(changed)]);
+  });
 });

@@ -89,7 +89,7 @@ pub enum ReworkKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     /// The sub-agent limit: for a Run all group, its share (the same number is the `max` of
-    /// `trama task list`). At least 1.
+    /// `weaver task list`). At least 1.
     pub max_agents: u32,
     /// The language name of the developer's texts, when one is set.
     pub language: Option<String>,
@@ -134,7 +134,7 @@ pub fn compose(job: &Job, settings: &Settings) -> Result<String, InstructionErro
         " Pass each sub-agent what you have already read that concerns its part, as the \"Sub-agents context sharing\" section of your skill says.",
     );
     line.push_str(
-        " Ask the developer only with `trama question new`, as the skill says, never with your own question tool; run it with no time limit and wait until it ends.",
+        " Ask the developer only with `weaver question new`, as the skill says, never with your own question tool; run it with no time limit and wait until it ends.",
     );
     if let Some(language) = language {
         line.push_str(&format!(
@@ -191,12 +191,14 @@ fn first_sentence(job: &Job, max: u32) -> Result<String, InstructionError> {
     Ok(match job {
         Job::Setup { request } => {
             request_identity(request)?;
-            format!("Use the {SETUP} skill on the setup request in `.trama/requests/{request}.md`.")
+            format!(
+                "Use the {SETUP} skill on the setup request in `.weaver/requests/{request}.md`."
+            )
         }
         Job::Design { request } => {
             request_identity(request)?;
             format!(
-                "Use the {DESIGN} skill on the design request in `.trama/requests/{request}.md`."
+                "Use the {DESIGN} skill on the design request in `.weaver/requests/{request}.md`."
             )
         }
         Job::Import { excluded } if excluded.is_empty() => {
@@ -230,7 +232,7 @@ fn first_sentence(job: &Job, max: u32) -> Result<String, InstructionError> {
                 }
             };
             format!(
-                "Use the {IMPLEMENT} skill on the runnable Tasks: take them from `trama task list --input '{{\"runnable\":true,\"max\":{max},\"groups\":true{filter}}}'`, one batch at a time, until it says there is none."
+                "Use the {IMPLEMENT} skill on the runnable Tasks: take them from `weaver task list --input '{{\"runnable\":true,\"max\":{max},\"groups\":true{filter}}}'`, one batch at a time, until it says there is none."
             )
         }
         Job::Resolve { drift, answer } => {
@@ -282,7 +284,7 @@ fn json(ids: &[String]) -> String {
 mod tests {
     use super::*;
 
-    const SUBAGENTS: &str = " Run at most 4 sub-agents at once. Pass each sub-agent what you have already read that concerns its part, as the \"Sub-agents context sharing\" section of your skill says. Ask the developer only with `trama question new`, as the skill says, never with your own question tool; run it with no time limit and wait until it ends.";
+    const SUBAGENTS: &str = " Run at most 4 sub-agents at once. Pass each sub-agent what you have already read that concerns its part, as the \"Sub-agents context sharing\" section of your skill says. Ask the developer only with `weaver question new`, as the skill says, never with your own question tool; run it with no time limit and wait until it ends.";
     const LANGUAGE: &str = " Write the texts for the developer in Italian, as the Language section of your skill says.";
 
     fn settings(language: Option<&str>) -> Settings {
@@ -306,11 +308,11 @@ mod tests {
         vec![
             (
                 Job::Setup { request: request(1) },
-                "Use the trama-setup skill on the setup request in `.trama/requests/2026-11-02T09-30-01.md`.".into(),
+                "Use the trama-setup skill on the setup request in `.weaver/requests/2026-11-02T09-30-01.md`.".into(),
             ),
             (
                 Job::Design { request: request(2) },
-                "Use the trama-design skill on the design request in `.trama/requests/2026-11-02T09-30-02.md`.".into(),
+                "Use the trama-design skill on the design request in `.weaver/requests/2026-11-02T09-30-02.md`.".into(),
             ),
             (
                 Job::Import { excluded: vec![] },
@@ -324,15 +326,15 @@ mod tests {
             (Job::RunTask { task: id(3) }, "Use the trama-implement skill on Task abcdef03.".into()),
             (
                 Job::RunAll { filter: RunAllFilter::All },
-                "Use the trama-implement skill on the runnable Tasks: take them from `trama task list --input '{\"runnable\":true,\"max\":4,\"groups\":true}'`, one batch at a time, until it says there is none.".into(),
+                "Use the trama-implement skill on the runnable Tasks: take them from `weaver task list --input '{\"runnable\":true,\"max\":4,\"groups\":true}'`, one batch at a time, until it says there is none.".into(),
             ),
             (
                 Job::RunAll { filter: RunAllFilter::Proposals(vec![id(4), id(5)]) },
-                "Use the trama-implement skill on the runnable Tasks: take them from `trama task list --input '{\"runnable\":true,\"max\":4,\"groups\":true,\"proposals\":[\"abcdef04\",\"abcdef05\"]}'`, one batch at a time, until it says there is none.".into(),
+                "Use the trama-implement skill on the runnable Tasks: take them from `weaver task list --input '{\"runnable\":true,\"max\":4,\"groups\":true,\"proposals\":[\"abcdef04\",\"abcdef05\"]}'`, one batch at a time, until it says there is none.".into(),
             ),
             (
                 Job::RunAll { filter: RunAllFilter::NotProposals(vec![id(4), id(5)]) },
-                "Use the trama-implement skill on the runnable Tasks: take them from `trama task list --input '{\"runnable\":true,\"max\":4,\"groups\":true,\"notProposals\":[\"abcdef04\",\"abcdef05\"]}'`, one batch at a time, until it says there is none.".into(),
+                "Use the trama-implement skill on the runnable Tasks: take them from `weaver task list --input '{\"runnable\":true,\"max\":4,\"groups\":true,\"notProposals\":[\"abcdef04\",\"abcdef05\"]}'`, one batch at a time, until it says there is none.".into(),
             ),
             (Job::Resolve { drift: id(6), answer: None }, "Use the trama-resolve-drifts skill on Drift abcdef06.".into()),
             (

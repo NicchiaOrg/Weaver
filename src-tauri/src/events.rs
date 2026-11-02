@@ -8,8 +8,8 @@ use ts_rs::TS;
 use crate::error::AppError;
 use crate::startup::StartupFailure;
 use crate::updates::UpdateStatus;
-use trama_core::omp::machine::OmpStatus;
-use trama_core::settings::SettingsSnapshot;
+use weaver_core::omp::machine::OmpStatus;
+use weaver_core::settings::SettingsSnapshot;
 
 /// Names of the events, as the UI listens to them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

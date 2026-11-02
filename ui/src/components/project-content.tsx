@@ -14,7 +14,6 @@ import { ProjectGate } from "@/components/project/project-gate";
 import { OpeningCheckToast, SkillsBanner, UpdateSkills } from "@/components/project/update-skills";
 import { ProjectStatusProvider } from "@/components/project/use-project-status";
 import { RequestsProvider } from "@/components/requests/use-requests";
-import { DiagramView } from "@/components/views/diagram-view";
 import { RequirementsView } from "@/components/views/requirements-view";
 import { SpecsView } from "@/components/views/specs-view";
 import { ViewsProvider } from "@/components/views/views-state";
@@ -33,11 +32,6 @@ function ProjectShell({ projectId }: { projectId: string }) {
                 <BoardView />
               </SetupLayer>
             </RequestsLayer>
-          </ProjectGate>
-        ),
-        diagram: (
-          <ProjectGate>
-            <DiagramView />
           </ProjectGate>
         ),
         requirements: (
@@ -78,8 +72,8 @@ function ProjectShell({ projectId }: { projectId: string }) {
       // The sidebar shows the real cards of Backlog (ghosts never count) and the jobs waiting for
       // the developer; the backend counts them.
       counts={{ backlog: snapshot?.backlog.length ?? 0, jobsWaiting: waiting }}
-      // What Diagram, Requirements and Specs share, and the cards' `View on diagram` / `View requirements`;
-      // `Run`, `Run all` and `Scan System` start jobs.
+      // What Requirements and Specs share, and the cards' `View requirements`; `Run`, `Run all` and
+      // `Scan System` start jobs.
       around={(children) => (
         <ViewsProvider projectId={projectId}>
           <JobsBoardActions>

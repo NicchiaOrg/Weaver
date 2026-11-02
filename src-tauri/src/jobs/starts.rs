@@ -8,15 +8,15 @@
 
 use std::path::Path;
 
-use trama_core::job_instruction::{Job, ReworkKind};
-use trama_core::jobs::admission::{self, Refusal, StartPlan};
-use trama_core::jobs::{names, JobKind};
-use trama_core::project::board;
-use trama_core::project::cards::CardKind;
-use trama_core::project::image::ProjectImage;
-use trama_core::project::proposal::data::{self, Kind};
-use trama_core::project::proposal::models::ProposalModels;
-use trama_core::project::shortnum::{self, ShortNumbers};
+use weaver_core::job_instruction::{Job, ReworkKind};
+use weaver_core::jobs::admission::{self, Refusal, StartPlan};
+use weaver_core::jobs::{names, JobKind};
+use weaver_core::project::board;
+use weaver_core::project::cards::CardKind;
+use weaver_core::project::image::ProjectImage;
+use weaver_core::project::proposal::data::{self, Kind};
+use weaver_core::project::proposal::models::ProposalModels;
+use weaver_core::project::shortnum::{self, ShortNumbers};
 
 use super::registry::{Jobs, NewJob};
 
@@ -216,7 +216,7 @@ impl Jobs {
         &self,
         ctx: &Ctx,
         drift: &str,
-        answer: Option<trama_core::job_instruction::ResolveAnswer>,
+        answer: Option<weaver_core::job_instruction::ResolveAnswer>,
     ) -> Result<String, Refusal> {
         let label = names::card_label(&ctx.numbers(), CardKind::Drift, drift);
         match ctx.image.card(CardKind::Drift, drift) {

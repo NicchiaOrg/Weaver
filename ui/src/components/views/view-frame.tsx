@@ -11,19 +11,16 @@ import { OverlayPicker } from "@/components/views/overlay-picker";
 import { useViews } from "@/components/views/views-state";
 
 /**
- * What Diagram, Requirements and Specs have in common: the toolbar with the overlay picker, the
- * notice of an overlay that stopped being open, the error banner, the focus bar, and a message
- * while the snapshot is loading or could not be read. Esc clears the Diagram's selection first
- * and then the focus; on the other views it clears the focus.
+ * What Requirements and Specs have in common: the toolbar with the overlay picker, the notice of an
+ * overlay that stopped being open, the error banner, the focus bar, and a message while the
+ * snapshot is loading or could not be read. Esc clears the view's focus.
  */
 export function ViewFrame({ view, toolbar, children }: { view: ViewName; toolbar?: ReactNode; children: ReactNode }) {
-  const { snapshot, loadError, reload, notices, closeNotice, focus, clearFocus, nav, select } = useViews();
+  const { snapshot, loadError, reload, notices, closeNotice, focus, clearFocus } = useViews();
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Escape" || event.defaultPrevented) return;
-    if (view === "diagram" && nav.selected !== null) select(null);
-    else if (focus[view]) clearFocus(view);
-    else return;
+    if (event.key !== "Escape" || event.defaultPrevented || !focus[view]) return;
+    clearFocus(view);
     event.preventDefault();
   };
 

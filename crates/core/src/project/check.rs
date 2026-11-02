@@ -1,7 +1,7 @@
 //! Rules that need several files at once and are not done by assembling them.
 //!
 //! Together with the per-file parsers and [`Model::assemble`] / [`assemble_areas`] these are
-//! the rules of `trama model check`.
+//! the rules of `weaver model check`.
 //!
 //! [`assemble_areas`]: super::requirements::assemble_areas
 
@@ -15,7 +15,7 @@ use super::refs::{parse_element_ref, Resolver, GENERAL_SECTION};
 use super::requirements::Area;
 use super::specs::Specs;
 
-/// The path (relative to `.trama/`) of a fragment of an Area.
+/// The path (relative to `.weaver/`) of a fragment of an Area.
 pub fn fragment_path(area: &str, fragment: &str) -> String {
     format!("{REQUIREMENTS_DIR}/{area}/{fragment}.md")
 }

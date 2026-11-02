@@ -1,5 +1,5 @@
 //! Reading the Model and the Requirements: which Requirement sections apply to an element, and
-//! the text search of `trama model list`.
+//! the text search of `weaver model list`.
 //!
 //! A Requirement section is titled with one element reference and applies to that element and
 //! everything inside it: the sections of a Machine apply to all its States, those of a Feature
@@ -103,7 +103,7 @@ pub fn general_sections(area: &Area) -> Vec<Located<'_>> {
 /// What a search found.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Hit {
-    /// The reference to pass to `trama model show`; `system` for the System.
+    /// The reference to pass to `weaver model show`; `system` for the System.
     pub reference: String,
     pub kind: &'static str,
     pub title: String,

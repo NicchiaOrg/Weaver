@@ -1,5 +1,5 @@
-//! `trama proposal new | show | list | edit | move`. The rules (scope, coverage, staleness, the
-//! reasons, the transitions) live in `trama_core::project::proposal`; this file reads the input,
+//! `weaver proposal new | show | list | edit | move`. The rules (scope, coverage, staleness, the
+//! reasons, the transitions) live in `weaver_core::project::proposal`; this file reads the input,
 //! applies the changes and prints.
 //!
 //! A decision that starts a job (approving a stale change, a rework) needs the running app: the
@@ -12,25 +12,25 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
-use trama_core::command::{code, CommandReply};
-use trama_core::project::cards::{Card, CardKind};
-use trama_core::project::changes::{self, ChangeSet, MutationError};
-use trama_core::project::clock::{now_instant, SystemClock};
-use trama_core::project::ids::split_card_stem;
-use trama_core::project::image::ProjectImage;
-use trama_core::project::layout::{self, TASK_IMAGES_DIR};
-use trama_core::project::proposal::analysis::{self, Analysis};
-use trama_core::project::proposal::create::{self, DriftDecision, EditRequest, NewProposal};
-use trama_core::project::proposal::data::{self, Kind, Status};
-use trama_core::project::proposal::files;
-use trama_core::project::proposal::scope::Coverage;
-use trama_core::project::proposal::transitions::{
+use weaver_core::command::{code, CommandReply};
+use weaver_core::project::cards::{Card, CardKind};
+use weaver_core::project::changes::{self, ChangeSet, MutationError};
+use weaver_core::project::clock::{now_instant, SystemClock};
+use weaver_core::project::ids::split_card_stem;
+use weaver_core::project::image::ProjectImage;
+use weaver_core::project::layout::{self, TASK_IMAGES_DIR};
+use weaver_core::project::proposal::analysis::{self, Analysis};
+use weaver_core::project::proposal::create::{self, DriftDecision, EditRequest, NewProposal};
+use weaver_core::project::proposal::data::{self, Kind, Status};
+use weaver_core::project::proposal::files;
+use weaver_core::project::proposal::scope::Coverage;
+use weaver_core::project::proposal::transitions::{
     self, Approval, Decider, Refusal, SubmitContext, Submitted,
 };
-use trama_core::project::random::OsRandom;
-use trama_core::project::resolve::resolve_card;
-use trama_core::project::shortnum::{self, ShortNumbers};
-use trama_core::project::tasks;
+use weaver_core::project::random::OsRandom;
+use weaver_core::project::resolve::resolve_card;
+use weaver_core::project::shortnum::{self, ShortNumbers};
+use weaver_core::project::tasks;
 
 use super::{card_with, cards, local, reply, written};
 use crate::spec::*;
@@ -45,7 +45,7 @@ pub fn commands() -> Vec<Command> {
         Command::new("proposal", "new", "Files a Proposal as a Draft.", new)
             .notes(&[
                 "`kind` is `change` (default), `setup`, `import` or `resolution`. `label` is one line of 1 to 30 characters. A `setup` is refused on a Model that has a Feature or an Actor, and `request` is refused together with `reworks`.",
-                "`request` binds the Proposal to a written design request only if no Proposal is bound to it yet, and `reworks` only a Proposal rejected with Rework that nothing replaced; otherwise the Proposal is created unbound, with a note saying why. `announcement` is the identity printed by `trama announcement new`.",
+                "`request` binds the Proposal to a written design request only if no Proposal is bound to it yet, and `reworks` only a Proposal rejected with Rework that nothing replaced; otherwise the Proposal is created unbound, with a note saying why. `announcement` is the identity printed by `weaver announcement new`.",
             ])
             .input(vec![
                 req("title", line(), "The title."),
@@ -63,7 +63,7 @@ pub fn commands() -> Vec<Command> {
                 opt("note", line(), "Why the Proposal is not bound to its request or to the Proposal it reworks."),
             ]))
             .place(written)
-            .example(r#"trama proposal new --input '{"title":"Cancel an order","announcement":"<id>"}'"#),
+            .example(r#"weaver proposal new --input '{"title":"Cancel an order","announcement":"<id>"}'"#),
         Command::new("proposal", "show", "Prints a Proposal: text, status, files, Tasks, scope, blocking and validation.", show)
             .notes(&[
                 "Prints the text, the status, the required Proposals, the files, `## Tasks`, `## Created on approval`, `## Scope` (each entry's reason and coverage), `## Blocked` (every reason) and the validation of the project after the Proposal.",
@@ -78,17 +78,17 @@ pub fn commands() -> Vec<Command> {
                 req("blocked", list(line()), "Every reason it is blocked."),
                 req("validation", list(line()), "Every problem the project would have after it."),
             ]))
-            .example("trama proposal show p3"),
+            .example("weaver proposal show p3"),
         Command::new("proposal", "list", "Lists the Proposals.", list_proposals)
             .notes(&["Lists the Drafts, the Open and the Refining Proposals; with `all`, every Proposal."])
             .input(vec![opt("all", boolean(), "List every Proposal, decided ones included.")])
             .output(vec![req("proposals", list(object(card_with(vec![req("status", line(), "The status.")]))), "The Proposals.")])
             .place(local)
-            .example("trama proposal list"),
+            .example("weaver proposal list"),
         Command::new("proposal", "edit", "Edits a Proposal: makes files editable, records Drift decisions and images.", edit)
             .notes(&[
                 "Every call, even without input, sends an Open Proposal back to Draft and says so.",
-                "`edit` makes paths editable (`model/...`, `requirements/<area>/<fragment>.md`, `specs.yaml`, `tasks/<slug>.md`), copying the current content and recording `base` the first time, and prints the path to write for each. A new Task gets its identity here; Task paths are refused in `import` and `resolution`. `delete` is refused for a path the Proposal holds. `drifts` and `removeDrifts` apply only to a resolution; `option` and `note` go only with `fix-code`. `images` copies files into `.trama/task-images/<task>/`. `rebase` records `base` again and sets `refining`; only a `change` not attached to a Drift.",
+                "`edit` makes paths editable (`model/...`, `requirements/<area>/<fragment>.md`, `specs.yaml`, `tasks/<slug>.md`), copying the current content and recording `base` the first time, and prints the path to write for each. A new Task gets its identity here; Task paths are refused in `import` and `resolution`. `delete` is refused for a path the Proposal holds. `drifts` and `removeDrifts` apply only to a resolution; `option` and `note` go only with `fix-code`. `images` copies files into `.weaver/task-images/<task>/`. `rebase` records `base` again and sets `refining`; only a `change` not attached to a Drift.",
             ])
             .arg(Arg::Card(CardKind::Proposal))
             .input(vec![
@@ -109,10 +109,10 @@ pub fn commands() -> Vec<Command> {
             .output(card_with(vec![
                 req("status", line(), "The status after the call."),
                 req("sentBackToDraft", boolean(), "Whether an Open Proposal went back to Draft."),
-                req("files", list(object(vec![req("path", line(), "The path in `.trama/`."), req("file", line(), "The file to write.")])), "The files made editable."),
+                req("files", list(object(vec![req("path", line(), "The path in `.weaver/`."), req("file", line(), "The file to write.")])), "The files made editable."),
             ]))
             .place(written)
-            .example(r#"trama proposal edit p3 --input '{"edit":["model/checkout/order.md"]}'"#),
+            .example(r#"weaver proposal edit p3 --input '{"edit":["model/checkout/order.md"]}'"#),
         Command::new("proposal", "move", "Hands a Proposal over, or decides it.", move_proposal)
             .notes(&[
                 "`open` hands the Proposal over and prints the warnings and the `show` text. `approved`, `rejected` and `discarded` are the developer's decisions: the agent runs them only when the developer explicitly asked for that decision in the conversation. `rejected` takes `feedback` and `rework`; `rework: true`, and approving a stale `change`, need Weaver to be running.",
@@ -129,7 +129,7 @@ pub fn commands() -> Vec<Command> {
                 req("warnings", list(line()), "Warnings of the hand-over."),
             ]))
             .place(|input, _| if input.get("rework").and_then(Value::as_bool) == Some(true) { Place::App } else { Place::Write })
-            .example("trama proposal move p3 open"),
+            .example("weaver proposal move p3 open"),
     ]
 }
 
@@ -184,7 +184,7 @@ fn failed<E>(error: MutationError<E>) -> Failure {
     Failure::failed(error.to_string())
 }
 
-fn refused_failure(error: MutationError<trama_core::project::board::Refused>) -> Failure {
+fn refused_failure(error: MutationError<weaver_core::project::board::Refused>) -> Failure {
     match error {
         MutationError::Refused(refused) => Failure::refused(refused.notice),
         other => Failure::failed(other.to_string()),
@@ -410,7 +410,7 @@ fn show_view(
         created += 1;
     }
     if kind == Kind::Resolution {
-        for row in trama_core::project::board::resolution_rows(card) {
+        for row in weaver_core::project::board::resolution_rows(card) {
             let Some(drift) = image
                 .card(CardKind::Drift, &row.drift)
                 .filter(|d| d.str_key("status") == Some("open"))
@@ -667,7 +667,7 @@ fn apply_images(root: &Path, plan: &ImagePlan) -> Result<(), Failure> {
     for (source, destination) in &plan.copies {
         let bytes = fs::read(source)
             .map_err(|e| Failure::failed(format!("cannot read {}: {e}", source.display())))?;
-        trama_core::atomic::write(destination, &bytes, None)
+        weaver_core::atomic::write(destination, &bytes, None)
             .map_err(|e| Failure::failed(format!("cannot write {}: {e}", destination.display())))?;
     }
     for path in &plan.removals {
@@ -762,7 +762,7 @@ fn edit(call: &Call) -> Result<CommandReply, Failure> {
     );
     if edited.sent_back_to_draft {
         markdown.push_str(&format!(
-            "\n{label} was Open and is back in Draft: hand it over again with `trama proposal move {label} open` when it is ready.\n"
+            "\n{label} was Open and is back in Draft: hand it over again with `weaver proposal move {label} open` when it is ready.\n"
         ));
     }
     let mut files_json = Vec::new();
@@ -1027,8 +1027,8 @@ fn move_proposal(call: &Call) -> Result<CommandReply, Failure> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use trama_core::jobs::JobRecord;
-    use trama_core::project::text::{file_content, sha256_hex};
+    use weaver_core::jobs::JobRecord;
+    use weaver_core::project::text::{file_content, sha256_hex};
 
     use super::*;
 
@@ -1037,7 +1037,7 @@ mod tests {
     const ORDER: &str = "# Order\n\nAn order.\n\n## States\n\n### Draft (initial)\nChoosing.\n- `CONFIRM` → Paid\n\n### Paid\n\n## Events\n\n### CONFIRM\nConfirmed.\n";
 
     fn put(root: &Path, rel: &str, text: &str) {
-        let path = root.join(".trama").join(rel);
+        let path = root.join(".weaver").join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
     }
@@ -1199,7 +1199,9 @@ mod tests {
         );
         assert!(dir
             .path()
-            .join(format!(".trama/proposals/{id}-cancel-an-order/proposal.md"))
+            .join(format!(
+                ".weaver/proposals/{id}-cancel-an-order/proposal.md"
+            ))
             .is_file());
     }
 
@@ -1518,14 +1520,14 @@ mod tests {
             "{}",
             reply.markdown
         );
-        let folder = dir.path().join(".trama/task-images/aaaaaaaa");
+        let folder = dir.path().join(".weaver/task-images/aaaaaaaa");
         assert_eq!(fs::read(folder.join("shot.png")).unwrap(), b"\x89PNG");
         assert!(
             folder.join("shot-2.png").is_file(),
             "a second image of the same name is kept apart"
         );
         assert_eq!(
-            fs::read_to_string(dir.path().join(".trama/task-images/.gitignore")).unwrap(),
+            fs::read_to_string(dir.path().join(".weaver/task-images/.gitignore")).unwrap(),
             "*\n"
         );
 
@@ -1598,11 +1600,11 @@ mod tests {
         );
         assert!(!dir
             .path()
-            .join(".trama/requests/2026-11-02T07-00-00.md")
+            .join(".weaver/requests/2026-11-02T07-00-00.md")
             .exists());
         assert!(!dir
             .path()
-            .join(".trama/requests/2026-11-02T07-00-00.images")
+            .join(".weaver/requests/2026-11-02T07-00-00.images")
             .exists());
     }
 
@@ -1732,8 +1734,8 @@ mod tests {
             ),
             (Some("approved"), Some("setup"))
         );
-        assert!(dir.path().join(".trama/model/shop/order.md").is_file());
-        assert!(dir.path().join(".trama/tasks/tttttttt-shop.md").is_file());
+        assert!(dir.path().join(".weaver/model/shop/order.md").is_file());
+        assert!(dir.path().join(".weaver/tasks/tttttttt-shop.md").is_file());
         assert!(
             approved.markdown.contains("approved at once"),
             "{}",
@@ -1788,9 +1790,9 @@ mod tests {
             "{}",
             reply.markdown
         );
-        assert!(dir.path().join(".trama/tasks/tttttttt-pay.md").is_file());
+        assert!(dir.path().join(".weaver/tasks/tttttttt-pay.md").is_file());
         assert!(
-            fs::read_to_string(dir.path().join(".trama/model/shop/order.md"))
+            fs::read_to_string(dir.path().join(".weaver/model/shop/order.md"))
                 .unwrap()
                 .contains("The customer paid.")
         );
@@ -1847,8 +1849,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(reply.json["status"], "rejected");
-        let text =
-            fs::read_to_string(dir.path().join(".trama/proposals/pppppppp-t/proposal.md")).unwrap();
+        let text = fs::read_to_string(dir.path().join(".weaver/proposals/pppppppp-t/proposal.md"))
+            .unwrap();
         assert!(
             text.contains("status: rejected") && text.ends_with("## Feedback\n\nToo big\n"),
             "{text}"

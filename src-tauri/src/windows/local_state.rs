@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use trama_core::{atomic, paths};
+use weaver_core::{atomic, paths};
 
 use crate::log_warn;
 

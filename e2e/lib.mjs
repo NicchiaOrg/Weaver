@@ -22,7 +22,7 @@ export const appProcessName = isWindows ? "weaver.exe" : "weaver";
 
 /**
  * The release build of the app: `target/release/weaver[.exe]` (built by `pnpm tauri build`),
- * never a dev server. `E2E_APP` overrides the path (not a `TRAMA_*`/`WEAVER_*` variable on purpose).
+ * never a dev server. `E2E_APP` overrides the path (not a `WEAVER_*`/`WEAVER_*` variable on purpose).
  */
 export function applicationPath() {
   if (process.platform === "darwin") {
@@ -45,7 +45,7 @@ export function tauriDriverPath() {
 }
 
 /**
- * The environment of the app: the inherited one without `TRAMA_*` and `WEAVER_*`, and on Linux
+ * The environment of the app: the inherited one without `WEAVER_*` and `WEAVER_*`, and on Linux
  * the XDG folders (settings, recent projects, runtime file) in a temporary sandbox, so a run never
  * touches the developer's own files. Windows has no such override: its folders are the account's
  * Known Folders, which is why this suite is meant for CI runners.
@@ -53,7 +53,7 @@ export function tauriDriverPath() {
 export function hermeticEnvironment() {
   const env = {};
   for (const [name, value] of Object.entries(process.env)) {
-    if (!/^(TRAMA_|WEAVER_)/i.test(name)) env[name] = value;
+    if (!/^(WEAVER_|WEAVER_)/i.test(name)) env[name] = value;
   }
   if (!isWindows) {
     // One sandbox for the whole run: the launcher creates it when the config loads and the workers
@@ -69,7 +69,7 @@ export function hermeticEnvironment() {
   return env;
 }
 
-/** A copy of the fixture project in a new temporary folder (the app writes into `.trama/`). */
+/** A copy of the fixture project in a new temporary folder (the app writes into `.weaver/`). */
 export function copyFixtureProject(name = "weaver-fixture") {
   const parent = realpathSync(mkdtempSync(path.join(tmpdir(), "weaver-e2e-project-")));
   const project = path.join(parent, name);
@@ -84,4 +84,64 @@ export function isProcessRunning(imageName) {
     return result.stdout.toLowerCase().includes(`"${imageName.toLowerCase()}"`);
   }
   return spawnSync("pgrep", ["-x", imageName]).status === 0;
+}
+
+/** Whether a WebDriver error says the window is gone (it is being destroyed, or already was). */
+export function isNoSuchWindow(error) {
+  return /no such window|no such web view|window was already closed|target window already closed|web view not found/i.test(String(error?.message ?? error));
+}
+
+/**
+ * Runs `action`, retrying while it fails with `no such window` (the transient error of a window
+ * being destroyed); any other error is thrown at once, and so is that one after the timeout.
+ */
+export async function retryWhileNoSuchWindow(action, timeout = 30_000, pause = 200) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    try {
+      return await action();
+    } catch (error) {
+      if (!isNoSuchWindow(error) || Date.now() >= deadline) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pause));
+  }
+}
+
+/**
+ * The WebDriver handle of the project window: the one that is not the welcome window's. Never found
+ * by the WebDriver title, which is the page's `document.title` (`Weaver` in every window). The
+ * `no such window` of the welcome window being destroyed is retried. Fails after the timeout.
+ */
+export async function findProjectWindow(browser, welcomeHandle, timeout = 30_000) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const found = await retryWhileNoSuchWindow(async () => {
+      const handle = (await browser.getWindowHandles()).find((candidate) => candidate !== welcomeHandle);
+      if (handle === undefined) return undefined;
+      await browser.switchToWindow(handle);
+      return handle;
+    }, Math.max(deadline - Date.now(), 0));
+    if (found !== undefined) return found;
+    if (Date.now() >= deadline) throw new Error("no project window opened besides the welcome window");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+
+/**
+ * The native title of the window the browser is switched to, read through Tauri
+ * (`plugin:window|title` of the window's own label), not the WebDriver title.
+ */
+export async function nativeWindowTitle(browser) {
+  await browser.waitUntil(
+    () => browser.execute(() => typeof window.__TAURI_INTERNALS__?.invoke === "function"),
+    { timeoutMsg: "the page of the window has no Tauri bridge" },
+  );
+  const result = await browser.executeAsync(function (done) {
+    const internals = window.__TAURI_INTERNALS__;
+    internals
+      .invoke("plugin:window|title", { label: internals.metadata.currentWindow.label })
+      .then((title) => done({ title }), (error) => done({ error: String(error) }));
+  });
+  if (result.error !== undefined) throw new Error(`reading the native window title failed: ${result.error}`);
+  return result.title;
 }

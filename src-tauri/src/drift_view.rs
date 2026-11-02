@@ -4,18 +4,18 @@
 //! (`requirements/ui#drift`). The UI never decides anything: it shows these.
 
 use serde::Serialize;
-use trama_core::project::board::AgentFacts;
-use trama_core::project::cards::{Card, CardKind};
-use trama_core::project::drift::places::places;
-use trama_core::project::drift::{self, prepared, reasons};
-use trama_core::project::image::ProjectImage;
-use trama_core::project::proposal::analysis;
-use trama_core::project::proposal::data::{self, Status};
-use trama_core::project::proposal::files::Folders;
-use trama_core::project::proposal::transitions::gate_of;
-use trama_core::project::shortnum::ShortNumbers;
-use trama_core::project::tasks;
 use ts_rs::TS;
+use weaver_core::project::board::AgentFacts;
+use weaver_core::project::cards::{Card, CardKind};
+use weaver_core::project::drift::places::places;
+use weaver_core::project::drift::{self, prepared, reasons};
+use weaver_core::project::image::ProjectImage;
+use weaver_core::project::proposal::analysis;
+use weaver_core::project::proposal::data::{self, Status};
+use weaver_core::project::proposal::files::Folders;
+use weaver_core::project::proposal::transitions::gate_of;
+use weaver_core::project::shortnum::ShortNumbers;
+use weaver_core::project::tasks;
 
 use crate::board::TitledRef;
 use crate::proposal_view::ProposalFiles;

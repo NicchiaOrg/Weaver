@@ -27,9 +27,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, Weak};
 
 use serde::Serialize;
-use trama_core::paths;
-use trama_core::project::clock::{now_instant, Clock};
 use ts_rs::TS;
+use weaver_core::paths;
+use weaver_core::project::clock::{now_instant, Clock};
 
 use super::jobs::{BoxFuture, CloseReason, NoJobs, OpenReason, WindowJobs, WindowOpened};
 use super::launch;
@@ -60,7 +60,6 @@ pub struct ShowRequest {
 #[serde(rename_all = "lowercase")]
 pub enum ShowView {
     Board,
-    Diagram,
     Requirements,
     Specs,
     History,
@@ -133,7 +132,7 @@ pub trait Shell: Send + Sync + 'static {
     /// Writes the size and position of the open windows now.
     fn save_window_state(&self);
     /// A batch of file changes of a project, before its picture is rebuilt (the request editor
-    /// follows `.trama/requests/`).
+    /// follows `.weaver/requests/`).
     fn files_changed(&self, _project_id: &str, _root: &Path, _batch: &Rebuild) {}
     /// Waits until the request editor of a project window saved what is pending (a window is closing).
     fn flush_before_close(&self, _project_id: &str) -> BoxFuture<()> {
@@ -699,7 +698,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
-    use trama_core::project::clock::ManualClock;
+    use weaver_core::project::clock::ManualClock;
 
     use super::*;
     use crate::windows::watch::{Watch, WatchGuard};
@@ -916,7 +915,7 @@ mod tests {
     fn project(name: &str) -> (tempfile::TempDir, PathBuf, String) {
         let parent = tempfile::tempdir().unwrap();
         let root = parent.path().join(name);
-        std::fs::create_dir_all(root.join(".trama")).unwrap();
+        std::fs::create_dir_all(root.join(".weaver")).unwrap();
         let canonical = paths::canonical_root(&root).unwrap();
         let id = paths::project_hash_of_canonical(&canonical);
         (parent, canonical, id)
@@ -941,7 +940,7 @@ mod tests {
             OpenOutcome::Focused
         );
         // A path that reaches the same folder another way is the same project.
-        let roundabout = root.join(".trama").join("..");
+        let roundabout = root.join(".weaver").join("..");
         assert_eq!(
             f.manager
                 .open_project(roundabout, OpenReason::Developer)
@@ -1089,7 +1088,7 @@ mod tests {
             .unwrap();
         let before = f.manager.pictures.get(&id).unwrap().revision;
 
-        let file = root.join(".trama").join("model").join("system.md");
+        let file = root.join(".weaver").join("model").join("system.md");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, "---\nname: Alpha\n---\n\n# Alpha\n").unwrap();
         let sink = f.watch.sinks.lock().unwrap().get(&root).unwrap().clone();

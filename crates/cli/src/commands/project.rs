@@ -1,34 +1,34 @@
-//! `trama project new | edit | show`.
+//! `weaver project new | edit | show`.
 
 use std::path::Path;
 
 use serde_json::{json, Value};
-use trama_core::command::CommandReply;
-use trama_core::project::board::{self, ActiveEntry, BacklogEntry, ProposalState};
-use trama_core::project::cards::{Card, CardKind};
-use trama_core::project::layout::TRAMA_DIR;
-use trama_core::project::proposal::data;
-use trama_core::project::shortnum::{self, ShortNumbers};
-use trama_core::project_files::{self, InitialiseError, SyncOptions, SyncReport};
+use weaver_core::command::CommandReply;
+use weaver_core::project::board::{self, ActiveEntry, BacklogEntry, ProposalState};
+use weaver_core::project::cards::{Card, CardKind};
+use weaver_core::project::layout::WEAVER_DIR;
+use weaver_core::project::proposal::data;
+use weaver_core::project::shortnum::{self, ShortNumbers};
+use weaver_core::project_files::{self, InitialiseError, SyncOptions, SyncReport};
 
 use super::{card_with, cards, reply, written};
 use crate::spec::*;
 
 pub fn commands() -> Vec<Command> {
     vec![
-        Command::new("project", "new", "Initialises `.trama/` in the folder and installs the agent files.", new)
+        Command::new("project", "new", "Initialises `.weaver/` in the folder and installs the agent files.", new)
             .notes(&[
-                "Creates `.trama/` with the System and the starting Requirement Areas, and writes the agent files (skills, sub-agent definitions, advisor instructions) in the project. It is refused, creating nothing, when `.trama/` exists, or when an agent file to install exists with other content: every such file is listed, and `force` overwrites them.",
+                "Creates `.weaver/` with the System and the starting Requirement Areas, and writes the agent files (skills, sub-agent definitions, advisor instructions) in the project. It is refused, creating nothing, when `.weaver/` exists, or when an agent file to install exists with other content: every such file is listed, and `force` overwrites them.",
             ])
             .input(vec![opt("force", boolean(), "Overwrite the agent files that differ from the ones to install.")])
             .output(vec![
                 req("root", line(), "The project folder."),
-                req("files", list(line()), "The files created in `.trama/`, relative to it."),
+                req("files", list(line()), "The files created in `.weaver/`, relative to it."),
                 req("areas", list(line()), "The starting Requirement Areas."),
                 req("agentFiles", list(line()), "The agent files written, relative to the project folder."),
             ])
             .place(written)
-            .example("trama project new --input '{}'"),
+            .example("weaver project new --input '{}'"),
         Command::new("project", "edit", "Updates the installed skills.", edit)
             .notes(&[
                 "Update skills: writes again every installed file that differs from the one this version of Weaver carries, creates the starting Requirement Areas when the Requirements are missing, and generates the Requirement skills again. It always reports what it changed, or the error.",
@@ -46,7 +46,7 @@ pub fn commands() -> Vec<Command> {
                 req("generated", Ty::Any, "The result of the generation: `mode` (`fragment` or `index`), `budget` used out of `limit` (4,000), and `switched` (`from`, `to`) when the mode changed."),
             ])
             .place(written)
-            .example("trama project edit"),
+            .example("weaver project edit"),
         Command::new("project", "show", "Prints the Board.", show)
             .output(vec![
                 cards("Open Proposals and open Drifts.", "toDecide"),
@@ -57,7 +57,7 @@ pub fn commands() -> Vec<Command> {
                     req("blockedBy", list(line()), "The Drifts that block it."),
                 ]))), "Tasks in progress."),
             ])
-            .example("trama project show"),
+            .example("weaver project show"),
     ]
 }
 
@@ -70,7 +70,7 @@ fn new(call: &Call) -> Result<CommandReply, Failure> {
         .unwrap_or(false);
     let done = project_files::initialise(root, force).map_err(|error| match error {
         InitialiseError::Exists => {
-            Failure::refused(format!("`{TRAMA_DIR}` already exists in {}: the project is initialised", root.display()))
+            Failure::refused(format!("`{WEAVER_DIR}` already exists in {}: the project is initialised", root.display()))
         }
         InitialiseError::Conflicts(conflicts) => {
             let list: Vec<String> = conflicts.iter().map(|path| format!("  - {path}")).collect();
@@ -82,7 +82,7 @@ fn new(call: &Call) -> Result<CommandReply, Failure> {
         InitialiseError::Failed(reason) => Failure::failed(format!("Could not initialise: {reason}.")),
     })?;
     let mut markdown = format!(
-        "# Project initialised\n\nCreated `{TRAMA_DIR}/` in `{}` with the System (`model/system.md`) and the Requirement Areas {}.\n",
+        "# Project initialised\n\nCreated `{WEAVER_DIR}/` in `{}` with the System (`model/system.md`) and the Requirement Areas {}.\n",
         root.display(),
         done.areas.iter().map(|a| format!("`{a}`")).collect::<Vec<_>>().join(", ")
     );
@@ -320,7 +320,7 @@ mod tests {
     use std::fs;
 
     use serde_json::Map;
-    use trama_core::project::image::ProjectImage;
+    use weaver_core::project::image::ProjectImage;
 
     use super::*;
     use crate::spec::Caller;
@@ -345,8 +345,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let reply = run(dir.path(), json!({})).unwrap();
         assert!(reply.markdown.starts_with("# Project initialised"));
-        assert!(dir.path().join(".trama/model/system.md").is_file());
-        assert!(dir.path().join(".trama/requirements/ui/area.md").is_file());
+        assert!(dir.path().join(".weaver/model/system.md").is_file());
+        assert!(dir.path().join(".weaver/requirements/ui/area.md").is_file());
         assert!(dir
             .path()
             .join(".agents/skills/trama-design/COMMANDS.md")
@@ -358,12 +358,23 @@ mod tests {
     }
 
     #[test]
-    fn an_existing_trama_folder_refuses_and_changes_nothing() {
+    fn an_existing_weaver_folder_refuses_and_changes_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(dir.path().join(".trama")).unwrap();
+        fs::create_dir_all(dir.path().join(".weaver")).unwrap();
         let error = run(dir.path(), json!({})).unwrap_err();
         assert_eq!(error.code, "refused");
         assert!(!dir.path().join(".agents").exists());
+    }
+
+    #[test]
+    fn an_old_trama_folder_is_left_alone_and_weaver_is_created_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join(".trama/model/system.md");
+        fs::create_dir_all(old.parent().unwrap()).unwrap();
+        fs::write(&old, "# Old\n").unwrap();
+        run(dir.path(), json!({})).unwrap();
+        assert!(dir.path().join(".weaver/model/system.md").is_file());
+        assert_eq!(fs::read_to_string(&old).unwrap(), "# Old\n");
     }
 
     #[test]
@@ -383,7 +394,7 @@ mod tests {
             error.message
         );
         assert!(error.message.contains("- .omp/WATCHDOG.yml"));
-        assert!(!dir.path().join(".trama").exists());
+        assert!(!dir.path().join(".weaver").exists());
         assert!(!dir.path().join(".agents/skills/trama-setup").exists());
         assert_eq!(
             fs::read_to_string(dir.path().join(".omp/WATCHDOG.yml")).unwrap(),
@@ -391,7 +402,7 @@ mod tests {
         );
 
         run(dir.path(), json!({ "force": true })).unwrap();
-        assert!(dir.path().join(".trama").is_dir());
+        assert!(dir.path().join(".weaver").is_dir());
         assert_ne!(
             fs::read_to_string(dir.path().join(".omp/WATCHDOG.yml")).unwrap(),
             "mine"

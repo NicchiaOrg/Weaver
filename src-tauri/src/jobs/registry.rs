@@ -2,7 +2,7 @@
 //! app and the UI ask of them.
 //!
 //! All state lives in [`Jobs`], behind one lock. Everything that changes the state of a job goes
-//! through [`Jobs::dispatch`]: the pure Machine decides ([`trama_core::jobs::machine`]), the
+//! through [`Jobs::dispatch`]: the pure Machine decides ([`weaver_core::jobs::machine`]), the
 //! record is updated and written (by a thread of its own, so that no lock waits on the disk), and
 //! the effects are carried out: bookkeeping here, I/O by the actor of the job ([`super::actor`]).
 //! Events to the UI and calls to the observers happen after the change, in order.
@@ -14,15 +14,15 @@ use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, Weak};
 
 use tokio::sync::{mpsc, watch};
-use trama_core::job_instruction;
-use trama_core::jobs::admission::StartPlan;
-use trama_core::jobs::machine::{Effect, Event, JobMachine, MessageId, PermissionEnd, RequestId};
-use trama_core::jobs::notes::{self, Normalised};
-use trama_core::jobs::{AnnouncementRecord, JobKind, JobRecord, JobState, JobStore};
-use trama_core::project::board::AgentFacts;
-use trama_core::project::clock::{now_instant, Clock, SystemClock};
-use trama_core::project::ids;
-use trama_core::project::random::OsRandom;
+use weaver_core::job_instruction;
+use weaver_core::jobs::admission::StartPlan;
+use weaver_core::jobs::machine::{Effect, Event, JobMachine, MessageId, PermissionEnd, RequestId};
+use weaver_core::jobs::notes::{self, Normalised};
+use weaver_core::jobs::{AnnouncementRecord, JobKind, JobRecord, JobState, JobStore};
+use weaver_core::project::board::AgentFacts;
+use weaver_core::project::clock::{now_instant, Clock, SystemClock};
+use weaver_core::project::ids;
+use weaver_core::project::random::OsRandom;
 
 use super::actor::{Cmd, Mode, Msg};
 use super::conversation::{Conversation, Delivery, EndLine, PermissionState};
@@ -213,7 +213,7 @@ impl Jobs {
 
     pub(crate) fn now(&self) -> String {
         now_instant(self.clock.as_ref())
-            .unwrap_or_else(|_| trama_core::project::clock::format_instant(1))
+            .unwrap_or_else(|_| weaver_core::project::clock::format_instant(1))
     }
 
     /// Who wants to know when a job waits or ends.
@@ -470,7 +470,7 @@ impl Jobs {
             let id = ids::draw_identity(&mut OsRandom, &|candidate| {
                 inner.jobs.contains_key(candidate) || self.store.file(candidate).exists()
             });
-            let env = trama_core::jobs::launch::weaver_env(
+            let env = weaver_core::jobs::launch::weaver_env(
                 &id,
                 "",
                 new.plan.kind,
@@ -726,12 +726,12 @@ impl Jobs {
                 .mutate(
                     &project,
                     Box::new(move |root| {
-                        let image = trama_core::project::image::ProjectImage::load(root);
-                        let changes = trama_core::jobs::admission::plan_release(&image, &id);
+                        let image = weaver_core::project::image::ProjectImage::load(root);
+                        let changes = weaver_core::jobs::admission::plan_release(&image, &id);
                         if changes.is_empty() {
                             return Ok(None);
                         }
-                        trama_core::project::changes::apply(root, &changes, |_| Ok::<(), ()>(()))
+                        weaver_core::project::changes::apply(root, &changes, |_| Ok::<(), ()>(()))
                             .map(Some)
                             .map_err(|error| {
                                 format!("the Tasks of job {id} could not be released: {error}")
@@ -822,6 +822,8 @@ impl Jobs {
             // The conversation of this run is complete: the replay adds nothing.
             return;
         }
+        // The history ends where omp's did: what the agent says next is a message of its own.
+        replayed.end_turn();
         for note in &live.record.notes {
             replayed.note(&note.text, &note.at);
         }
@@ -1088,7 +1090,7 @@ impl Jobs {
         let file = self.counter_file(project_id);
         let text = serde_json::json!({ "doneSinceLastScan": count }).to_string();
         tauri::async_runtime::spawn_blocking(move || {
-            let _ = trama_core::atomic::write(&file, text.as_bytes(), None);
+            let _ = weaver_core::atomic::write(&file, text.as_bytes(), None);
         });
     }
 
@@ -1177,7 +1179,7 @@ impl Jobs {
             let mut changed = false;
             if let (Some(pid), Some(started)) = (record.pid, record.pid_started.clone()) {
                 // A process a crash left behind.
-                trama_core::process_group::kill_leftover(pid, &started);
+                weaver_core::process_group::kill_leftover(pid, &started);
                 record.pid = None;
                 record.pid_started = None;
                 changed = true;
@@ -1244,14 +1246,14 @@ impl Jobs {
             .mutate(
                 project_id,
                 Box::new(move |root| {
-                    let image = trama_core::project::image::ProjectImage::load(root);
-                    let changes = trama_core::project::tasks::plan_orphans(&image, &|holder| {
+                    let image = weaver_core::project::image::ProjectImage::load(root);
+                    let changes = weaver_core::project::tasks::plan_orphans(&image, &|holder| {
                         known.contains(holder)
                     });
                     if changes.is_empty() {
                         return Ok(None);
                     }
-                    trama_core::project::changes::apply(root, &changes, |_| Ok::<(), ()>(()))
+                    weaver_core::project::changes::apply(root, &changes, |_| Ok::<(), ()>(()))
                         .map(Some)
                         .map_err(|error| {
                             format!("the Tasks of ended jobs could not be released: {error}")
@@ -1309,8 +1311,8 @@ impl Jobs {
 
 /// Whether the card a claim names is on the Board of the picture: a Task or a Drift is as soon as
 /// the file is read, a Proposal once it is not a Draft any more.
-fn card_is_on_the_board(image: &trama_core::project::image::ProjectImage, claim: &Claim) -> bool {
-    use trama_core::project::cards::CardKind;
+fn card_is_on_the_board(image: &weaver_core::project::image::ProjectImage, claim: &Claim) -> bool {
+    use weaver_core::project::cards::CardKind;
     match claim.kind {
         GhostKind::Task => image.card(CardKind::Task, &claim.card).is_some(),
         GhostKind::Drift => image.card(CardKind::Drift, &claim.card).is_some(),

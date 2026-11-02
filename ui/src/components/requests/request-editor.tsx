@@ -70,7 +70,7 @@ export function RequestEditor({ projectId }: { projectId: string }) {
     if (!snapshot) return;
     const now = new Map(snapshot.requests.map((request) => [request.id, request.status]));
     for (const [id, status] of known.current) {
-      if (!now.has(id) && status === "writing" && !discarding.current.delete(id)) toast(TOAST_DELETED);
+      if (!now.has(id) && status === "writing" && !discarding.current.delete(id)) toast.warning(TOAST_DELETED);
     }
     known.current = now;
   }, [snapshot]);

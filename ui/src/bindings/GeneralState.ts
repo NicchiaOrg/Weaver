@@ -13,11 +13,18 @@ projectId: string,
  */
 working: boolean, 
 /**
- * omp is starting or reloading its session: the message that waits says `Starting omp…`.
+ * omp is starting or reloading its session (or is waited for): the message that waits says
+ * `Starting omp…`.
  */
 starting: boolean, 
 /**
- * A kept session waits for the next message to reload it, so `Clear` stays usable although
- * the conversation shows nothing yet.
+ * The window just opened and the kept conversation is coming back from omp (the Machine is
+ * in Loading and its history is not in the conversation yet): the view says
+ * `Loading conversation…` above the messages sent meanwhile.
+ */
+loading: boolean, 
+/**
+ * A kept session has not come back yet, so `Clear` stays usable although the conversation
+ * shows nothing yet.
  */
 kept: boolean, };

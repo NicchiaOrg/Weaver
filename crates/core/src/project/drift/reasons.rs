@@ -106,7 +106,7 @@ pub fn dismiss_reasons(image: &ProjectImage, facts: &AgentFacts, drift: &Card) -
     reasons
 }
 
-/// `trama drift list {unprepared}`: the open Drifts with no valid prepared question that are in no
+/// `weaver drift list {unprepared}`: the open Drifts with no valid prepared question that are in no
 /// resolution being written or open.
 pub fn is_unprepared(image: &ProjectImage, drift: &Card) -> bool {
     is_open(drift)
@@ -114,7 +114,7 @@ pub fn is_unprepared(image: &ProjectImage, drift: &Card) -> bool {
         && !in_resolution(image, &drift.id)
 }
 
-/// `trama drift list {refs}`: whether `drift` concerns the same thing as any of `refs`, the way a
+/// `weaver drift list {refs}`: whether `drift` concerns the same thing as any of `refs`, the way a
 /// Drift blocks a Task.
 pub fn concerns(image: &ProjectImage, drift: &Card, refs: &[String]) -> bool {
     let wanted: Vec<_> = refs

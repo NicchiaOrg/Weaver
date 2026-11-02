@@ -1,6 +1,6 @@
 [package]
 name = "weaver"
-description = "Weaver: the desktop app of Trama."
+description = "Weaver: the desktop app."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -35,8 +35,8 @@ tauri-plugin-window-state = "2"
 notify = "8"
 thiserror.workspace = true
 tokio = { version = "1", features = ["rt", "signal", "sync", "time"] }
-trama-cli = { path = "../crates/cli" }
-trama-core.workspace = true
+weaver-cli = { path = "../crates/cli" }
+weaver-core.workspace = true
 ts-rs = { version = "11", features = ["serde-compat"] }
 
 [dev-dependencies]

@@ -8,10 +8,10 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use trama_core::omp::machine::ReadyOmp;
-use trama_core::paths::AppDirs;
-use trama_core::project::image::ProjectImage;
-use trama_core::settings::{Permissions, Settings};
+use weaver_core::omp::machine::ReadyOmp;
+use weaver_core::paths::AppDirs;
+use weaver_core::project::image::ProjectImage;
+use weaver_core::settings::{Permissions, Settings};
 
 use super::host::{Host, MutationResult};
 use super::wire::{EntriesEvent, JobRow, JobsSnapshot};
@@ -110,16 +110,16 @@ impl TestHost {
         self.settings.lock().unwrap().permissions = permissions;
     }
 
-    /// A project with `.trama/` and the files given (path under `.trama/`, content).
+    /// A project with `.weaver/` and the files given (path under `.weaver/`, content).
     pub async fn project(&self, files: &[(&str, &str)]) -> (tempfile::TempDir, Project) {
         let dir = tempfile::tempdir().unwrap();
         for (rel, content) in files {
-            let path = dir.path().join(".trama").join(rel);
+            let path = dir.path().join(".weaver").join(rel);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, content).unwrap();
         }
-        std::fs::create_dir_all(dir.path().join(".trama")).unwrap();
-        let root = trama_core::paths::canonical_root(dir.path()).unwrap();
+        std::fs::create_dir_all(dir.path().join(".weaver")).unwrap();
+        let root = weaver_core::paths::canonical_root(dir.path()).unwrap();
         let id = self.pictures.open(root.clone()).await.unwrap();
         (dir, Project { root, id })
     }
@@ -177,7 +177,7 @@ impl Host for TestHost {
         vec![
             (OsString::from("FAKE_ACP_SCRIPT"), script.into_os_string()),
             // A variable of Weaver's own environment that omp must never see.
-            (OsString::from("TRAMA_JOB"), OsString::from("inherited")),
+            (OsString::from("WEAVER_JOB"), OsString::from("inherited")),
         ]
     }
 

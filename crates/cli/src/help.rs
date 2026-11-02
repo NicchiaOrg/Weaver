@@ -4,11 +4,11 @@ use crate::registry;
 use crate::spec::{Access, Arg, Command, Field, Ty};
 
 pub const SHAPE: &str =
-    "trama <object> <verb> [<id>] [<state>] [--input <json>|-] [--root <dir>] [--json]";
+    "weaver <object> <verb> [<id>] [<state>] [--input <json>|-] [--root <dir>] [--json]";
 
 const OPTIONS: [(&str, &str); 4] = [
     ("--input <json>|-", "The input: one camelCase JSON object, inline or from standard input with `-` (a leading BOM is accepted)."),
-    ("--root <dir>", "The folder that holds `.trama/`; the current folder when absent, never a parent."),
+    ("--root <dir>", "The folder that holds `.weaver/`; the current folder when absent, never a parent."),
     ("--json", "Print one JSON object instead of Markdown."),
     ("-h, --help", "Print help; with `--json`, the JSON Schemas of the command."),
 ];
@@ -101,13 +101,13 @@ fn access_text(command: &Command) -> Option<&'static str> {
     match command.access {
         Access::Anyone => None,
         Access::Job => Some(
-            "Only the agent of a job Weaver started can run it (Weaver sets `TRAMA_JOB` in the environment of that agent). Any other caller is refused with exit 1 and nothing is written.",
+            "Only the agent of a job Weaver started can run it (Weaver sets `WEAVER_JOB` in the environment of that agent). Any other caller is refused with exit 1 and nothing is written.",
         ),
         Access::JobOrUnavailable => Some(
-            "Only the agent of a job Weaver started can use it (Weaver sets `TRAMA_JOB` in the environment of that agent). For any other caller the outcome is `unavailable`, with exit 0.",
+            "Only the agent of a job Weaver started can use it (Weaver sets `WEAVER_JOB` in the environment of that agent). For any other caller the outcome is `unavailable`, with exit 0.",
         ),
         Access::General => Some(
-            "Only the agent of the project's General that Weaver started can run it (Weaver sets `TRAMA_GENERAL` in the environment of that agent). Any other caller is refused with exit 1 and nothing is written.",
+            "Only the agent of the project's General that Weaver started can run it (Weaver sets `WEAVER_GENERAL` in the environment of that agent). Any other caller is refused with exit 1 and nothing is written.",
         ),
     }
 }
@@ -131,12 +131,12 @@ fn argument_lines(command: &Command) -> Vec<String> {
     lines
 }
 
-/// `trama --help`.
+/// `weaver --help`.
 pub fn top_help() -> String {
     let mut text = String::new();
-    text.push_str("trama: the command line of Weaver. It is how the agent reaches Weaver; it also works without the app for every command not bound to a job.\n\n");
+    text.push_str("weaver: the command line of Weaver. It is how the agent reaches Weaver; it also works without the app for every command not bound to a job.\n\n");
     text.push_str(&format!(
-        "Usage: {SHAPE}\n       trama <object> <verb> --help [--json]\n\n"
+        "Usage: {SHAPE}\n       weaver <object> <verb> --help [--json]\n\n"
     ));
     text.push_str("Objects and verbs:\n");
     for (object, commands) in registry::objects() {
@@ -148,29 +148,29 @@ pub fn top_help() -> String {
         text.push_str(&format!("  {name:<18}{doc}\n"));
     }
     text.push_str(&format!("\n{EXIT_CODES}\n"));
-    text.push_str("Run `trama <object> <verb> --help` for the usage, the fields, an example and the output of a command.\n");
+    text.push_str("Run `weaver <object> <verb> --help` for the usage, the fields, an example and the output of a command.\n");
     text
 }
 
-/// `trama <object> --help`: the verbs of one object, or `None` when there is no such object.
+/// `weaver <object> --help`: the verbs of one object, or `None` when there is no such object.
 pub fn object_help(object: &str) -> Option<String> {
     let commands = registry::objects()
         .into_iter()
         .find(|(name, _)| *name == object)?
         .1;
-    let mut text = format!("trama {object}: ");
+    let mut text = format!("weaver {object}: ");
     let verbs: Vec<&str> = commands.iter().map(|c| c.verb).collect();
-    text.push_str(&format!("{}\n\nUsage: trama {object} <verb> [<id>] [<state>] [--input <json>|-] [--root <dir>] [--json]\n\nVerbs:\n", verbs.join(", ")));
+    text.push_str(&format!("{}\n\nUsage: weaver {object} <verb> [<id>] [<state>] [--input <json>|-] [--root <dir>] [--json]\n\nVerbs:\n", verbs.join(", ")));
     for command in commands {
         text.push_str(&format!("  {:<8}{}\n", command.verb, command.summary));
     }
     text.push_str(&format!(
-        "\nRun `trama {object} <verb> --help` for the fields of a verb.\n"
+        "\nRun `weaver {object} <verb> --help` for the fields of a verb.\n"
     ));
     Some(text)
 }
 
-/// `trama <object> <verb> --help`.
+/// `weaver <object> <verb> --help`.
 pub fn command_help(command: &Command) -> String {
     let mut text = format!(
         "{}: {}\n\nUsage: {}\n",
@@ -222,9 +222,9 @@ pub fn command_help(command: &Command) -> String {
 }
 
 impl Command {
-    /// `trama <object> <verb>`.
+    /// `weaver <object> <verb>`.
     pub fn name_with_prefix(&self) -> String {
-        format!("trama {} {}", self.object, self.verb)
+        format!("weaver {} {}", self.object, self.verb)
     }
 }
 
@@ -233,11 +233,11 @@ impl Command {
 
 /// The Markdown reference of every command, installed with the `trama-design` skill as
 /// `COMMANDS.md`: LF, with a final newline. A test of this crate fails when it differs from the
-/// copy embedded in `trama-core`.
+/// copy embedded in `weaver-core`.
 pub fn command_reference() -> String {
     let mut text = String::new();
-    text.push_str("# Commands of `trama`\n\n");
-    text.push_str("Generated from the command registry of the `trama` command line: do not edit it by hand.\n\n");
+    text.push_str("# Commands of `weaver`\n\n");
+    text.push_str("Generated from the command registry of the `weaver` command line: do not edit it by hand.\n\n");
     text.push_str(&format!(
         "Shape: `{SHAPE}`. `-h` and `--help` print help (with `--json`, the JSON Schemas of the command); no other option exists. Input is one camelCase JSON object, inline or from standard input with `--input -`; a field marked optional may be left out, and a command without fields takes only `{{}}` or nothing. Cards are named by identity, unique identity prefix or short number. Output is Markdown, or one JSON object with `--json`. Exit codes: `0` done, `1` refused or failed, `2` wrong usage or invalid input.\n\n"
     ));
@@ -304,7 +304,7 @@ mod tests {
     #[test]
     fn top_help_lists_every_object_with_its_verbs_and_the_options() {
         let help = top_help();
-        assert!(help.contains("Usage: trama <object> <verb>"));
+        assert!(help.contains("Usage: weaver <object> <verb>"));
         for (object, commands) in registry::objects() {
             let verbs: Vec<&str> = commands.iter().map(|c| c.verb).collect();
             assert!(
@@ -320,9 +320,9 @@ mod tests {
     fn command_help_has_usage_fields_example_and_output() {
         let command = registry::find("model", "list").unwrap();
         let help = command_help(command);
-        assert!(help.contains("Usage: trama model list [--input <json>|-]"));
+        assert!(help.contains("Usage: weaver model list [--input <json>|-]"));
         assert!(help.contains("- `text`, string (not blank), optional"));
-        assert!(help.contains("Example:\n  trama model list"));
+        assert!(help.contains("Example:\n  weaver model list"));
         assert!(help.contains("Output (the object printed with `--json`):"));
     }
 

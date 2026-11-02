@@ -52,7 +52,7 @@ impl Problem {
     }
 }
 
-/// What the entry keeps of a Task that left `.trama/tasks/`.
+/// What the entry keeps of a Task that left `.weaver/tasks/`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TaskCopy {
     pub title: String,
@@ -109,7 +109,7 @@ impl TaskCopy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Entry {
     pub id: String,
-    /// Path relative to `.trama/`.
+    /// Path relative to `.weaver/`.
     pub path: String,
     pub title: String,
     /// The text after the title, in Markdown.
@@ -352,7 +352,7 @@ pub struct Planned {
     pub changes: ChangeSet,
     pub id: String,
     pub title: String,
-    /// The entry file, relative to `.trama/`.
+    /// The entry file, relative to `.weaver/`.
     pub file: String,
     /// The Tasks cited for the first time (`history-entry.TASKS_CITED`).
     pub cited: Vec<String>,

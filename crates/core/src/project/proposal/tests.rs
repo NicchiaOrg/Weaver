@@ -521,7 +521,7 @@ fn a_draft_is_handed_over_as_open_and_consumes_its_request() {
     let dir = project();
     let root = dir.path();
     ready_change(root, "pppppppp");
-    let text = fs::read_to_string(root.join(".trama/proposals/pppppppp-t/proposal.md")).unwrap();
+    let text = fs::read_to_string(root.join(".weaver/proposals/pppppppp-t/proposal.md")).unwrap();
     put(
         root,
         "proposals/pppppppp-t/proposal.md",
@@ -696,8 +696,8 @@ fn a_setup_of_a_job_that_found_an_empty_model_is_approved_at_the_hand_over_and_r
     let (after, submission) =
         submit(root, "pppppppp", &submit_ctx(true, false), &mut rng()).unwrap();
     assert!(matches!(submission.outcome, Submitted::Approved(_)));
-    assert!(root.join(".trama/model/shop/order.md").is_file());
-    assert!(root.join(".trama/model/actors/user.md").is_file());
+    assert!(root.join(".weaver/model/shop/order.md").is_file());
+    assert!(root.join(".weaver/model/actors/user.md").is_file());
     let tasks: Vec<_> = after.cards_of(CardKind::Task).collect();
     assert_eq!(
         tasks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
@@ -798,8 +798,8 @@ fn a_chain_of_imports_of_one_job_is_approved_whole() {
         );
     }
     assert!(
-        root.join(".trama/model/actors/user.md").is_file()
-            && root.join(".trama/model/shop/order.md").is_file()
+        root.join(".weaver/model/actors/user.md").is_file()
+            && root.join(".weaver/model/shop/order.md").is_file()
     );
     assert!(
         after.cards_of(CardKind::Task).next().is_none(),
@@ -813,7 +813,7 @@ fn the_first_proposal_of_a_rework_takes_the_place_in_the_requirements_of_the_pro
     let dir = project();
     let root = dir.path();
     ready_change(root, "dddddddd");
-    let front = fs::read_to_string(root.join(".trama/proposals/dddddddd-t/proposal.md")).unwrap();
+    let front = fs::read_to_string(root.join(".weaver/proposals/dddddddd-t/proposal.md")).unwrap();
     put(
         root,
         "proposals/dddddddd-t/proposal.md",
@@ -871,7 +871,7 @@ fn approving_an_open_proposal_replaces_the_files_and_creates_its_tasks_in_one_st
         panic!("{approval:?}")
     };
     assert!(!plan.requirements_changed && !plan.start_run_all);
-    assert!(fs::read_to_string(root.join(".trama/model/shop/order.md"))
+    assert!(fs::read_to_string(root.join(".weaver/model/shop/order.md"))
         .unwrap()
         .contains("The customer paid."));
     let task = after
@@ -890,10 +890,10 @@ fn approving_an_open_proposal_replaces_the_files_and_creates_its_tasks_in_one_st
     );
     // The folder stays as it was.
     assert!(root
-        .join(".trama/proposals/pppppppp-t/model/shop/order.md")
+        .join(".weaver/proposals/pppppppp-t/model/shop/order.md")
         .is_file());
     assert!(root
-        .join(".trama/proposals/pppppppp-t/tasks/tttttttt-pay.md")
+        .join(".weaver/proposals/pppppppp-t/tasks/tttttttt-pay.md")
         .is_file());
 }
 
@@ -1092,7 +1092,7 @@ fn approval_creates_a_technical_removal_task_for_a_removed_actor() {
         .find(|t| t.title == "Remove code of `user`")
         .expect("a removal Task");
     assert!(tasks::is_technical(removal) && tasks::refs_of(removal).is_empty());
-    assert!(!root.join(".trama/model/actors/user.md").exists());
+    assert!(!root.join(".weaver/model/actors/user.md").exists());
 }
 
 #[test]
@@ -1101,7 +1101,7 @@ fn approve_is_refused_with_every_reason_in_order_and_writes_nothing() {
     let root = dir.path();
     ready_change(root, "pppppppp");
     put(root, "specs.yaml", "languages:\n  - name: Go\n");
-    let front = fs::read_to_string(root.join(".trama/proposals/pppppppp-t/proposal.md")).unwrap();
+    let front = fs::read_to_string(root.join(".weaver/proposals/pppppppp-t/proposal.md")).unwrap();
     put(
         root,
         "proposals/pppppppp-t/proposal.md",
@@ -1181,7 +1181,7 @@ fn staleness_with_anything_else_is_not_refined_and_a_drift_attached_one_never_is
         "model/shop/order.md",
         &ORDER.replace("The customer is choosing.", "The customer is browsing."),
     );
-    let front = fs::read_to_string(root.join(".trama/proposals/pppppppp-t/proposal.md")).unwrap();
+    let front = fs::read_to_string(root.join(".weaver/proposals/pppppppp-t/proposal.md")).unwrap();
     // Also unlabeled: the label is a reason beyond staleness.
     put(
         root,
@@ -1289,7 +1289,7 @@ fn a_refined_proposal_handed_over_is_approved_waits_for_a_run_or_goes_back_to_op
     let dir = project();
     let root = dir.path();
     ready_change(root, "pppppppp");
-    let front = fs::read_to_string(root.join(".trama/proposals/pppppppp-t/proposal.md")).unwrap();
+    let front = fs::read_to_string(root.join(".weaver/proposals/pppppppp-t/proposal.md")).unwrap();
     put(
         root,
         "proposals/pppppppp-t/proposal.md",
@@ -1321,7 +1321,7 @@ fn an_approval_that_fails_half_way_leaves_every_file_as_it_was() {
     let root = dir.path();
     ready_change(root, "pppppppp");
     // `tasks` is a file: the Task cannot be created, after the Model and the Proposal were written.
-    fs::write(root.join(".trama/tasks"), "in the way").unwrap();
+    fs::write(root.join(".weaver/tasks"), "in the way").unwrap();
     let before = snapshot(root);
     let result = approve(
         root,
@@ -1341,9 +1341,11 @@ fn an_approval_that_fails_half_way_leaves_every_file_as_it_was() {
         before,
         "the files written before the failure are put back"
     );
-    assert!(!fs::read_to_string(root.join(".trama/model/shop/order.md"))
-        .unwrap()
-        .contains("The customer paid."));
+    assert!(
+        !fs::read_to_string(root.join(".weaver/model/shop/order.md"))
+            .unwrap()
+            .contains("The customer paid.")
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1433,7 +1435,7 @@ fn rework_marks_the_proposal_and_is_allowed_once() {
         "{text}"
     );
     // A Proposal that already reworks another one is not reworked again.
-    let open = fs::read_to_string(root.join(".trama/proposals/pppppppp-t/proposal.md")).unwrap();
+    let open = fs::read_to_string(root.join(".weaver/proposals/pppppppp-t/proposal.md")).unwrap();
     put(
         root,
         "proposals/pppppppp-t/proposal.md",
@@ -1490,7 +1492,7 @@ fn reject_and_rework_are_refused_while_the_agent_finishes_or_the_proposal_is_ref
     };
     assert!(reject_plan(root, "pppppppp", None, false, run, Decider::Developer).is_ok());
 
-    let open = fs::read_to_string(root.join(".trama/proposals/pppppppp-t/proposal.md")).unwrap();
+    let open = fs::read_to_string(root.join(".weaver/proposals/pppppppp-t/proposal.md")).unwrap();
     put(
         root,
         "proposals/pppppppp-t/proposal.md",

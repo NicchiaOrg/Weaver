@@ -79,7 +79,7 @@ fn yaml_string(text: &str) -> String {
 }
 
 /// The overlay file (`<app local data>/overlays/<job id>.yml`): omp's own auto-backgrounding and
-/// tool timeout are off, so that `trama question new` can wait as long as the developer needs. A
+/// tool timeout are off, so that `weaver question new` can wait as long as the developer needs. A
 /// Run also gets the advisor model (the scan model, when set) and the advisor of the
 /// `trama-implementer` sub-agents.
 pub fn overlay_text(kind: JobKind, scan_model: &str) -> String {
@@ -103,19 +103,19 @@ pub fn weaver_env(
     task: Option<&str>,
 ) -> BTreeMap<String, String> {
     let mut env = BTreeMap::from([
-        ("TRAMA_JOB".to_owned(), job.to_owned()),
-        ("TRAMA_ENDPOINT".to_owned(), endpoint.to_owned()),
+        ("WEAVER_JOB".to_owned(), job.to_owned()),
+        ("WEAVER_ENDPOINT".to_owned(), endpoint.to_owned()),
     ]);
     if kind.is_run() {
-        env.insert("TRAMA_RUN".to_owned(), "1".to_owned());
+        env.insert("WEAVER_RUN".to_owned(), "1".to_owned());
         if let Some(task) = task {
-            env.insert("TRAMA_TASK".to_owned(), task.to_owned());
+            env.insert("WEAVER_TASK".to_owned(), task.to_owned());
         }
     }
     env
 }
 
-/// The whole environment of the process: the inherited variables but every `TRAMA_*`, then the
+/// The whole environment of the process: the inherited variables but every `WEAVER_*`, then the
 /// ones Weaver sets, then `PATH`.
 pub fn child_env(
     inherited: impl IntoIterator<Item = (OsString, OsString)>,
@@ -124,7 +124,7 @@ pub fn child_env(
 ) -> Vec<(OsString, OsString)> {
     let mut env: Vec<(OsString, OsString)> = inherited
         .into_iter()
-        .filter(|(name, _)| !is_trama(name) && !name.eq_ignore_ascii_case("PATH"))
+        .filter(|(name, _)| !is_weaver(name) && !name.eq_ignore_ascii_case("PATH"))
         .collect();
     env.extend(
         set.iter()
@@ -134,10 +134,10 @@ pub fn child_env(
     env
 }
 
-fn is_trama(name: &OsStr) -> bool {
+fn is_weaver(name: &OsStr) -> bool {
     name.to_string_lossy()
         .to_ascii_uppercase()
-        .starts_with("TRAMA_")
+        .starts_with("WEAVER_")
 }
 
 #[cfg(test)]
@@ -322,38 +322,38 @@ mod tests {
         assert_eq!(
             weaver_env("jjjjjjjj", "/run/w.sock", JobKind::Run, Some("aaaaaaaa")),
             BTreeMap::from([
-                ("TRAMA_ENDPOINT".to_owned(), "/run/w.sock".to_owned()),
-                ("TRAMA_JOB".to_owned(), "jjjjjjjj".to_owned()),
-                ("TRAMA_RUN".to_owned(), "1".to_owned()),
-                ("TRAMA_TASK".to_owned(), "aaaaaaaa".to_owned()),
+                ("WEAVER_ENDPOINT".to_owned(), "/run/w.sock".to_owned()),
+                ("WEAVER_JOB".to_owned(), "jjjjjjjj".to_owned()),
+                ("WEAVER_RUN".to_owned(), "1".to_owned()),
+                ("WEAVER_TASK".to_owned(), "aaaaaaaa".to_owned()),
             ])
         );
         let all = weaver_env("jjjjjjjj", "e", JobKind::Run, None);
-        assert!(all.contains_key("TRAMA_RUN") && !all.contains_key("TRAMA_TASK"));
+        assert!(all.contains_key("WEAVER_RUN") && !all.contains_key("WEAVER_TASK"));
         let design = weaver_env("jjjjjjjj", "e", JobKind::Design, Some("aaaaaaaa"));
         assert_eq!(
             design.keys().collect::<Vec<_>>(),
-            ["TRAMA_ENDPOINT", "TRAMA_JOB"]
+            ["WEAVER_ENDPOINT", "WEAVER_JOB"]
         );
     }
 
     #[test]
-    fn inherited_trama_variables_are_removed_and_path_is_the_childs() {
+    fn inherited_weaver_variables_are_removed_and_path_is_the_childs() {
         let inherited = [
             ("HOME", "/h"),
-            ("TRAMA_JOB", "old"),
-            ("trama_general", "g"),
+            ("WEAVER_JOB", "old"),
+            ("weaver_general", "g"),
             ("PATH", "/old"),
-            ("TRAMA_RUN", "1"),
+            ("WEAVER_RUN", "1"),
         ]
         .map(|(n, v)| (OsString::from(n), OsString::from(v)));
-        let set = BTreeMap::from([("TRAMA_JOB".to_owned(), "new".to_owned())]);
+        let set = BTreeMap::from([("WEAVER_JOB".to_owned(), "new".to_owned())]);
         let env = child_env(inherited, &set, OsStr::new("/w/bin:/x"));
         let names: Vec<String> = env
             .iter()
             .map(|(n, _)| n.to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, ["HOME", "TRAMA_JOB", "PATH"]);
+        assert_eq!(names, ["HOME", "WEAVER_JOB", "PATH"]);
         assert_eq!(env[1].1, "new");
         assert_eq!(env[2].1, "/w/bin:/x");
     }

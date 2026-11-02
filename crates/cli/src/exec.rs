@@ -7,12 +7,12 @@
 
 use std::path::Path;
 
-use trama_core::project::board::AgentFacts;
+use weaver_core::project::board::AgentFacts;
 
-use trama_core::command::{code, CommandReply, CommandRequest};
-use trama_core::project::image::ProjectImage;
-use trama_core::project::layout::{trama_dir, TRAMA_DIR};
-use trama_core::project::resolve::resolve_card;
+use weaver_core::command::{code, CommandReply, CommandRequest};
+use weaver_core::project::image::ProjectImage;
+use weaver_core::project::layout::{weaver_dir, WEAVER_DIR};
+use weaver_core::project::resolve::resolve_card;
 
 use crate::registry;
 use crate::spec::*;
@@ -75,20 +75,20 @@ pub fn access_failure(command: &Command) -> Failure {
     Failure::new(
         code::FORBIDDEN,
         format!(
-            "Only {who} can run `trama {}`. Nothing was written.",
+            "Only {who} can run `weaver {}`. Nothing was written.",
             command.name()
         ),
     )
 }
 
-/// `.trama/` must exist in the project folder.
+/// `.weaver/` must exist in the project folder.
 pub fn ensure_initialised(root: &Path) -> Result<(), Failure> {
-    if trama_dir(root).is_dir() {
+    if weaver_dir(root).is_dir() {
         Ok(())
     } else {
         Err(Failure::new(
             code::NOT_INITIALISED,
-            format!("{} has no `{TRAMA_DIR}` folder: initialise the project first with `trama project new --input '{{}}'`.", root.display()),
+            format!("{} has no `{WEAVER_DIR}` folder: initialise the project first with `weaver project new --input '{{}}'`.", root.display()),
         ))
     }
 }
@@ -107,14 +107,14 @@ pub fn check_words(
     match (command.arg, card) {
         (Arg::Card(_), None) => {
             return Err(usage(format!(
-                "`trama {}` needs the card: {}",
+                "`weaver {}` needs the card: {}",
                 command.name(),
                 command.usage()
             )))
         }
         (Arg::None, Some(extra)) => {
             return Err(usage(format!(
-                "`trama {}` takes no argument (found `{extra}`)",
+                "`weaver {}` takes no argument (found `{extra}`)",
                 command.name()
             )))
         }
@@ -123,21 +123,21 @@ pub fn check_words(
     match (command.states.is_empty(), state) {
         (false, None) => {
             return Err(usage(format!(
-                "`trama {}` needs the state: {}",
+                "`weaver {}` needs the state: {}",
                 command.name(),
                 command.states.join(", ")
             )))
         }
         (false, Some(state)) if !command.states.contains(&state) => {
             return Err(usage(format!(
-                "`{state}` is not a state of `trama {}`: {}",
+                "`{state}` is not a state of `weaver {}`: {}",
                 command.name(),
                 command.states.join(", ")
             )))
         }
         (true, Some(extra)) => {
             return Err(usage(format!(
-                "`trama {}` takes no state (found `{extra}`)",
+                "`weaver {}` takes no state (found `{extra}`)",
                 command.name()
             )))
         }
@@ -172,7 +172,7 @@ pub fn execute(
         Failure::new(
             code::USAGE,
             format!(
-                "`trama {} {}` is not a command",
+                "`weaver {} {}` is not a command",
                 request.object, request.verb
             ),
         )
@@ -199,7 +199,7 @@ pub fn execute(
         return Err(access_failure(command));
     }
 
-    let image = if trama_dir(root).is_dir() {
+    let image = if weaver_dir(root).is_dir() {
         ProjectImage::load(root)
     } else {
         ProjectImage::empty(root)
@@ -310,7 +310,7 @@ mod tests {
 
     fn project() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(dir.path().join(".trama/tasks")).unwrap();
+        fs::create_dir_all(dir.path().join(".weaver/tasks")).unwrap();
         dir
     }
 
@@ -319,7 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_without_trama_is_refused_for_everything_but_project_new() {
+    fn a_folder_without_weaver_is_refused_for_everything_but_project_new() {
         let dir = tempfile::tempdir().unwrap();
         let error = run(
             &request("model", "check", dir.path(), None, None, json!({})),
@@ -328,7 +328,43 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.code, code::NOT_INITIALISED);
         assert!(error.message.contains("initialise"));
-        assert!(!dir.path().join(".trama").exists());
+        assert!(!dir.path().join(".weaver").exists());
+    }
+
+    #[test]
+    fn a_folder_with_only_an_old_trama_folder_is_not_initialised() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".trama/model")).unwrap();
+        fs::write(dir.path().join(".trama/model/system.md"), "# Old\n").unwrap();
+        let error = run(
+            &request("model", "check", dir.path(), None, None, json!({})),
+            &Caller::default(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, code::NOT_INITIALISED);
+        assert_eq!(error.exit_code(), 1);
+        assert!(error.message.contains("initialise"));
+        assert!(!dir.path().join(".weaver").exists());
+    }
+
+    #[test]
+    fn a_folder_with_both_is_the_project_in_weaver_without_warnings() {
+        let dir = tempfile::tempdir().unwrap();
+        run(
+            &request("project", "new", dir.path(), None, None, json!({})),
+            &Caller::default(),
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join(".trama/model")).unwrap();
+        fs::write(dir.path().join(".trama/model/system.md"), "no title here\n").unwrap();
+        let reply = run(
+            &request("model", "check", dir.path(), None, None, json!({})),
+            &Caller::default(),
+        )
+        .unwrap();
+        assert_eq!(reply.exit, 0);
+        assert!(reply.markdown.contains("No problem found."));
+        assert_eq!(reply.json["warnings"], 0);
     }
 
     #[test]
@@ -358,7 +394,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.code, code::FORBIDDEN);
         assert_eq!(
-            fs::read_dir(dir.path().join(".trama/tasks"))
+            fs::read_dir(dir.path().join(".weaver/tasks"))
                 .unwrap()
                 .count(),
             0
@@ -467,7 +503,7 @@ mod tests {
             "---\ndescription: Use when big.\n---\n# Big\n\n## General\n{}\n",
             "- a line of text\n".repeat(1000)
         );
-        fs::write(dir.path().join(".trama/requirements/ui/big.md"), big).unwrap();
+        fs::write(dir.path().join(".weaver/requirements/ui/big.md"), big).unwrap();
         let warn = run(
             &request("model", "check", dir.path(), None, None, json!({})),
             &Caller::default(),
@@ -475,7 +511,11 @@ mod tests {
         .unwrap();
         assert_eq!(warn.exit, 0);
         assert_eq!(warn.json["warnings"], 1, "{}", warn.markdown);
-        fs::write(dir.path().join(".trama/model/system.md"), "no title here\n").unwrap();
+        fs::write(
+            dir.path().join(".weaver/model/system.md"),
+            "no title here\n",
+        )
+        .unwrap();
         let broken = run(
             &request("model", "check", dir.path(), None, None, json!({})),
             &Caller::default(),

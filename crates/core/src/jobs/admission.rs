@@ -35,7 +35,7 @@ pub struct StartPlan {
     pub job: Job,
     /// What it works on: a Task, a Drift, a Proposal or a request identity.
     pub target: Option<String>,
-    /// The Task of a Run of one Task (`TRAMA_TASK`).
+    /// The Task of a Run of one Task (`WEAVER_TASK`).
     pub task: Option<String>,
     /// The model the developer chose for the Proposal, when it replaces the role's model.
     pub proposal_model: Option<String>,

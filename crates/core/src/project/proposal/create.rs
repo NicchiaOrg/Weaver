@@ -46,7 +46,7 @@ pub struct NewProposal {
 pub struct Created {
     pub id: String,
     pub kind: Kind,
-    /// `proposals/<id>-<slug>/proposal.md`, relative to `.trama/`.
+    /// `proposals/<id>-<slug>/proposal.md`, relative to `.weaver/`.
     pub path: String,
     pub changes: ChangeSet,
     /// Why it is not bound to its request or to the Proposal it reworks.
@@ -230,7 +230,7 @@ pub struct EditRequest {
 pub struct EditableFile {
     /// The path the agent asked for, or the Task path with its identity (`tasks/<id>-<slug>.md`).
     pub path: String,
-    /// The file to write, relative to `.trama/`: `proposals/<id>-<slug>/<path>`.
+    /// The file to write, relative to `.weaver/`: `proposals/<id>-<slug>/<path>`.
     pub file: String,
 }
 
@@ -566,7 +566,7 @@ pub fn plan_edit(
     })
 }
 
-/// The file of `path` on disk under `.trama/`, as normalized text; `None` when it is not there.
+/// The file of `path` on disk under `.weaver/`, as normalized text; `None` when it is not there.
 pub fn read_project_file(project_root: &Path, path: &str) -> Option<String> {
     text::read_text(&layout::absolute(project_root, path)).ok()
 }

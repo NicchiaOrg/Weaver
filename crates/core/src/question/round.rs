@@ -15,7 +15,7 @@ pub type RoundId = u64;
 /// Who asks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Origin {
-    /// The agent of a job, through `trama question new`.
+    /// The agent of a job, through `weaver question new`.
     Agent { job: String },
     /// Weaver itself: the prepared question of a Drift, with no agent.
     Drift { drift: String, title: String },
@@ -294,7 +294,7 @@ impl Round {
     }
 }
 
-/// The result `trama question new` prints when the round was answered: one entry per question id.
+/// The result `weaver question new` prints when the round was answered: one entry per question id.
 pub fn answered_json(request: &RoundRequest, answers: &[Answer]) -> Value {
     let mut map = Map::new();
     for (question, answer) in request.questions.iter().zip(answers) {

@@ -13,9 +13,9 @@ use std::collections::{BTreeSet, HashMap};
 
 use serde::Serialize;
 use serde_json::Value;
-use trama_core::jobs::machine::{MessageId, RequestId, RESUME_PROMPT};
-use trama_core::jobs::subagents::{self, SubAgent, SubAgentState};
 use ts_rs::TS;
+use weaver_core::jobs::machine::{MessageId, RequestId, RESUME_PROMPT};
+use weaver_core::jobs::subagents::{self, SubAgent, SubAgentState};
 
 /// What happened to a message of the developer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]

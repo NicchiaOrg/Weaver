@@ -1,5 +1,5 @@
-import { Check, ChevronDown, Cpu, Trash2, X } from "lucide-react";
-import { useId, useMemo, useRef, useState } from "react";
+import { Check, ChevronDown, Cpu, Sparkles, Trash2, X } from "lucide-react";
+import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { ProposalView } from "@/bindings/ProposalView";
 import { useBoard } from "@/components/board/board-state";
@@ -325,9 +325,10 @@ function ReworkDialog({
 }
 
 /**
- * The controls of a Proposal: `Approve`, the `Reject` split button (its menu has `Rework with
- * feedback…`, absent once the Proposal is itself a rework), the model control, and `View on
- * diagram` and `View requirements`. A Draft a refinement left half-way has only `Approve` and
+ * The controls of a Proposal: `Approve`, or `Refine` in its place when the backend says a click
+ * starts a refinement job; the `Reject` split button (its menu has `Rework with
+ * feedback…`, absent once the Proposal is itself a rework), the model control, and `View
+ * requirements`. A Draft a refinement left half-way has only `Refine` and
  * `Discard`. Every reason a control is disabled comes from the backend, in its fixed order.
  */
 function ProposalControls({ card }: { card: ProposalCardData }) {
@@ -340,10 +341,17 @@ function ProposalControls({ card }: { card: ProposalCardData }) {
   const arrow = useRef<HTMLButtonElement>(null);
   const rejectBlocked = view.rejectReasons.length > 0;
 
+  const refines = view.approve.refines;
   const approve = (
-    <GuardedButton size="sm" reasons={view.approve.reasons} tooltip={view.approve.tooltip ?? undefined} onClick={() => void approveProposal(head.id, name)}>
-      <Check aria-hidden />
-      Approve
+    <GuardedButton
+      size="sm"
+      variant={refines ? "refine" : "default"}
+      reasons={view.approve.reasons}
+      tooltip={view.approve.tooltip ?? undefined}
+      onClick={() => void approveProposal(head.id, name)}
+    >
+      {refines ? <Sparkles aria-hidden /> : <Check aria-hidden />}
+      {refines ? "Refine" : "Approve"}
     </GuardedButton>
   );
 
@@ -406,7 +414,6 @@ function ProposalControls({ card }: { card: ProposalCardData }) {
         ) : null}
       </div>
       {view.carriesTasks ? <ModelControl card={card} /> : null}
-      <FocusButton view="diagram" refs={view.scopeRefs} subject={subject} />
       <FocusButton view="requirements" refs={view.scopeRefs} subject={subject} />
       <div onClick={(event) => event.stopPropagation()}>
         <RejectDialog
@@ -485,27 +492,74 @@ const FILE_GROUPS = [
   { key: "removed", title: "Removed", mark: "−" },
 ] as const;
 
-function TaskRows({ title, tasks }: { title: string; tasks: ProposalView["tasks"] }) {
+const ROW = "w-full rounded-sm px-1 py-0.5 text-left";
+
+/** `Remove code of `order/Gone``: the text between backticks as inline code, without them. */
+function titleWithCode(title: string): ReactNode[] {
+  return title.split("`").map((part, index) =>
+    index % 2 === 1 ? (
+      <code key={index} className="rounded bg-muted px-1 font-mono text-xs">
+        {part}
+      </code>
+    ) : (
+      part
+    ),
+  );
+}
+
+/** `Tasks it creates`: one compact row per Task, a button that opens the Task's text in a nested Dialog. */
+function CreatedTaskRows({ tasks }: { tasks: ProposalView["tasks"] }) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  const shown = useRef<ProposalView["tasks"][number] | null>(null);
+  if (tasks.length === 0) return null;
+  const open = tasks.find((task) => task.id === openId) ?? null;
+  // The last Task shown keeps the dialog's content while it closes.
+  if (open) shown.current = open;
+  const content = shown.current;
+  return (
+    <section aria-label="Tasks it creates" className="space-y-2">
+      <h3 className="text-xs font-semibold">Tasks it creates</h3>
+      <ul className="space-y-1">
+        {tasks.map((task) => (
+          <li key={task.id}>
+            <button
+              type="button"
+              className={cn(ROW, "hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring")}
+              onClick={(event) => {
+                opener.current = event.currentTarget;
+                setOpenId(task.id);
+              }}
+            >
+              {task.title}
+            </button>
+          </li>
+        ))}
+      </ul>
+      <FormDialog
+        open={open !== null}
+        onOpenChange={(next) => {
+          if (!next) setOpenId(null);
+        }}
+        title={content?.title ?? ""}
+        returnFocus={opener}
+      >
+        {content?.body.trim() ? <Markdown holderHeadingLevel={2}>{content.body}</Markdown> : <p className="text-muted-foreground">No description.</p>}
+      </FormDialog>
+    </section>
+  );
+}
+
+/** `Code-removal Tasks`: the same list style, plain text. */
+function RemovalTaskRows({ tasks }: { tasks: ProposalView["removalTasks"] }) {
   if (tasks.length === 0) return null;
   return (
-    <section aria-label={title} className="space-y-2">
-      <h3 className="text-xs font-semibold">{title}</h3>
-      <ul className="space-y-2">
+    <section aria-label="Code-removal Tasks" className="space-y-2">
+      <h3 className="text-xs font-semibold">Code-removal Tasks</h3>
+      <ul className="space-y-1">
         {tasks.map((task) => (
-          <li key={task.title} className="space-y-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span>{task.title}</span>
-              {task.technical ? <Badge variant="outline">technical</Badge> : null}
-            </div>
-            {task.refs.length > 0 ? (
-              <ul aria-label={`References of ${task.title}`} className="flex flex-wrap gap-1">
-                {task.refs.map((reference) => (
-                  <li key={reference}>
-                    <span className={cn(badgeVariants({ variant: "outline" }), "font-mono font-normal")}>{reference}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
+          <li key={task.id} className={ROW}>
+            {titleWithCode(task.title)}
           </li>
         ))}
       </ul>
@@ -567,8 +621,8 @@ function ProposalDetails({ card }: { card: ProposalCardData }) {
       </section>
       {view.carriesTasks ? (
         <>
-          <TaskRows title="Tasks it creates" tasks={view.tasks} />
-          <TaskRows title="Code-removal Tasks" tasks={view.removalTasks} />
+          <CreatedTaskRows tasks={view.tasks} />
+          <RemovalTaskRows tasks={view.removalTasks} />
           {view.tasks.length + view.removalTasks.length === 0 ? <p className="text-muted-foreground">It creates no Task.</p> : null}
         </>
       ) : null}

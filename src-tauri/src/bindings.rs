@@ -36,17 +36,17 @@ use crate::startup::StartupFailure;
 use crate::updates::{UpdateInfo, UpdateStatus};
 use crate::windows::commands::{RecentEntry, WelcomeState};
 use crate::windows::manager::{ShowRequest, ShowView};
-use trama_core::jobs::notes::Note;
-use trama_core::jobs::subagents::{SubAgent, SubAgentState};
-use trama_core::jobs::{JobKind, JobState};
-use trama_core::omp::machine::{
+use weaver_core::jobs::notes::Note;
+use weaver_core::jobs::subagents::{SubAgent, SubAgentState};
+use weaver_core::jobs::{JobKind, JobState};
+use weaver_core::omp::machine::{
     LogoutNote, LogoutPhase, OmpStatus, Phase as OmpPhase, TerminalProblem,
 };
-use trama_core::omp::probe::OmpModel;
-use trama_core::omp::providers::ProviderRow;
-use trama_core::project_files::folder_tree::TreeEntry;
-use trama_core::project_files::SyncReport;
-use trama_core::settings::{
+use weaver_core::omp::probe::OmpModel;
+use weaver_core::omp::providers::ProviderRow;
+use weaver_core::project_files::folder_tree::TreeEntry;
+use weaver_core::project_files::SyncReport;
+use weaver_core::settings::{
     Choice, EditorPreset, EditorSettings, FieldKind, ModelSettings, Permissions, SettingChange,
     SettingField, SettingIssue, SettingKey, Settings, SettingsSnapshot, Theme,
 };

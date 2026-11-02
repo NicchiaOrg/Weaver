@@ -1,10 +1,10 @@
-//! `trama job new | show | list | edit`. `job show` without an `<id>` reads the environment and the
+//! `weaver job new | show | list | edit`. `job show` without an `<id>` reads the environment and the
 //! registry record of the job; the others need the job registry of the app, which runs them
 //! through [`crate::exec::Authority::run`].
 
 use serde_json::{json, Map, Value};
-use trama_core::command::CommandReply;
-use trama_core::jobs::JobRecord;
+use weaver_core::command::CommandReply;
+use weaver_core::jobs::JobRecord;
 
 use super::{app_only, in_app, reply};
 use crate::spec::*;
@@ -28,10 +28,10 @@ pub fn commands() -> Vec<Command> {
             ])
             .check(check_new)
             .place(in_app)
-            .example(r#"trama job new --input '{"kind":"scan"}'"#),
+            .example(r#"weaver job new --input '{"kind":"scan"}'"#),
         Command::new("job", "show", "Prints the job of the caller, or the job `<id>`.", show)
             .notes(&[
-                "Without `<id>` it reads only the environment and the registry record of the job of the caller: `id`, `kind`, `target`, whether the session is a Run (`TRAMA_RUN`) and its `task` (`TRAMA_TASK`); outside a job it says so, with exit 0. `<id>` asks Weaver.",
+                "Without `<id>` it reads only the environment and the registry record of the job of the caller: `id`, `kind`, `target`, whether the session is a Run (`WEAVER_RUN`) and its `task` (`WEAVER_TASK`); outside a job it says so, with exit 0. `<id>` asks Weaver.",
             ])
             .arg(Arg::Job)
             .output(vec![
@@ -44,7 +44,7 @@ pub fn commands() -> Vec<Command> {
                 ])), "The job, or null outside a job."),
             ])
             .place(|_, arg| if arg.is_some() { Place::App } else { Place::Local })
-            .example("trama job show"),
+            .example("weaver job show"),
         Command::new("job", "list", "Lists the jobs of the project.", app_only)
             .input(vec![opt("all", boolean(), "Every job, finished ones included.")])
             .output(vec![req("jobs", list(object(vec![
@@ -53,7 +53,7 @@ pub fn commands() -> Vec<Command> {
                 req("state", line(), "The state of the job."),
             ])), "The jobs.")])
             .place(in_app)
-            .example("trama job list"),
+            .example("weaver job list"),
         Command::new("job", "edit", "Declares what the job is doing now, as a short note.", app_only)
             .notes(&[
                 "Line breaks become spaces and the ends are trimmed; an empty note is invalid input. A note over 120 characters is cut to 119 plus `…`, and the output says so. The last 6 notes are kept with their instants; a repeat of the last one only renews its instant.",
@@ -65,7 +65,7 @@ pub fn commands() -> Vec<Command> {
                 req("cut", boolean(), "Whether the note was cut."),
             ])
             .place(in_app)
-            .example(r#"trama job edit --input '{"note":"Reading the order Machine"}'"#),
+            .example(r#"weaver job edit --input '{"note":"Reading the order Machine"}'"#),
     ]
 }
 
@@ -147,8 +147,8 @@ fn show(call: &Call) -> Result<CommandReply, Failure> {
 mod tests {
     use std::path::Path;
 
-    use trama_core::jobs::{JobKind, JobState};
-    use trama_core::project::image::ProjectImage;
+    use weaver_core::jobs::{JobKind, JobState};
+    use weaver_core::project::image::ProjectImage;
 
     use super::*;
 
@@ -244,11 +244,11 @@ mod tests {
         };
         assert_eq!(
             run(&caller, None).unwrap_err().code,
-            trama_core::command::code::REFUSED
+            weaver_core::command::code::REFUSED
         );
         assert_eq!(
             run(&caller, Some("kkkkkkkk")).unwrap_err().code,
-            trama_core::command::code::APP_NOT_RUNNING
+            weaver_core::command::code::APP_NOT_RUNNING
         );
     }
 

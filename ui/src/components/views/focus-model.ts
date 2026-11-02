@@ -1,8 +1,7 @@
-import type { Level } from "@/bindings/Level";
 import type { ViewData } from "@/bindings/ViewData";
 
-/** The three views that hold a focus. */
-export type ViewName = "diagram" | "requirements" | "specs";
+/** The two views that hold a focus. */
+export type ViewName = "requirements" | "specs";
 
 /** What a focus is about: a Proposal's scope, a Task's references, or one reference (a chip). */
 export type FocusSubject =
@@ -17,16 +16,12 @@ export function subjectText(subject: FocusSubject): string {
   return `${label} ${subject.number ?? subject.id} – ${subject.title}`;
 }
 
-/** One step of a focus: the elements of a level, a section or Area, or a Specs field. */
+/** One step of a focus: a section or Area, or a Specs field. */
 export interface FocusStep {
-  /** Stable across recomputations: a level key, `area#section`, or a field name. */
+  /** Stable across recomputations: `area#section`, or a field name. */
   key: string;
-  /** The breadcrumb of the level, the section or Area, or the field. */
+  /** The name of the section or Area, or of the field. */
   name: string;
-  /** Diagram: the level and its focused nodes and edges. */
-  level?: string;
-  nodes: readonly string[];
-  edges: readonly string[];
 }
 
 export interface FocusPlan {
@@ -36,51 +31,6 @@ export interface FocusPlan {
 }
 
 export const EMPTY_PLAN: FocusPlan = { steps: [], notFound: [] };
-
-/** The Levels from the root down to `key`, following the container a link starts from. */
-export function trail(levels: readonly Level[], key: string): Level[] {
-  const found: Level[] = [];
-  let current: Level | undefined = levels.find((l) => l.key === key);
-  while (current && !found.includes(current)) {
-    found.unshift(current);
-    const parent: string | null = current.parent;
-    current = parent === null ? undefined : levels.find((l) => l.key === parent);
-  }
-  return found;
-}
-
-/** `System › <Feature>`: the name of a level as a link reaches it. */
-export function levelName(levels: readonly Level[], key: string): string {
-  return trail(levels, key)
-    .map((l) => l.title)
-    .join(" › ");
-}
-
-function diagramPlan(refs: readonly string[], data: ViewData): FocusPlan {
-  const byLevel = new Map<string, { nodes: Set<string>; edges: Set<string> }>();
-  const notFound: string[] = [];
-  for (const ref of refs) {
-    const targets = data.targets[ref];
-    if (targets && !targets.relevant.includes("diagram")) continue;
-    let found = false;
-    for (const anchor of targets?.diagram ?? []) {
-      if (!data.model.levels.some((l) => l.key === anchor.level)) continue;
-      found = true;
-      const entry = byLevel.get(anchor.level) ?? { nodes: new Set<string>(), edges: new Set<string>() };
-      anchor.nodes.forEach((n) => entry.nodes.add(n));
-      anchor.edges.forEach((e) => entry.edges.add(e));
-      byLevel.set(anchor.level, entry);
-    }
-    if (!found) notFound.push(ref);
-  }
-  const steps = data.model.levels
-    .filter((l) => byLevel.has(l.key))
-    .map((l) => {
-      const entry = byLevel.get(l.key)!;
-      return { key: l.key, name: levelName(data.model.levels, l.key), level: l.key, nodes: [...entry.nodes], edges: [...entry.edges] };
-    });
-  return { steps, notFound };
-}
 
 /** The key of a Requirements step: an Area, or one of its sections. */
 export function sectionKey(area: string, section: string | null): string {
@@ -110,7 +60,7 @@ function requirementsPlan(refs: readonly string[], data: ViewData): FocusPlan {
   }
   const steps = [...found]
     .sort((a, b) => order.get(a)!.index - order.get(b)!.index)
-    .map((key) => ({ key, name: order.get(key)!.name, nodes: [], edges: [] }));
+    .map((key) => ({ key, name: order.get(key)!.name }));
   return { steps, notFound };
 }
 
@@ -125,14 +75,13 @@ function specsPlan(refs: readonly string[], data: ViewData): FocusPlan {
     if (names.length === 0) notFound.push(ref);
     names.forEach((n) => found.add(n));
   }
-  const steps = fields.filter((f) => found.has(f)).map((key) => ({ key, name: key, nodes: [], edges: [] }));
+  const steps = fields.filter((f) => found.has(f)).map((key) => ({ key, name: key }));
   return { steps, notFound };
 }
 
 /** The steps of a focus on `refs` in `view`, and the references that view cannot find. */
 export function planFocus(view: ViewName, refs: readonly string[], data: ViewData): FocusPlan {
   if (refs.length === 0) return EMPTY_PLAN;
-  if (view === "diagram") return diagramPlan(refs, data);
   if (view === "requirements") return requirementsPlan(refs, data);
   return specsPlan(refs, data);
 }
@@ -140,8 +89,7 @@ export function planFocus(view: ViewName, refs: readonly string[], data: ViewDat
 /** The views a reference can concern, from its text alone (for a Proposal's scope the snapshot may not know yet). */
 function guessedViews(ref: string): ViewName[] {
   if (ref === "specs" || ref.startsWith("specs#")) return ["specs"];
-  if (ref.startsWith("requirements/")) return ref.includes("#") && !ref.endsWith("#General") ? ["diagram", "requirements"] : ["requirements"];
-  return ["diagram", "requirements"];
+  return ["requirements"];
 }
 
 /**

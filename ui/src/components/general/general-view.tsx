@@ -13,6 +13,7 @@ import { call } from "@/lib/backend";
 import { useOmp } from "@/hooks/use-omp";
 
 const EMPTY = "Talk with omp in this project. Ask it to start a job of Weaver when you want one.";
+const LOADING = "Loading conversation…";
 
 /** The index of the last message of the developer that omp has not received yet, or -1. */
 function lastQueued(entries: readonly Entry[]): number {
@@ -53,7 +54,7 @@ export function GeneralView() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex items-center justify-between gap-2 border-b px-3 py-2">
-        <h2 className="text-sm font-semibold">General</h2>
+        <h2 className="text-sm font-semibold">Chat</h2>
         <GuardedButton variant="outline" size="sm" reasons={[empty && "The conversation is empty"]} onClick={() => setConfirming(true)}>
           <Eraser aria-hidden />
           Clear
@@ -67,7 +68,11 @@ export function GeneralView() {
           setFollowing(element.scrollHeight - element.scrollTop - element.clientHeight < 24);
         }}
       >
-        {entries.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">{EMPTY}</p>}
+        {state?.loading ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">{LOADING}</p>
+        ) : (
+          entries.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">{EMPTY}</p>
+        )}
         {entries.map((entry, index) => (
           <Fragment key={index}>
             <EntryView entry={entry} answer={answer} />
@@ -122,7 +127,7 @@ export function GeneralView() {
       <ConfirmDialog
         open={confirming}
         onOpenChange={setConfirming}
-        title="Clear General?"
+        title="Clear Chat?"
         description={
           working
             ? "The agent's turn stops, the conversation is deleted and a new one starts."

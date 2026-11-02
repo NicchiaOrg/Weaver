@@ -1,12 +1,12 @@
-//! The file watcher of an open project: changes under `.trama/` become batches that feed
+//! The file watcher of an open project: changes under `.weaver/` become batches that feed
 //! [`Pictures::rebuild`](crate::pictures::Pictures::rebuild).
 //!
 //! * [`Batcher`] is the pure rule of `requirements/tech#General`: a batch is handed over 150 ms
 //!   after the last event, and at most 1 s after the first one when changes never stop. It takes
 //!   the time as an argument, so tests drive it without sleeping.
 //! * [`Watch`] starts a watcher for a project; [`NotifyWatch`] is the one over the `notify` crate.
-//!   It watches `.trama/` recursively, and the project folder itself without recursion to notice
-//!   `.trama/` appearing (Get Started) or going away, which asks for a rebuild of everything.
+//!   It watches `.weaver/` recursively, and the project folder itself without recursion to notice
+//!   `.weaver/` appearing (Get Started) or going away, which asks for a rebuild of everything.
 //!   Paths are reported under the root it was given, which is the canonical root.
 //! * The watcher never reads or parses anything: it only names paths. Each project has its own
 //!   watcher, batcher and thread; nothing is shared between projects.
@@ -18,8 +18,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use notify::{EventKind, RecursiveMode, Watcher};
-use trama_core::atomic;
-use trama_core::project::layout;
+use weaver_core::atomic;
+use weaver_core::project::layout;
 
 use crate::pictures::Rebuild;
 use crate::{log_debug, log_warn};
@@ -70,7 +70,7 @@ impl Batcher {
         self.paths.insert(path);
     }
 
-    /// Something changed that names no path (events were lost, `.trama/` appeared): the batch
+    /// Something changed that names no path (events were lost, `.weaver/` appeared): the batch
     /// re-reads everything.
     pub fn push_everything(&mut self, now: Duration) {
         self.touch(now);
@@ -142,13 +142,13 @@ impl Watch for NotifyWatch {
         })
         .map_err(|e| format!("cannot start the file watcher: {e}"))?;
 
-        let trama = layout::trama_dir(root);
-        let mut watching_trama = false;
-        if trama.is_dir() {
+        let weaver = layout::weaver_dir(root);
+        let mut watching_weaver = false;
+        if weaver.is_dir() {
             watcher
-                .watch(&trama, RecursiveMode::Recursive)
-                .map_err(|e| format!("cannot watch .trama/: {e}"))?;
-            watching_trama = true;
+                .watch(&weaver, RecursiveMode::Recursive)
+                .map_err(|e| format!("cannot watch .weaver/: {e}"))?;
+            watching_weaver = true;
         }
         watcher
             .watch(root, RecursiveMode::NonRecursive)
@@ -157,9 +157,29 @@ impl Watch for NotifyWatch {
         let root = root.to_path_buf();
         std::thread::Builder::new()
             .name("project-watcher".to_owned())
-            .spawn(move || run(watcher, receiver, &root, watching_trama, &sink))
+            .spawn(move || run(watcher, receiver, &root, watching_weaver, &sink))
             .map_err(|e| format!("cannot start the file watcher: {e}"))?;
         Ok(WatchGuard::new(Stopper(sender)))
+    }
+}
+
+/// What an event path means for a project: the `.weaver` folder itself, something inside it, or
+/// nothing (anything else in the project folder, a `.trama` folder of an earlier version of
+/// Weaver included).
+#[derive(Debug, PartialEq, Eq)]
+enum Route {
+    Folder,
+    Inside,
+    Ignored,
+}
+
+fn route(path: &Path, weaver: &Path) -> Route {
+    if path == weaver {
+        Route::Folder
+    } else if path.starts_with(weaver) {
+        Route::Inside
+    } else {
+        Route::Ignored
     }
 }
 
@@ -167,10 +187,10 @@ fn run(
     mut watcher: notify::RecommendedWatcher,
     receiver: mpsc::Receiver<Message>,
     root: &Path,
-    mut watching_trama: bool,
+    mut watching_weaver: bool,
     sink: &BatchSink,
 ) {
-    let trama = layout::trama_dir(root);
+    let weaver = layout::weaver_dir(root);
     let started = Instant::now();
     let mut batcher = Batcher::default();
     loop {
@@ -186,27 +206,34 @@ fn run(
                 }
                 let now = started.elapsed();
                 for path in event.paths {
-                    if path == trama {
-                        // `.trama/` appeared, went away or changed itself.
-                        let present = trama.is_dir();
-                        if present && !watching_trama {
-                            match watcher.watch(&trama, RecursiveMode::Recursive) {
-                                Ok(()) => watching_trama = true,
-                                Err(error) => {
-                                    log_warn!("cannot watch .trama/ of {}: {error}", root.display())
+                    match route(&path, &weaver) {
+                        Route::Folder => {
+                            // `.weaver/` appeared, went away or changed itself.
+                            let present = weaver.is_dir();
+                            if present && !watching_weaver {
+                                match watcher.watch(&weaver, RecursiveMode::Recursive) {
+                                    Ok(()) => watching_weaver = true,
+                                    Err(error) => {
+                                        log_warn!(
+                                            "cannot watch .weaver/ of {}: {error}",
+                                            root.display()
+                                        )
+                                    }
                                 }
+                            } else if !present {
+                                watching_weaver = false;
                             }
-                        } else if !present {
-                            watching_trama = false;
+                            batcher.push_everything(now);
                         }
-                        batcher.push_everything(now);
-                    } else if path.starts_with(&trama) {
-                        let is_temp = path
-                            .file_name()
-                            .is_some_and(|name| atomic::is_temp_name(&name.to_string_lossy()));
-                        if !is_temp {
-                            batcher.push(now, path);
+                        Route::Inside => {
+                            let is_temp = path
+                                .file_name()
+                                .is_some_and(|name| atomic::is_temp_name(&name.to_string_lossy()));
+                            if !is_temp {
+                                batcher.push(now, path);
+                            }
                         }
+                        Route::Ignored => {}
                     }
                 }
             }
@@ -319,17 +346,20 @@ mod tests {
     #[test]
     fn the_watcher_names_the_files_that_changed_under_the_canonical_root() {
         let dir = tempfile::tempdir().unwrap();
-        let root = trama_core::paths::canonical_root(dir.path()).unwrap();
-        std::fs::create_dir_all(root.join(".trama").join("tasks")).unwrap();
+        let root = weaver_core::paths::canonical_root(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join(".weaver").join("tasks")).unwrap();
         let (sender, receiver) = mpsc::channel();
         let _guard = NotifyWatch.start(&root, sink_to(sender)).unwrap();
 
-        let file = root.join(".trama").join("tasks").join("abcd1234-a-task.md");
+        let file = root
+            .join(".weaver")
+            .join("tasks")
+            .join("abcd1234-a-task.md");
         std::fs::write(&file, "---\n---\n").unwrap();
-        // Something outside `.trama/` and a temporary file of an atomic write are not named.
+        // Something outside `.weaver/` and a temporary file of an atomic write are not named.
         std::fs::write(root.join("outside.txt"), "x").unwrap();
         std::fs::write(
-            root.join(".trama")
+            root.join(".weaver")
                 .join("tasks")
                 .join(".abcd1234-a-task.md.0123456789ab.tmp"),
             "x",
@@ -345,7 +375,7 @@ mod tests {
         for batch in &seen {
             if let Rebuild::Paths(paths) = batch {
                 assert!(
-                    paths.iter().all(|p| p.starts_with(root.join(".trama"))),
+                    paths.iter().all(|p| p.starts_with(root.join(".weaver"))),
                     "{paths:?}"
                 );
                 assert!(
@@ -357,16 +387,32 @@ mod tests {
     }
 
     #[test]
-    fn a_trama_folder_that_appears_later_is_watched_and_read_whole() {
+    fn only_the_weaver_folder_and_what_is_inside_it_count() {
+        let root = Path::new("/p");
+        let weaver = root.join(".weaver");
+        assert_eq!(route(&weaver, &weaver), Route::Folder);
+        assert_eq!(route(&weaver.join("tasks/a.md"), &weaver), Route::Inside);
+        // A `.trama` folder, appearing, changing or vanishing, means nothing.
+        assert_eq!(route(&root.join(".trama"), &weaver), Route::Ignored);
+        assert_eq!(
+            route(&root.join(".trama/tasks/a.md"), &weaver),
+            Route::Ignored
+        );
+        assert_eq!(route(&root.join(".weaver-old"), &weaver), Route::Ignored);
+        assert_eq!(route(&root.join("outside.txt"), &weaver), Route::Ignored);
+    }
+
+    #[test]
+    fn a_weaver_folder_that_appears_later_is_watched_and_read_whole() {
         let dir = tempfile::tempdir().unwrap();
-        let root = trama_core::paths::canonical_root(dir.path()).unwrap();
+        let root = weaver_core::paths::canonical_root(dir.path()).unwrap();
         let (sender, receiver) = mpsc::channel();
         let _guard = NotifyWatch.start(&root, sink_to(sender)).unwrap();
 
-        std::fs::create_dir_all(root.join(".trama").join("tasks")).unwrap();
+        std::fs::create_dir_all(root.join(".weaver").join("tasks")).unwrap();
         collect_until(&receiver, |seen| seen.contains(&Rebuild::All));
 
-        let file = root.join(".trama").join("tasks").join("abcd1234-late.md");
+        let file = root.join(".weaver").join("tasks").join("abcd1234-late.md");
         std::fs::write(&file, "x").unwrap();
         collect_until(&receiver, |seen| {
             seen.iter()

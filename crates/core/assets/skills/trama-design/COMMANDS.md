@@ -1,8 +1,8 @@
-# Commands of `trama`
+# Commands of `weaver`
 
-Generated from the command registry of the `trama` command line: do not edit it by hand.
+Generated from the command registry of the `weaver` command line: do not edit it by hand.
 
-Shape: `trama <object> <verb> [<id>] [<state>] [--input <json>|-] [--root <dir>] [--json]`. `-h` and `--help` print help (with `--json`, the JSON Schemas of the command); no other option exists. Input is one camelCase JSON object, inline or from standard input with `--input -`; a field marked optional may be left out, and a command without fields takes only `{}` or nothing. Cards are named by identity, unique identity prefix or short number. Output is Markdown, or one JSON object with `--json`. Exit codes: `0` done, `1` refused or failed, `2` wrong usage or invalid input.
+Shape: `weaver <object> <verb> [<id>] [<state>] [--input <json>|-] [--root <dir>] [--json]`. `-h` and `--help` print help (with `--json`, the JSON Schemas of the command); no other option exists. Input is one camelCase JSON object, inline or from standard input with `--input -`; a field marked optional may be left out, and a command without fields takes only `{}` or nothing. Cards are named by identity, unique identity prefix or short number. Output is Markdown, or one JSON object with `--json`. Exit codes: `0` done, `1` refused or failed, `2` wrong usage or invalid input.
 
 | Object | Verbs |
 |---|---|
@@ -18,7 +18,7 @@ Shape: `trama <object> <verb> [<id>] [<state>] [--input <json>|-] [--root <dir>]
 
 ## model
 
-### `trama model show [<ref>] [--input <json>|-] [--root <dir>] [--json]`
+### `weaver model show [<ref>] [--input <json>|-] [--root <dir>] [--json]`
 
 Prints the System, or a Model element or Requirement section with the Requirements that apply to it.
 
@@ -30,9 +30,9 @@ Without `<ref>` it prints the System with its Actors, Features and Requirement A
 
 Output with `--json`: `kind`, `reference`, `requirements`. `--help` gives their types.
 
-Example: `trama model show order/Paid`
+Example: `weaver model show order/Paid`
 
-### `trama model list [--input <json>|-] [--root <dir>] [--json]`
+### `weaver model list [--input <json>|-] [--root <dir>] [--json]`
 
 Lists the Model and the Requirements, or searches them for a text.
 
@@ -44,9 +44,9 @@ Input:
 
 Output with `--json`: `text`, `hits`, `actors`, `features`, `areas`. `--help` gives their types.
 
-Example: `trama model list --input '{"text":"payment"}'`
+Example: `weaver model list --input '{"text":"payment"}'`
 
-### `trama model check [--input <json>|-] [--root <dir>] [--json]`
+### `weaver model check [--input <json>|-] [--root <dir>] [--json]`
 
 Validates the Model, the Requirements and the Specs.
 
@@ -54,15 +54,15 @@ Exits 1 when there is an error; a warning (a fragment over 12,288 bytes) does no
 
 Output with `--json`: `ok`, `errors`, `warnings`, `diagnostics`. `--help` gives their types.
 
-Example: `trama model check`
+Example: `weaver model check`
 
 ## project
 
-### `trama project new [--input <json>|-] [--root <dir>] [--json]`
+### `weaver project new [--input <json>|-] [--root <dir>] [--json]`
 
-Initialises `.trama/` in the folder and installs the agent files.
+Initialises `.weaver/` in the folder and installs the agent files.
 
-Creates `.trama/` with the System and the starting Requirement Areas, and writes the agent files (skills, sub-agent definitions, advisor instructions) in the project. It is refused, creating nothing, when `.trama/` exists, or when an agent file to install exists with other content: every such file is listed, and `force` overwrites them.
+Creates `.weaver/` with the System and the starting Requirement Areas, and writes the agent files (skills, sub-agent definitions, advisor instructions) in the project. It is refused, creating nothing, when `.weaver/` exists, or when an agent file to install exists with other content: every such file is listed, and `force` overwrites them.
 
 Input:
 
@@ -70,9 +70,9 @@ Input:
 
 Output with `--json`: `root`, `files`, `areas`, `agentFiles`. `--help` gives their types.
 
-Example: `trama project new --input '{}'`
+Example: `weaver project new --input '{}'`
 
-### `trama project edit [--input <json>|-] [--root <dir>] [--json]`
+### `weaver project edit [--input <json>|-] [--root <dir>] [--json]`
 
 Updates the installed skills.
 
@@ -80,25 +80,25 @@ Update skills: writes again every installed file that differs from the one this 
 
 Output with `--json`: `changed`, `areas`, `generated`. `--help` gives their types.
 
-Example: `trama project edit`
+Example: `weaver project edit`
 
-### `trama project show [--input <json>|-] [--root <dir>] [--json]`
+### `weaver project show [--input <json>|-] [--root <dir>] [--json]`
 
 Prints the Board.
 
 Output with `--json`: `toDecide`, `inWriting`, `todo`, `doing`. `--help` gives their types.
 
-Example: `trama project show`
+Example: `weaver project show`
 
 ## proposal
 
-### `trama proposal new [--input <json>|-] [--root <dir>] [--json]`
+### `weaver proposal new [--input <json>|-] [--root <dir>] [--json]`
 
 Files a Proposal as a Draft.
 
 `kind` is `change` (default), `setup`, `import` or `resolution`. `label` is one line of 1 to 30 characters. A `setup` is refused on a Model that has a Feature or an Actor, and `request` is refused together with `reworks`.
 
-`request` binds the Proposal to a written design request only if no Proposal is bound to it yet, and `reworks` only a Proposal rejected with Rework that nothing replaced; otherwise the Proposal is created unbound, with a note saying why. `announcement` is the identity printed by `trama announcement new`.
+`request` binds the Proposal to a written design request only if no Proposal is bound to it yet, and `reworks` only a Proposal rejected with Rework that nothing replaced; otherwise the Proposal is created unbound, with a note saying why. `announcement` is the identity printed by `weaver announcement new`.
 
 Input:
 
@@ -113,9 +113,9 @@ Input:
 
 Output with `--json`: `id`, `number`, `title`, `kind`, `status`, `note`. `--help` gives their types.
 
-Example: `trama proposal new --input '{"title":"Cancel an order","announcement":"<id>"}'`
+Example: `weaver proposal new --input '{"title":"Cancel an order","announcement":"<id>"}'`
 
-### `trama proposal show <id> [--input <json>|-] [--root <dir>] [--json]`
+### `weaver proposal show <id> [--input <json>|-] [--root <dir>] [--json]`
 
 Prints a Proposal: text, status, files, Tasks, scope, blocking and validation.
 
@@ -125,9 +125,9 @@ Prints the text, the status, the required Proposals, the files, `## Tasks`, `## 
 
 Output with `--json`: `id`, `number`, `title`, `kind`, `status`, `requires`, `files`, `tasks`, `blocked`, `validation`. `--help` gives their types.
 
-Example: `trama proposal show p3`
+Example: `weaver proposal show p3`
 
-### `trama proposal list [--input <json>|-] [--root <dir>] [--json]`
+### `weaver proposal list [--input <json>|-] [--root <dir>] [--json]`
 
 Lists the Proposals.
 
@@ -139,15 +139,15 @@ Input:
 
 Output with `--json`: `proposals`. `--help` gives their types.
 
-Example: `trama proposal list`
+Example: `weaver proposal list`
 
-### `trama proposal edit <id> [--input <json>|-] [--root <dir>] [--json]`
+### `weaver proposal edit <id> [--input <json>|-] [--root <dir>] [--json]`
 
 Edits a Proposal: makes files editable, records Drift decisions and images.
 
 Every call, even without input, sends an Open Proposal back to Draft and says so.
 
-`edit` makes paths editable (`model/...`, `requirements/<area>/<fragment>.md`, `specs.yaml`, `tasks/<slug>.md`), copying the current content and recording `base` the first time, and prints the path to write for each. A new Task gets its identity here; Task paths are refused in `import` and `resolution`. `delete` is refused for a path the Proposal holds. `drifts` and `removeDrifts` apply only to a resolution; `option` and `note` go only with `fix-code`. `images` copies files into `.trama/task-images/<task>/`. `rebase` records `base` again and sets `refining`; only a `change` not attached to a Drift.
+`edit` makes paths editable (`model/...`, `requirements/<area>/<fragment>.md`, `specs.yaml`, `tasks/<slug>.md`), copying the current content and recording `base` the first time, and prints the path to write for each. A new Task gets its identity here; Task paths are refused in `import` and `resolution`. `delete` is refused for a path the Proposal holds. `drifts` and `removeDrifts` apply only to a resolution; `option` and `note` go only with `fix-code`. `images` copies files into `.weaver/task-images/<task>/`. `rebase` records `base` again and sets `refining`; only a `change` not attached to a Drift.
 
 - Argument `<id>`: the card, by identity, unique identity prefix or short number (`P3`, `t3`: a letter and digits is always a short number, and its letter must match the type).
 
@@ -172,9 +172,9 @@ Input:
 
 Output with `--json`: `id`, `number`, `title`, `status`, `sentBackToDraft`, `files`. `--help` gives their types.
 
-Example: `trama proposal edit p3 --input '{"edit":["model/checkout/order.md"]}'`
+Example: `weaver proposal edit p3 --input '{"edit":["model/checkout/order.md"]}'`
 
-### `trama proposal move <id> open|approved|rejected|discarded [--input <json>|-] [--root <dir>] [--json]`
+### `weaver proposal move <id> open|approved|rejected|discarded [--input <json>|-] [--root <dir>] [--json]`
 
 Hands a Proposal over, or decides it.
 
@@ -190,15 +190,15 @@ Input:
 
 Output with `--json`: `id`, `number`, `title`, `kind`, `status`, `warnings`. `--help` gives their types.
 
-Example: `trama proposal move p3 open`
+Example: `weaver proposal move p3 open`
 
 ## task
 
-### `trama task new [--input <json>|-] [--root <dir>] [--json]`
+### `weaver task new [--input <json>|-] [--root <dir>] [--json]`
 
 Files a Task in To do.
 
-`technical: true` marks a Task with no Model reference. `announcement` is the identity printed by `trama announcement new`. The job that files it is recorded when `TRAMA_JOB` is set.
+`technical: true` marks a Task with no Model reference. `announcement` is the identity printed by `weaver announcement new`. The job that files it is recorded when `WEAVER_JOB` is set.
 
 Input:
 
@@ -210,9 +210,9 @@ Input:
 
 Output with `--json`: `id`, `number`, `title`, `column`. `--help` gives their types.
 
-Example: `trama task new --input '{"title":"Cancel an order","refs":["order/Paid"]}'`
+Example: `weaver task new --input '{"title":"Cancel an order","refs":["order/Paid"]}'`
 
-### `trama task show <id> [--input <json>|-] [--root <dir>] [--json]`
+### `weaver task show <id> [--input <json>|-] [--root <dir>] [--json]`
 
 Prints a Task with the Model and the Requirements it refers to.
 
@@ -220,9 +220,9 @@ Prints a Task with the Model and the Requirements it refers to.
 
 Output with `--json`: `id`, `number`, `title`, `column`, `technical`, `refs`, `blockedBy`. `--help` gives their types.
 
-Example: `trama task show t3`
+Example: `weaver task show t3`
 
-### `trama task list [--input <json>|-] [--root <dir>] [--json]`
+### `weaver task list [--input <json>|-] [--root <dir>] [--json]`
 
 Lists Tasks, or picks the runnable ones.
 
@@ -241,15 +241,15 @@ Input:
 
 Output with `--json`: `tasks`, `waiting`, `groups`, `heldBack`. `--help` gives their types.
 
-Example: `trama task list --input '{"runnable":true,"max":3,"groups":true}'`
+Example: `weaver task list --input '{"runnable":true,"max":3,"groups":true}'`
 
-### `trama task move <id> doing|todo|done [--input <json>|-] [--root <dir>] [--json]`
+### `weaver task move <id> doing|todo|done [--input <json>|-] [--root <dir>] [--json]`
 
 Takes a Task, releases it or finishes it.
 
 Bound to a job. `doing` takes the Task (refused naming its blocker), `todo` releases it and `done` finishes it. `unchanged`, a non-blank note, with `done` closes the fix Task of a Drift when the code already does what should happen. Only the job that holds a Task moves it out of `doing`.
 
-Who: Only the agent of a job Weaver started can run it (Weaver sets `TRAMA_JOB` in the environment of that agent). Any other caller is refused with exit 1 and nothing is written.
+Who: Only the agent of a job Weaver started can run it (Weaver sets `WEAVER_JOB` in the environment of that agent). Any other caller is refused with exit 1 and nothing is written.
 
 - Argument `<id>`: the card, by identity, unique identity prefix or short number (`P3`, `t3`: a letter and digits is always a short number, and its letter must match the type).
 - Argument `doing|todo|done`: the state to move to: `doing`, `todo`, `done`.
@@ -260,9 +260,9 @@ Input:
 
 Output with `--json`: `id`, `number`, `title`, `column`. `--help` gives their types.
 
-Example: `trama task move t3 doing`
+Example: `weaver task move t3 doing`
 
-### `trama task delete <id> [--input <json>|-] [--root <dir>] [--json]`
+### `weaver task delete <id> [--input <json>|-] [--root <dir>] [--json]`
 
 Deletes a Task in To do.
 
@@ -272,15 +272,15 @@ A decision of the developer: the agent runs it only when the developer explicitl
 
 Output with `--json`: `id`, `number`, `title`. `--help` gives their types.
 
-Example: `trama task delete t3`
+Example: `weaver task delete t3`
 
 ## drift
 
-### `trama drift new [--input <json>|-] [--root <dir>] [--json]`
+### `weaver drift new [--input <json>|-] [--root <dir>] [--json]`
 
 Files a Drift: the code and the Model or the Requirements disagree.
 
-`options` are 2 to 5 fix options, the recommended first; they may be left out only with `proposal` (a Draft or Open Proposal no other Drift holds). `task` is the Task the Drift was found in; `previous` is set automatically when that Task is a fix Task. `announcement` is the identity printed by `trama announcement new`. The job that files it is recorded when `TRAMA_JOB` is set.
+`options` are 2 to 5 fix options, the recommended first; they may be left out only with `proposal` (a Draft or Open Proposal no other Drift holds). `task` is the Task the Drift was found in; `previous` is set automatically when that Task is a fix Task. `announcement` is the identity printed by `weaver announcement new`. The job that files it is recorded when `WEAVER_JOB` is set.
 
 Input:
 
@@ -299,9 +299,9 @@ Input:
 
 Output with `--json`: `id`, `number`, `title`, `status`. `--help` gives their types.
 
-Example: `trama drift new --input -`
+Example: `weaver drift new --input -`
 
-### `trama drift show <id> [--input <json>|-] [--root <dir>] [--json]`
+### `weaver drift show <id> [--input <json>|-] [--root <dir>] [--json]`
 
 Prints a Drift with its options, Task, Proposal and prepared question.
 
@@ -311,13 +311,13 @@ Prints a Drift with its options, Task, Proposal and prepared question.
 
 Output with `--json`: `id`, `number`, `title`, `status`, `refs`, `happens`, `should`, `where`, `options`, `created`, `origin`, `previous`, `proposal`, `task`, `job`, `decided`, `prepared`. `--help` gives their types.
 
-Example: `trama drift show d3`
+Example: `weaver drift show d3`
 
-### `trama drift list [--input <json>|-] [--root <dir>] [--json]`
+### `weaver drift list [--input <json>|-] [--root <dir>] [--json]`
 
 Lists Drifts.
 
-Open Drifts only, unless `all`. `refs` lists the Drifts that concern those references, as the Drifts that block a Task, and marks (`unchanged`) the Dismissed Drifts that concern them whose text is unchanged since the dismissal: the agent never files those differences again. `currentJob` uses `TRAMA_JOB` and lists nothing outside a job. `unprepared` lists the open Drifts that have no valid prepared question and are in no resolution being written or open.
+Open Drifts only, unless `all`. `refs` lists the Drifts that concern those references, as the Drifts that block a Task, and marks (`unchanged`) the Dismissed Drifts that concern them whose text is unchanged since the dismissal: the agent never files those differences again. `currentJob` uses `WEAVER_JOB` and lists nothing outside a job. `unprepared` lists the open Drifts that have no valid prepared question and are in no resolution being written or open.
 
 Input:
 
@@ -329,13 +329,13 @@ Input:
 
 Output with `--json`: `drifts`. `--help` gives their types.
 
-Example: `trama drift list --input '{"currentJob":true,"unprepared":true}'`
+Example: `weaver drift list --input '{"currentJob":true,"unprepared":true}'`
 
-### `trama drift edit <id> [--input <json>|-] [--root <dir>] [--json]`
+### `weaver drift edit <id> [--input <json>|-] [--root <dir>] [--json]`
 
 Records the prepared question of a Drift, or attaches a Proposal to it.
 
-`prepared` is `{question, decisions}`: `question` is a question of `trama question new` whose `id` is the Drift identity and whose `multi` is false, and `decisions` has one decision per option, in the same order: every fix option once as `fix-code` with its `option`, plus one `proposal` or `dismissed` (both when the Drift has no fix option). Weaver adds the fingerprint and the instant. `proposal` attaches a Proposal to a Drift that has none.
+`prepared` is `{question, decisions}`: `question` is a question of `weaver question new` whose `id` is the Drift identity and whose `multi` is false, and `decisions` has one decision per option, in the same order: every fix option once as `fix-code` with its `option`, plus one `proposal` or `dismissed` (both when the Drift has no fix option). Weaver adds the fingerprint and the instant. `proposal` attaches a Proposal to a Drift that has none.
 
 - Argument `<id>`: the card, by identity, unique identity prefix or short number (`P3`, `t3`: a letter and digits is always a short number, and its letter must match the type).
 
@@ -359,9 +359,9 @@ Input:
 
 Output with `--json`: `id`, `number`, `title`, `status`, `prepared`, `proposal`. `--help` gives their types.
 
-Example: `trama drift edit d3 --input -`
+Example: `weaver drift edit d3 --input -`
 
-### `trama drift move <id> code-to-be-fixed|proposal-accepted|dismissed [--input <json>|-] [--root <dir>] [--json]`
+### `weaver drift move <id> code-to-be-fixed|proposal-accepted|dismissed [--input <json>|-] [--root <dir>] [--json]`
 
 Decides a Drift.
 
@@ -377,11 +377,11 @@ Input:
 
 Output with `--json`: `id`, `number`, `title`, `status`, `task`. `--help` gives their types.
 
-Example: `trama drift move d3 dismissed`
+Example: `weaver drift move d3 dismissed`
 
 ## history
 
-### `trama history new [--input <json>|-] [--root <dir>] [--json]`
+### `weaver history new [--input <json>|-] [--root <dir>] [--json]`
 
 Records a History entry for finished Tasks.
 
@@ -398,9 +398,9 @@ Input:
 
 Output with `--json`: `id`, `number`, `title`, `file`, `recorded`, `kept`. `--help` gives their types.
 
-Example: `trama history new --input -`
+Example: `weaver history new --input -`
 
-### `trama history edit <id> [--input <json>|-] [--root <dir>] [--json]`
+### `weaver history edit <id> [--input <json>|-] [--root <dir>] [--json]`
 
 Changes a History entry: replaces fields and adds Tasks.
 
@@ -417,9 +417,9 @@ Input:
 
 Output with `--json`: `id`, `number`, `title`, `file`, `recorded`, `kept`. `--help` gives their types.
 
-Example: `trama history edit <id> --input -`
+Example: `weaver history edit <id> --input -`
 
-### `trama history show <id> [--input <json>|-] [--root <dir>] [--json]`
+### `weaver history show <id> [--input <json>|-] [--root <dir>] [--json]`
 
 Prints a History entry with the Tasks it cites.
 
@@ -427,25 +427,25 @@ Prints a History entry with the Tasks it cites.
 
 Output with `--json`: `id`, `number`, `title`, `summary`, `body`, `created`, `updated`, `tasks`. `--help` gives their types.
 
-Example: `trama history show <id>`
+Example: `weaver history show <id>`
 
-### `trama history list [--input <json>|-] [--root <dir>] [--json]`
+### `weaver history list [--input <json>|-] [--root <dir>] [--json]`
 
 Lists the History entries, newest first.
 
 Output with `--json`: `entries`. `--help` gives their types.
 
-Example: `trama history list`
+Example: `weaver history list`
 
 ## announcement
 
-### `trama announcement new [--input <json>|-] [--root <dir>] [--json]`
+### `weaver announcement new [--input <json>|-] [--root <dir>] [--json]`
 
 Announces a card the agent will file, so that the Board shows a ghost of it.
 
 Prints the `id` to pass as `announcement` when creating the card. An unknown or foreign identity still creates the card, with a note.
 
-Who: Only the agent of a job Weaver started can run it (Weaver sets `TRAMA_JOB` in the environment of that agent). Any other caller is refused with exit 1 and nothing is written.
+Who: Only the agent of a job Weaver started can run it (Weaver sets `WEAVER_JOB` in the environment of that agent). Any other caller is refused with exit 1 and nothing is written.
 
 Input:
 
@@ -454,17 +454,17 @@ Input:
 
 Output with `--json`: `id`. `--help` gives their types.
 
-Example: `trama announcement new --input '{"kind":"task","title":"Cancel an order"}'`
+Example: `weaver announcement new --input '{"kind":"task","title":"Cancel an order"}'`
 
 ## job
 
-### `trama job new [--input <json>|-] [--root <dir>] [--json]`
+### `weaver job new [--input <json>|-] [--root <dir>] [--json]`
 
 Starts a job of Weaver.
 
 `design` needs `request` (a written, unsent, non-empty design request), `scan` covers the whole System, `run` takes one `task` (or runs all the runnable Tasks without it) and `resolve` needs `drift`. Weaver applies the developer's refusals. Run it only when the developer explicitly asked for that job in the conversation.
 
-Who: Only the agent of the project's General that Weaver started can run it (Weaver sets `TRAMA_GENERAL` in the environment of that agent). Any other caller is refused with exit 1 and nothing is written.
+Who: Only the agent of the project's General that Weaver started can run it (Weaver sets `WEAVER_GENERAL` in the environment of that agent). Any other caller is refused with exit 1 and nothing is written.
 
 Input:
 
@@ -475,21 +475,21 @@ Input:
 
 Output with `--json`: `id`, `kind`. `--help` gives their types.
 
-Example: `trama job new --input '{"kind":"scan"}'`
+Example: `weaver job new --input '{"kind":"scan"}'`
 
-### `trama job show [<id>] [--input <json>|-] [--root <dir>] [--json]`
+### `weaver job show [<id>] [--input <json>|-] [--root <dir>] [--json]`
 
 Prints the job of the caller, or the job `<id>`.
 
-Without `<id>` it reads only the environment and the registry record of the job of the caller: `id`, `kind`, `target`, whether the session is a Run (`TRAMA_RUN`) and its `task` (`TRAMA_TASK`); outside a job it says so, with exit 0. `<id>` asks Weaver.
+Without `<id>` it reads only the environment and the registry record of the job of the caller: `id`, `kind`, `target`, whether the session is a Run (`WEAVER_RUN`) and its `task` (`WEAVER_TASK`); outside a job it says so, with exit 0. `<id>` asks Weaver.
 
 - Argument `<id>`: a job identity. Without it, the job of the caller is shown.
 
 Output with `--json`: `job`. `--help` gives their types.
 
-Example: `trama job show`
+Example: `weaver job show`
 
-### `trama job list [--input <json>|-] [--root <dir>] [--json]`
+### `weaver job list [--input <json>|-] [--root <dir>] [--json]`
 
 Lists the jobs of the project.
 
@@ -499,15 +499,15 @@ Input:
 
 Output with `--json`: `jobs`. `--help` gives their types.
 
-Example: `trama job list`
+Example: `weaver job list`
 
-### `trama job edit [--input <json>|-] [--root <dir>] [--json]`
+### `weaver job edit [--input <json>|-] [--root <dir>] [--json]`
 
 Declares what the job is doing now, as a short note.
 
 Line breaks become spaces and the ends are trimmed; an empty note is invalid input. A note over 120 characters is cut to 119 plus `…`, and the output says so. The last 6 notes are kept with their instants; a repeat of the last one only renews its instant.
 
-Who: Only the agent of a job Weaver started can run it (Weaver sets `TRAMA_JOB` in the environment of that agent). Any other caller is refused with exit 1 and nothing is written.
+Who: Only the agent of a job Weaver started can run it (Weaver sets `WEAVER_JOB` in the environment of that agent). Any other caller is refused with exit 1 and nothing is written.
 
 Input:
 
@@ -515,11 +515,11 @@ Input:
 
 Output with `--json`: `note`, `cut`. `--help` gives their types.
 
-Example: `trama job edit --input '{"note":"Reading the order Machine"}'`
+Example: `weaver job edit --input '{"note":"Reading the order Machine"}'`
 
 ## question
 
-### `trama question new [--input <json>|-] [--root <dir>] [--json]`
+### `weaver question new [--input <json>|-] [--root <dir>] [--json]`
 
 Asks the developer a round of questions and waits for the answers.
 
@@ -529,7 +529,7 @@ Write every text so that it stands alone: the developer sees only the round, not
 
 Results: `{"status":"answered","answers":{<id>:{"status":"answered","selected":[...],"text":...}|{"status":"skipped"}}}` (exit 0); `{"status":"unavailable","reason":...}` (exit 0) when the caller is not in a working Weaver job or no Weaver answers before the round is submitted: stop and tell the developer; `{"error":{"code":"invalid-input"|"interrupted"|"cancelled","message":...}}`, exit 2 for `invalid-input` and 1 for the others.
 
-Who: Only the agent of a job Weaver started can use it (Weaver sets `TRAMA_JOB` in the environment of that agent). For any other caller the outcome is `unavailable`, with exit 0.
+Who: Only the agent of a job Weaver started can use it (Weaver sets `WEAVER_JOB` in the environment of that agent). For any other caller the outcome is `unavailable`, with exit 0.
 
 Input:
 
@@ -548,4 +548,4 @@ Output with `--json`: `status`, `answers`, `reason`. `--help` gives their types.
 
 The output is always JSON, with or without `--json`.
 
-Example: `trama question new --input -`
+Example: `weaver question new --input -`
