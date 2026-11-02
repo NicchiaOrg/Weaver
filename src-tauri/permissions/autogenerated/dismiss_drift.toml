@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-dismiss-drift"
+description = "Enables the dismiss_drift command without any pre-configured scope."
+commands.allow = ["dismiss_drift"]
+
+[[permission]]
+identifier = "deny-dismiss-drift"
+description = "Denies the dismiss_drift command without any pre-configured scope."
+commands.deny = ["dismiss_drift"]

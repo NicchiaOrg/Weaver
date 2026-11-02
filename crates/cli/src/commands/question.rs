@@ -1,0 +1,151 @@
+//! `trama question new`: a round of questions for the developer. The registry holds the whole
+//! input and its checks; running it is [`crate::round`], which waits with no time limit and so
+//! never goes through the handlers of the registry.
+
+use serde_json::{Map, Value};
+
+use super::{app_only, in_app, question_fields};
+use crate::spec::*;
+
+pub fn commands() -> Vec<Command> {
+    vec![Command::new("question", "new", "Asks the developer a round of questions and waits for the answers.", app_only)
+        .notes(&[
+            "Prints only JSON on standard output, always. The input is validated whole before Weaver is contacted; then the command waits with no time limit until a result exists: run it with no time limit and wait until it ends.",
+            "Write every text so that it stands alone: the developer sees only the round, not the conversation. Texts are Markdown except labels. Use no first person and no \"Other\" option: a free answer is always offered.",
+            "Results: `{\"status\":\"answered\",\"answers\":{<id>:{\"status\":\"answered\",\"selected\":[...],\"text\":...}|{\"status\":\"skipped\"}}}` (exit 0); `{\"status\":\"unavailable\",\"reason\":...}` (exit 0) when the caller is not in a working Weaver job or no Weaver answers before the round is submitted: stop and tell the developer; `{\"error\":{\"code\":\"invalid-input\"|\"interrupted\"|\"cancelled\",\"message\":...}}`, exit 2 for `invalid-input` and 1 for the others.",
+        ])
+        .access(Access::JobOrUnavailable)
+        .json_only()
+        .input(vec![req("questions", list_min(object(question_fields()), 1), "The questions, at least one.")])
+        .output(vec![
+            req("status", one_of(&["answered", "unavailable"]), "The result."),
+            opt("answers", Ty::Any, "One answer per question id: `{status: \"answered\", selected, text?}` or `{status: \"skipped\"}`."),
+            opt("reason", line(), "Why no question could be shown."),
+        ])
+        .place(in_app)
+        .check(check)
+        .example("trama question new --input -")]
+}
+
+/// The rules of a round that types do not say: ids are unique, labels are unique within a
+/// question and `recommended` is one of the options.
+fn check(input: &Map<String, Value>) -> Vec<Problem> {
+    let mut problems = Vec::new();
+    let Some(questions) = input.get("questions").and_then(Value::as_array) else {
+        return problems;
+    };
+    let mut seen: Vec<&str> = Vec::new();
+    for (index, question) in questions.iter().enumerate() {
+        if let Some(id) = question.get("id").and_then(Value::as_str) {
+            if seen.contains(&id) {
+                problems.push(Problem::new(
+                    format!("questions[{index}].id"),
+                    format!("`{id}` is used by an earlier question: ids are unique"),
+                ));
+            }
+            seen.push(id);
+        }
+        let options = question
+            .get("options")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        let mut labels: Vec<&str> = Vec::new();
+        for (at, option) in question
+            .get("options")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            if let Some(label) = option
+                .get("label")
+                .and_then(Value::as_str)
+                .filter(|label| !label.trim().is_empty())
+            {
+                if labels.contains(&label) {
+                    problems.push(Problem::new(
+                        format!("questions[{index}].options[{at}].label"),
+                        format!("`{label}` is used by an earlier option: labels are unique within a question"),
+                    ));
+                }
+                labels.push(label);
+            }
+        }
+        if let Some(recommended) = question.get("recommended").and_then(Value::as_i64) {
+            if recommended >= 0 && recommended as usize >= options && options > 0 {
+                problems.push(Problem::new(
+                    format!("questions[{index}].recommended"),
+                    format!(
+                        "must be the index of an option, 0 to {} (found {recommended})",
+                        options - 1
+                    ),
+                ));
+            }
+        }
+    }
+    problems
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn problems(value: Value) -> Vec<(String, String)> {
+        check(value.as_object().unwrap())
+            .into_iter()
+            .map(|p| (p.path, p.message))
+            .collect()
+    }
+
+    #[test]
+    fn ids_are_unique_and_recommended_is_an_option() {
+        let (a, b) = (
+            json!({"label": "a", "description": "d"}),
+            json!({"label": "b", "description": "d"}),
+        );
+        let found = problems(json!({ "questions": [
+            {"id": "x", "options": [a, b], "recommended": 1},
+            {"id": "x", "options": [a, b], "recommended": 2},
+        ]}));
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].0, "questions[1].id");
+        assert_eq!(found[1].0, "questions[1].recommended");
+        assert!(found[1].1.contains("0 to 1"));
+    }
+
+    #[test]
+    fn labels_are_unique_within_a_question_only() {
+        let option = |label: &str| json!({"label": label, "description": "d"});
+        let found = problems(json!({ "questions": [
+            {"id": "x", "options": [option("a"), option("b"), option("a")], "recommended": 0},
+            {"id": "y", "options": [option("a"), option("b")], "recommended": 0},
+        ]}));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].0, "questions[0].options[2].label");
+    }
+
+    #[test]
+    fn the_registry_and_the_core_agree_on_what_a_round_is() {
+        let option = |label: &str| json!({"label": label, "description": "d"});
+        let rounds = [
+            json!({"questions": [{"id": "a", "question": "Q", "options": [option("x"), option("y")], "recommended": 1, "multi": true}]}),
+            json!({"questions": [{"id": "a", "question": "Q", "options": [option("x"), option("x")], "recommended": 0, "multi": false}]}),
+            json!({"questions": [{"id": "a", "question": "Q", "options": [option("x"), option("y")], "recommended": 2, "multi": false}]}),
+            json!({"questions": [{"id": "a", "question": "Q", "options": [option("x"), option("y")], "recommended": 0, "multi": false},
+                                 {"id": "a", "question": " ", "options": [option("x"), option("y")], "recommended": 0, "multi": false}]}),
+            json!({"questions": []}),
+        ];
+        for round in rounds {
+            let input = round.as_object().unwrap();
+            let by_registry = crate::exec::check_input(registry_command(), input).is_ok();
+            let by_core = trama_core::question::problems(&round).is_empty();
+            assert_eq!(by_registry, by_core, "{round}");
+        }
+    }
+
+    fn registry_command() -> &'static Command {
+        crate::registry::find("question", "new").unwrap()
+    }
+}

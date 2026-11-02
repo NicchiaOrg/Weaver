@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-omp-install"
+description = "Enables the omp_install command without any pre-configured scope."
+commands.allow = ["omp_install"]
+
+[[permission]]
+identifier = "deny-omp-install"
+description = "Denies the omp_install command without any pre-configured scope."
+commands.deny = ["omp_install"]

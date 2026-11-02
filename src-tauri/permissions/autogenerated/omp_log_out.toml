@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-omp-log-out"
+description = "Enables the omp_log_out command without any pre-configured scope."
+commands.allow = ["omp_log_out"]
+
+[[permission]]
+identifier = "deny-omp-log-out"
+description = "Denies the omp_log_out command without any pre-configured scope."
+commands.deny = ["omp_log_out"]

@@ -1,0 +1,13 @@
+{
+  "name": "weaver",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Weaver workspace root: runs the Tauri CLI; the interface lives in ui/.",
+  "packageManager": "pnpm@12.16.1",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4"
+  }
+}

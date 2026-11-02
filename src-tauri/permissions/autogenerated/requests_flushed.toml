@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-requests-flushed"
+description = "Enables the requests_flushed command without any pre-configured scope."
+commands.allow = ["requests_flushed"]
+
+[[permission]]
+identifier = "deny-requests-flushed"
+description = "Denies the requests_flushed command without any pre-configured scope."
+commands.deny = ["requests_flushed"]

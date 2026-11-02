@@ -1,0 +1,15 @@
+[package]
+name = "fake-acp-agent"
+description = "A scripted fake ACP agent for the tests of the jobs: no omp, no network."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "fake-acp-agent"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true

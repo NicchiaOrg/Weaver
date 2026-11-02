@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-board-snapshot"
+description = "Enables the board_snapshot command without any pre-configured scope."
+commands.allow = ["board_snapshot"]
+
+[[permission]]
+identifier = "deny-board-snapshot"
+description = "Denies the board_snapshot command without any pre-configured scope."
+commands.deny = ["board_snapshot"]

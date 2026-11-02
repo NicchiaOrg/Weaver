@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-question-round-act"
+description = "Enables the question_round_act command without any pre-configured scope."
+commands.allow = ["question_round_act"]
+
+[[permission]]
+identifier = "deny-question-round-act"
+description = "Denies the question_round_act command without any pre-configured scope."
+commands.deny = ["question_round_act"]

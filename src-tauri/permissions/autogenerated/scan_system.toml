@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-scan-system"
+description = "Enables the scan_system command without any pre-configured scope."
+commands.allow = ["scan_system"]
+
+[[permission]]
+identifier = "deny-scan-system"
+description = "Denies the scan_system command without any pre-configured scope."
+commands.deny = ["scan_system"]

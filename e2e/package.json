@@ -1,0 +1,17 @@
+{
+  "name": "weaver-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "End-to-end smoke tests of the release build of Weaver: tauri-driver and WebdriverIO (Linux and Windows; macOS has no WebDriver for its webview).",
+  "scripts": {
+    "test": "wdio run wdio.conf.mjs"
+  },
+  "devDependencies": {
+    "@wdio/cli": "^10.1.0",
+    "@wdio/local-runner": "^10.1.0",
+    "@wdio/mocha-framework": "^10.1.0",
+    "@wdio/spec-reporter": "^10.1.0",
+    "webdriverio": "^10.1.0"
+  }
+}

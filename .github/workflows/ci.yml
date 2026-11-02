@@ -1,0 +1,177 @@
+name: ci
+
+# Checks of every change (requirements/release#General, specs#ci). `main` and `dev` are protected:
+# `main` changes only from `dev` through a pull request whose `ci` checks passed.
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Version of tauri-driver the end-to-end tests are run with (cargo install --locked).
+  TAURI_DRIVER_VERSION: "2.1.0"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Version alignment (requirements/release#General) and the tests of the scripts of this folder.
+  versions:
+    name: versions
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Tests of the scripts
+        run: node --test scripts/
+      - name: The version is the same in the five files
+        run: node scripts/check-versions.mjs
+
+  build-test:
+    name: build-test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macos-arm64, os: macos-latest }
+          - { name: windows-x64, os: windows-latest }
+          - { name: linux-x64, os: ubuntu-22.04 }
+    env:
+      BUILT_TRAMA: ${{ github.workspace }}/target/release/trama${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+    steps:
+      - name: Install the Tauri system packages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - uses: actions/checkout@v4
+
+      # The toolchains are pinned in the repository: rust-toolchain.toml, .nvmrc and `packageManager`.
+      - name: Read the pinned toolchain versions
+        id: pins
+        run: |
+          rust="$(sed -n 's/^channel *= *"\(.*\)" *$/\1/p' rust-toolchain.toml | tr -d '\r')"
+          node="$(tr -d '\r\n ' < .nvmrc)"
+          pnpm="$(sed -n 's/.*"packageManager": *"pnpm@\([^"]*\)".*/\1/p' package.json | tr -d '\r')"
+          for pin in rust node pnpm; do
+            if [ -z "${!pin}" ]; then echo "::error::no pinned $pin version found"; exit 1; fi
+          done
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+          echo "node=$node" >> "$GITHUB_OUTPUT"
+          echo "pnpm=$pnpm" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: pnpm/action-setup@v4
+
+      - name: Install the Rust toolchain of rust-toolchain.toml
+        run: |
+          rustup toolchain install --no-self-update
+          rustc --version
+          case "$(rustc --version)" in
+            "rustc ${{ steps.pins.outputs.rust }} "*) ;;
+            *) echo "::error::rustc is not the pinned version ${{ steps.pins.outputs.rust }}"; exit 1 ;;
+          esac
+
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - name: Cache the JS package store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.pins.outputs.node }}-pnpm-${{ steps.pins.outputs.pnpm }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Cache the Cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-rust-${{ steps.pins.outputs.rust }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install the JS dependencies from the lockfile
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the frontend
+        run: pnpm --dir ui build
+
+      # The generated files of ui/src/bindings are committed; a stale or missing one fails here.
+      - name: The ts-rs types are up to date
+        run: cargo test -p weaver --lib generated_types_are_up_to_date --locked
+
+      - name: Rust tests
+        run: cargo test --workspace --locked
+
+      - name: Vitest
+        run: pnpm --dir ui test
+
+      # The release build of the app, with `trama` bundled as its sidecar (built by src-tauri/build.rs
+      # and copied next to the app binary). The bundles themselves are made by the release workflow.
+      - name: Build the app in release mode, with trama
+        run: pnpm tauri build --no-bundle --ci
+
+      - name: Smoke of trama
+        run: node scripts/smoke-trama.mjs "$BUILT_TRAMA"
+
+      - name: CLI contract tests
+        run: node --test tests/cli-contract/
+        env:
+          CLI_CONTRACT_BIN: ${{ env.BUILT_TRAMA }}
+
+      # End-to-end tests with tauri-driver run on Linux and Windows only: macOS has no WebDriver for
+      # its webview. They drive the release build above, never a dev server.
+      - name: Install the WebDriver tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y webkit2gtk-driver xvfb dbus
+
+      - name: Install msedgedriver of the installed Edge version (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $edge = (Get-ItemProperty 'HKCU:\Software\Microsoft\Edge\BLBeacon').version
+          if (-not $edge) { throw 'Microsoft Edge is not installed on the runner' }
+          $dir = Join-Path $env:RUNNER_TEMP 'msedgedriver'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Invoke-WebRequest "https://msedgedriver.microsoft.com/$edge/edgedriver_win64.zip" -OutFile "$dir\edgedriver.zip"
+          Expand-Archive "$dir\edgedriver.zip" -DestinationPath $dir -Force
+          $driver = Join-Path $dir 'msedgedriver.exe'
+          & $driver --version
+          "E2E_NATIVE_DRIVER=$driver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Cache tauri-driver
+        if: runner.os != 'macOS'
+        id: tauri-driver-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/tauri-driver*
+          key: tauri-driver-${{ runner.os }}-${{ runner.arch }}-rust-${{ steps.pins.outputs.rust }}-${{ env.TAURI_DRIVER_VERSION }}
+      - name: Install tauri-driver
+        if: runner.os != 'macOS' && steps.tauri-driver-cache.outputs.cache-hit != 'true'
+        run: cargo install tauri-driver --locked --version "$TAURI_DRIVER_VERSION"
+
+      - name: End-to-end tests (Linux, under xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum dbus-run-session -- pnpm --dir e2e test
+
+      - name: End-to-end tests (Windows)
+        if: runner.os == 'Windows'
+        run: pnpm --dir e2e test

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-project-folder"
+description = "Enables the project_folder command without any pre-configured scope."
+commands.allow = ["project_folder"]
+
+[[permission]]
+identifier = "deny-project-folder"
+description = "Denies the project_folder command without any pre-configured scope."
+commands.deny = ["project_folder"]

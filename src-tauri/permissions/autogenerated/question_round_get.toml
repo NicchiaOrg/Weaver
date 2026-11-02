@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-question-round-get"
+description = "Enables the question_round_get command without any pre-configured scope."
+commands.allow = ["question_round_get"]
+
+[[permission]]
+identifier = "deny-question-round-get"
+description = "Denies the question_round_get command without any pre-configured scope."
+commands.deny = ["question_round_get"]

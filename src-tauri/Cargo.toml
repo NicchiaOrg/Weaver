@@ -1,0 +1,45 @@
+[package]
+name = "weaver"
+description = "Weaver: the desktop app of Trama."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+default-run = "weaver"
+
+[lib]
+name = "weaver_lib"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "weaver"
+path = "src/main.rs"
+
+[features]
+# Serves the embedded UI instead of the dev server; `tauri build` turns it on.
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-window-state = "2"
+notify = "8"
+thiserror.workspace = true
+tokio = { version = "1", features = ["rt", "signal", "sync", "time"] }
+trama-cli = { path = "../crates/cli" }
+trama-core.workspace = true
+ts-rs = { version = "11", features = ["serde-compat"] }
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+tempfile.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }

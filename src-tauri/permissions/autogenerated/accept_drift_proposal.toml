@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-accept-drift-proposal"
+description = "Enables the accept_drift_proposal command without any pre-configured scope."
+commands.allow = ["accept_drift_proposal"]
+
+[[permission]]
+identifier = "deny-accept-drift-proposal"
+description = "Denies the accept_drift_proposal command without any pre-configured scope."
+commands.deny = ["accept_drift_proposal"]

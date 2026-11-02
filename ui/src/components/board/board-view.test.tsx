@@ -1,0 +1,389 @@
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { BoardCard } from "@/bindings/BoardCard";
+import type { BoardSnapshot } from "@/bindings/BoardSnapshot";
+import type { Ghost } from "@/bindings/Ghost";
+import { BoardProvider } from "@/components/board/board-state";
+import { BoardActionsContext, type BoardActions } from "@/components/board/board-ui";
+import { BoardView } from "@/components/board/board-view";
+import { ProjectContext } from "@/components/project-context";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { call, on } from "@/lib/backend";
+import { proposalView } from "@/components/board/proposal-fixtures";
+import { driftView } from "@/components/board/drift-fixtures";
+
+vi.mock("@/lib/backend", () => ({
+  call: vi.fn(),
+  on: vi.fn(),
+  isAppError: (value: unknown) => typeof value === "object" && value !== null && "code" in value && "message" in value,
+}));
+
+const PROJECT = "0123456789abcdef";
+
+function head(id: string, shortNumber: string | null, title: string, extra: { body?: string; agentFinishing?: boolean } = {}) {
+  return { id, shortNumber, title, body: extra.body ?? "", created: "2026-11-02T07:00:00.000Z", agentFinishing: extra.agentFinishing ?? false };
+}
+
+function task(id: string, shortNumber: string, title: string, patch: Partial<Extract<BoardCard, { kind: "task" }>> = {}): BoardCard {
+  return {
+    kind: "task",
+    head: head(id, shortNumber, title),
+    doing: false,
+    heldByAgent: false,
+    technical: false,
+    refs: [],
+    label: null,
+    blockedBy: [],
+    waitingFor: [],
+    runReasons: [],
+    deleteReasons: [],
+    ...patch,
+  };
+}
+
+function drift(id: string, shortNumber: string, title: string): BoardCard {
+  return { kind: "drift", head: head(id, shortNumber, title), origin: null, view: driftView() };
+}
+
+function proposal(id: string, shortNumber: string, title: string): BoardCard {
+  return { kind: "proposal", head: head(id, shortNumber, title), standing: "open", proposalKind: "change", view: proposalView() };
+}
+
+function ghost(id: string, kind: Ghost["kind"], title: string, patch: Partial<Ghost> = {}): Ghost {
+  return { id, jobId: `job-${id}`, kind, title, phase: "writing", note: null, ...patch };
+}
+
+function board(revision: number, patch: Partial<BoardSnapshot> = {}): BoardSnapshot {
+  return {
+    projectId: PROJECT,
+    revision,
+    backlog: [],
+    active: [],
+    ghosts: [],
+    gathered: [],
+    runAllReasons: ["No Task is in To do"],
+    doneSinceLastScan: 0,
+    warnings: [],
+    ...patch,
+  };
+}
+
+let current: BoardSnapshot;
+let handlers: Map<string, (payload: unknown) => void>;
+let deleteResult: { code: string; message: string } | null;
+
+function install(initial: BoardSnapshot) {
+  current = initial;
+  handlers = new Map();
+  deleteResult = null;
+  vi.mocked(on).mockImplementation(((name: string, handler: (payload: unknown) => void) => {
+    handlers.set(name, handler);
+    return Promise.resolve(() => {});
+  }) as unknown as typeof on);
+  vi.mocked(call).mockImplementation(((name: string) => {
+    if (name === "board_snapshot") return Promise.resolve(current);
+    if (name === "delete_task") return deleteResult ? Promise.reject(deleteResult) : Promise.resolve(null);
+    return Promise.reject(new Error(`unexpected command ${name}`));
+  }) as unknown as typeof call);
+}
+
+/** The backend sends a new picture: a `project-changed` event, then the answer to the next fetch. */
+async function publish(next: BoardSnapshot) {
+  current = next;
+  await act(async () => {
+    handlers.get("project-changed")?.({ projectId: PROJECT, revision: next.revision, slices: ["board"] });
+  });
+}
+
+async function show(actions: BoardActions = {}, openJob = vi.fn()) {
+  render(
+    <TooltipProvider>
+      <ProjectContext.Provider value={{ projectId: PROJECT, showView: vi.fn(), openJob, openedJob: null }}>
+        <BoardActionsContext.Provider value={actions}>
+          <BoardProvider projectId={PROJECT}>
+            <BoardView />
+          </BoardProvider>
+        </BoardActionsContext.Provider>
+      </ProjectContext.Provider>
+    </TooltipProvider>,
+  );
+  await screen.findByRole("region", { name: "Backlog" });
+  return { openJob };
+}
+
+const backlog = () => screen.getByRole("region", { name: "Backlog" });
+const active = () => screen.getByRole("region", { name: "Active" });
+
+/** The reasons a guarded control lists, one per line, as its accessible description holds them. */
+function reasonsOf(button: HTMLElement): string[] {
+  // An open tooltip adds its own id after the control's own description, which is the first.
+  const own = (button.getAttribute("aria-describedby") ?? "").split(" ")[0] ?? "";
+  const lines = [...(document.getElementById(own)?.querySelectorAll(":scope > .block") ?? [])];
+  return lines.map((line) => line.textContent ?? "");
+}
+
+beforeEach(() => {
+  install(board(1));
+});
+
+describe("columns", () => {
+  it("shows Backlog and Active with the number of their real cards, never counting ghosts", async () => {
+    install(
+      board(1, {
+        backlog: [proposal("pppppppp", "P1", "Add a cart"), drift("dddddddd", "D1", "Cart total")],
+        active: [task("tttttttt", "T1", "Write the cart")],
+        ghosts: [ghost("g1", "proposal", "Coming proposal"), ghost("g2", "task", "Coming task")],
+      }),
+    );
+    await show();
+    const regions = screen.getAllByRole("region");
+    expect(regions.map((region) => region.querySelector("h2")?.textContent)).toEqual(["Backlog2", "Active1"]);
+    expect(within(backlog()).getByRole("button", { name: "Add a cart" })).toBeInTheDocument();
+    expect(within(backlog()).getByRole("button", { name: "Cart total" })).toBeInTheDocument();
+    // The ghosts sit in their target columns, after the cards.
+    expect(within(backlog()).getByRole("button", { name: "Proposal being prepared by the agent: Coming proposal, Writing" })).toBeInTheDocument();
+    expect(within(active()).getByRole("button", { name: "Task being prepared by the agent: Coming task, Writing" })).toBeInTheDocument();
+  });
+
+  it("says Nothing to decide and Nothing active, also above ghosts", async () => {
+    await show();
+    expect(within(backlog()).getByText("Nothing to decide")).toBeInTheDocument();
+    expect(within(active()).getByText("Nothing active")).toBeInTheDocument();
+  });
+
+  it("keeps the empty text above a ghost and counts 0", async () => {
+    install(board(1, { ghosts: [ghost("g1", "drift", "Coming drift", { phase: "preparing" })] }));
+    await show();
+    expect(backlog().querySelector("h2")).toHaveTextContent("Backlog0");
+    const text = within(backlog()).getByText("Nothing to decide");
+    const button = within(backlog()).getByRole("button", { name: "Drift being prepared by the agent: Coming drift, Preparing" });
+    expect(text.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("keeps the backend's order of the cards", async () => {
+    install(board(1, { active: [task("bbbbbbbb", "T2", "Second"), task("aaaaaaaa", "T1", "First")] }));
+    await show();
+    const titles = within(active()).getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
+    expect(titles).toEqual(["Second", "First"]);
+  });
+});
+
+describe("ghosts", () => {
+  it("is one button that opens the conversation of its job, with the job's note on one line", async () => {
+    install(board(1, { ghosts: [ghost("g1", "task", "Coming task", { note: "Reading the Model", phase: "waiting-for-answers" })] }));
+    const { openJob } = await show();
+    const button = within(active()).getByRole("button", {
+      name: "Task being prepared by the agent: Coming task, Waiting for your answers",
+    });
+    expect(button).toHaveTextContent("Reading the Model");
+    const user = userEvent.setup();
+    await user.click(button);
+    expect(openJob).toHaveBeenCalledWith("job-g1");
+  });
+
+  it("leaves in the same picture in which its card arrives", async () => {
+    install(board(1, { ghosts: [ghost("g1", "task", "Coming task")] }));
+    await show();
+    await publish(board(2, { active: [task("tttttttt", "T1", "Coming task")] }));
+    expect(within(active()).queryByRole("button", { name: /being prepared by the agent/ })).not.toBeInTheDocument();
+    expect(within(active()).getByRole("button", { name: "Coming task" })).toBeInTheDocument();
+  });
+});
+
+describe("Run all", () => {
+  it("lists every reason it is disabled, in the order of the control, and ignores a click", async () => {
+    const runAll = vi.fn();
+    install(board(1, { runAllReasons: ["Drifts are being resolved", "A run is in progress", "No Task is in To do"] }));
+    await show({ runAll });
+    const button = within(active()).getByRole("button", { name: "Run all" });
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(reasonsOf(button)).toEqual(["Drifts are being resolved", "A run is in progress", "No Task is in To do"]);
+    await userEvent.setup().click(button);
+    expect(runAll).not.toHaveBeenCalled();
+  });
+
+  it("shows the blocked reason alone and enables itself when the backend says so, without moving the focus", async () => {
+    const runAll = vi.fn();
+    install(board(1, { runAllReasons: ["All the Tasks in To do are blocked"] }));
+    await show({ runAll });
+    const user = userEvent.setup();
+    const button = within(active()).getByRole("button", { name: "Run all" });
+    expect(reasonsOf(button)).toEqual(["All the Tasks in To do are blocked"]);
+    button.focus();
+    await publish(board(2, { runAllReasons: [] }));
+    const same = within(active()).getByRole("button", { name: "Run all" });
+    expect(same).toBe(button);
+    expect(same).toHaveFocus();
+    expect(same).not.toHaveAttribute("aria-disabled");
+    await user.click(same);
+    expect(runAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("is a primary button in Active and `+ Work Item` an always enabled one in Backlog", async () => {
+    const newRequest = vi.fn();
+    await show({ newRequest });
+    const add = within(backlog()).getByRole("button", { name: "Work Item" });
+    expect(add).not.toHaveAttribute("aria-disabled");
+    await userEvent.setup().click(add);
+    expect(newRequest).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Scan System", () => {
+  it("confirms first, and cancelling leaves the count and the work untouched", async () => {
+    const scanSystem = vi.fn();
+    install(board(1, { doneSinceLastScan: 3 }));
+    await show({ scanSystem });
+    expect(screen.getByText("· 3 done since last scan")).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Scan System" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Compare the whole System with the code?")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(scanSystem).not.toHaveBeenCalled();
+    expect(screen.getByText("· 3 done since last scan")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Scan System" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Scan System" }));
+    expect(scanSystem).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the count at 0", async () => {
+    await show();
+    expect(screen.queryByText(/done since last scan/)).not.toBeInTheDocument();
+  });
+});
+
+describe("details", () => {
+  const body = "Carry out the **cart**.";
+
+  function withTask(title = "Write the cart", patch: Partial<Extract<BoardCard, { kind: "task" }>> = {}): BoardCard {
+    const base = task("tttttttt", "T4", title, patch);
+    return { ...base, head: { ...base.head, body } } as BoardCard;
+  }
+
+  it("opens with a click on the card and with Enter on its title, and Esc closes it", async () => {
+    install(board(1, { active: [withTask()] }));
+    await show();
+    const user = userEvent.setup();
+    const title = within(active()).getByRole("button", { name: "Write the cart" });
+    await user.click(title);
+    expect(await screen.findByRole("dialog")).toHaveTextContent("Carry out the cart.");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(title).toHaveFocus();
+
+    title.focus();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("updates in place with each picture, without moving the focus", async () => {
+    install(board(1, { active: [withTask()] }));
+    await show();
+    const user = userEvent.setup();
+    await user.click(within(active()).getByRole("button", { name: "Write the cart" }));
+    const dialog = await screen.findByRole("dialog");
+    const focused = document.activeElement;
+    expect(dialog).toContainElement(focused as HTMLElement);
+
+    await publish(board(2, { active: [withTask("Write the whole cart")] }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("Write the whole cart");
+    expect(document.activeElement).toBe(focused);
+  });
+
+  it("closes by itself when the card leaves the Board and the focus goes to its column", async () => {
+    install(board(1, { active: [withTask()], backlog: [proposal("pppppppp", "P1", "Add a cart")] }));
+    await show();
+    const user = userEvent.setup();
+    await user.click(within(active()).getByRole("button", { name: "Write the cart" }));
+    await screen.findByRole("dialog");
+
+    await publish(board(2, { backlog: [proposal("pppppppp", "P1", "Add a cart")] }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(active()).toHaveFocus());
+
+    // A card that comes back does not reopen what the developer no longer has open.
+    await publish(board(3, { active: [withTask()] }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
+describe("a refused decision", () => {
+  it("shows a notice, writes nothing on the UI side and shows the Board as it holds now", async () => {
+    const user = userEvent.setup();
+    const finishing = { ...task("tttttttt", "T4", "Write the cart"), deleteReasons: ["The agent is still finishing"] } as BoardCard;
+    // The button was enabled when the developer saw the Board; the agent works by the time it is applied.
+    install(board(1, { active: [task("tttttttt", "T4", "Write the cart")] }));
+    await show();
+    deleteResult = { code: "refused", message: "Could not delete T4: the agent that filed it is still working." };
+    current = board(2, { active: [finishing] });
+
+    await user.click(within(active()).getByRole("button", { name: "Write the cart" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+    const confirm = await screen.findByRole("alertdialog");
+    expect(within(confirm).getByText("Delete T4 for good?")).toBeInTheDocument();
+    await user.click(within(confirm).getByRole("button", { name: "Delete" }));
+
+    expect(await screen.findByText("Could not delete T4: the agent that filed it is still working.")).toBeInTheDocument();
+    expect(vi.mocked(call).mock.calls.filter(([name]) => name === "delete_task")).toEqual([
+      ["delete_task", { projectId: PROJECT, taskId: "tttttttt" }],
+    ]);
+    // The card is still there, and Delete now lists why it is not available.
+    await waitFor(() => {
+      const delete_ = within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" });
+      expect(reasonsOf(delete_)).toEqual(["The agent is still finishing"]);
+    });
+    // The first Esc closes the tooltip the focused Delete shows, the second the dialog.
+    await user.keyboard("{Escape}");
+    if (screen.queryByRole("dialog")) await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(within(active()).getByRole("button", { name: "Write the cart" })).toBeInTheDocument();
+  });
+
+  it("closes the notice with its close button", async () => {
+    await show();
+    await act(async () => {
+      handlers.get("notice")?.({ projectId: PROJECT, id: "n1", text: "P3 went back to Draft while it was being decided." });
+      handlers.get("notice")?.({ projectId: PROJECT, id: "n1", text: "P3 went back to Draft while it was being decided." });
+      handlers.get("notice")?.({ projectId: "another-project", id: "n2", text: "Not for this project." });
+    });
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Close notice" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+describe("pictures", () => {
+  it("drops an answer older than the one it shows", async () => {
+    install(board(5, { active: [task("tttttttt", "T1", "Current")] }));
+    await show();
+    await publish(board(4, { active: [task("tttttttt", "T1", "Old")] }));
+    expect(within(active()).getByRole("button", { name: "Current" })).toBeInTheDocument();
+    expect(within(active()).queryByRole("button", { name: "Old" })).not.toBeInTheDocument();
+  });
+
+  it("asks again for a gap in the revisions, and ignores another project's events", async () => {
+    await show();
+    const asked = () => vi.mocked(call).mock.calls.filter(([name]) => name === "board_snapshot").length;
+    expect(asked()).toBe(1);
+    await act(async () => handlers.get("project-changed")?.({ projectId: PROJECT, revision: 2, slices: ["history"] }));
+    expect(asked()).toBe(1);
+    await act(async () => handlers.get("project-changed")?.({ projectId: PROJECT, revision: 5, slices: ["history"] }));
+    expect(asked()).toBe(2);
+    await act(async () => handlers.get("project-changed")?.({ projectId: "other", revision: 6, slices: ["board"] }));
+    expect(asked()).toBe(2);
+  });
+});
+
+describe("History warnings", () => {
+  it("shows a warning above the columns for a cited Task that could not be recorded in History", async () => {
+    const text = "Could not record abcd1234 in History: it has no `finished` instant. The Task stays until its copy can be made.";
+    install(board(1, { warnings: [text] }));
+    await show();
+    expect(screen.getByRole("alert")).toHaveTextContent(text);
+  });
+});

@@ -1,0 +1,310 @@
+//! Tauri commands: the actions the UI can take. Each returns a result or a typed
+//! [`AppError`]; updates travel the other way as events (see [`crate::events`]).
+//!
+//! Adding a command:
+//! 1. write the `#[tauri::command]` function here (or in a submodule), with payload types that
+//!    derive `Serialize` and `ts_rs::TS`;
+//! 2. add it to [`CommandName`], to `generate_handler!` in `lib.rs`, to `COMMANDS` in
+//!    `build.rs` and to the permissions of `capabilities/default.json`;
+//! 3. add its payload types to `bindings::export_all` and run
+//!    `cargo test -p weaver --lib regenerate_bindings -- --ignored`.
+//!
+//! Disk work goes through [`crate::blocking::disk`] or [`crate::mutations::MutationQueues`].
+
+use serde::Serialize;
+use tauri::{AppHandle, State};
+use ts_rs::TS;
+
+use crate::blocking;
+use crate::error::AppError;
+use crate::state::AppState;
+
+/// Names of the commands, as the UI invokes them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandName {
+    AppInfo,
+    StartupFailures,
+    OpenLog,
+    OpenUrl,
+    UpdateStatus,
+    UpdateLater,
+    UpdateInstall,
+    SettingsGet,
+    SettingsSet,
+    BoardSnapshot,
+    DeleteTask,
+    ApproveProposal,
+    RejectProposal,
+    DiscardProposal,
+    ChooseProposalModel,
+    ResolveDrift,
+    FixDriftCode,
+    AcceptDriftProposal,
+    DismissDrift,
+    HistorySnapshot,
+    ViewSnapshot,
+    ProjectStatus,
+    InitialiseProject,
+    UpdateSkills,
+    ProjectFolder,
+    ImportCode,
+    OmpStatus,
+    OmpInstall,
+    OmpLogIn,
+    OmpLogOut,
+    WelcomeState,
+    OpenProject,
+    OpenFolder,
+    RemoveRecent,
+    OpenInEditor,
+    JobsSnapshot,
+    JobConversation,
+    JobSendMessage,
+    JobStop,
+    JobAnswerPermission,
+    JobRemove,
+    RunTask,
+    RunAll,
+    ScanSystem,
+    GeneralSnapshot,
+    GeneralSendMessage,
+    GeneralStop,
+    GeneralAnswerPermission,
+    GeneralClear,
+    RequestsList,
+    RequestRead,
+    RequestNew,
+    RequestSave,
+    RequestSend,
+    RequestDiscard,
+    RequestImageAdd,
+    RequestImageImport,
+    RequestImage,
+    RequestsFlushed,
+    QuestionRoundGet,
+    QuestionRoundAct,
+}
+
+impl CommandName {
+    pub const ALL: &'static [CommandName] = &[
+        CommandName::AppInfo,
+        CommandName::StartupFailures,
+        CommandName::OpenLog,
+        CommandName::OpenUrl,
+        CommandName::UpdateStatus,
+        CommandName::UpdateLater,
+        CommandName::UpdateInstall,
+        CommandName::SettingsGet,
+        CommandName::SettingsSet,
+        CommandName::BoardSnapshot,
+        CommandName::DeleteTask,
+        CommandName::ApproveProposal,
+        CommandName::RejectProposal,
+        CommandName::DiscardProposal,
+        CommandName::ChooseProposalModel,
+        CommandName::ResolveDrift,
+        CommandName::FixDriftCode,
+        CommandName::AcceptDriftProposal,
+        CommandName::DismissDrift,
+        CommandName::HistorySnapshot,
+        CommandName::ViewSnapshot,
+        CommandName::ProjectStatus,
+        CommandName::InitialiseProject,
+        CommandName::UpdateSkills,
+        CommandName::ProjectFolder,
+        CommandName::ImportCode,
+        CommandName::OmpStatus,
+        CommandName::OmpInstall,
+        CommandName::OmpLogIn,
+        CommandName::OmpLogOut,
+        CommandName::WelcomeState,
+        CommandName::OpenProject,
+        CommandName::OpenFolder,
+        CommandName::RemoveRecent,
+        CommandName::OpenInEditor,
+        CommandName::JobsSnapshot,
+        CommandName::JobConversation,
+        CommandName::JobSendMessage,
+        CommandName::JobStop,
+        CommandName::JobAnswerPermission,
+        CommandName::JobRemove,
+        CommandName::RunTask,
+        CommandName::RunAll,
+        CommandName::ScanSystem,
+        CommandName::GeneralSnapshot,
+        CommandName::GeneralSendMessage,
+        CommandName::GeneralStop,
+        CommandName::GeneralAnswerPermission,
+        CommandName::GeneralClear,
+        CommandName::RequestsList,
+        CommandName::RequestRead,
+        CommandName::RequestNew,
+        CommandName::RequestSave,
+        CommandName::RequestSend,
+        CommandName::RequestDiscard,
+        CommandName::RequestImageAdd,
+        CommandName::RequestImageImport,
+        CommandName::RequestImage,
+        CommandName::RequestsFlushed,
+        CommandName::QuestionRoundGet,
+        CommandName::QuestionRoundAct,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CommandName::AppInfo => "app_info",
+            CommandName::StartupFailures => "startup_failures",
+            CommandName::OpenLog => "open_log",
+            CommandName::OpenUrl => "open_url",
+            CommandName::UpdateStatus => "update_status",
+            CommandName::UpdateLater => "update_later",
+            CommandName::UpdateInstall => "update_install",
+            CommandName::SettingsGet => "settings_get",
+            CommandName::SettingsSet => "settings_set",
+            CommandName::BoardSnapshot => "board_snapshot",
+            CommandName::DeleteTask => "delete_task",
+            CommandName::ApproveProposal => "approve_proposal",
+            CommandName::RejectProposal => "reject_proposal",
+            CommandName::DiscardProposal => "discard_proposal",
+            CommandName::ChooseProposalModel => "choose_proposal_model",
+            CommandName::ResolveDrift => "resolve_drift",
+            CommandName::FixDriftCode => "fix_drift_code",
+            CommandName::AcceptDriftProposal => "accept_drift_proposal",
+            CommandName::DismissDrift => "dismiss_drift",
+            CommandName::HistorySnapshot => "history_snapshot",
+            CommandName::ViewSnapshot => "view_snapshot",
+            CommandName::ProjectStatus => "project_status",
+            CommandName::InitialiseProject => "initialise_project",
+            CommandName::UpdateSkills => "update_skills",
+            CommandName::ProjectFolder => "project_folder",
+            CommandName::ImportCode => "import_code",
+            CommandName::OmpStatus => "omp_status",
+            CommandName::OmpInstall => "omp_install",
+            CommandName::OmpLogIn => "omp_log_in",
+            CommandName::OmpLogOut => "omp_log_out",
+            CommandName::WelcomeState => "welcome_state",
+            CommandName::OpenProject => "open_project",
+            CommandName::OpenFolder => "open_folder",
+            CommandName::RemoveRecent => "remove_recent",
+            CommandName::OpenInEditor => "open_in_editor",
+            CommandName::JobsSnapshot => "jobs_snapshot",
+            CommandName::JobConversation => "job_conversation",
+            CommandName::JobSendMessage => "job_send_message",
+            CommandName::JobStop => "job_stop",
+            CommandName::JobAnswerPermission => "job_answer_permission",
+            CommandName::JobRemove => "job_remove",
+            CommandName::RunTask => "run_task",
+            CommandName::RunAll => "run_all",
+            CommandName::ScanSystem => "scan_system",
+            CommandName::GeneralSnapshot => "general_snapshot",
+            CommandName::GeneralSendMessage => "general_send_message",
+            CommandName::GeneralStop => "general_stop",
+            CommandName::GeneralAnswerPermission => "general_answer_permission",
+            CommandName::GeneralClear => "general_clear",
+            CommandName::RequestsList => "requests_list",
+            CommandName::RequestRead => "request_read",
+            CommandName::RequestNew => "request_new",
+            CommandName::RequestSave => "request_save",
+            CommandName::RequestSend => "request_send",
+            CommandName::RequestDiscard => "request_discard",
+            CommandName::RequestImageAdd => "request_image_add",
+            CommandName::RequestImageImport => "request_image_import",
+            CommandName::RequestImage => "request_image",
+            CommandName::RequestsFlushed => "requests_flushed",
+            CommandName::QuestionRoundGet => "question_round_get",
+            CommandName::QuestionRoundAct => "question_round_act",
+        }
+    }
+}
+
+/// Facts about the running app, shown by the base interface.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AppInfo {
+    pub name: String,
+    pub version: String,
+    pub identifier: String,
+    pub local_data_dir: String,
+}
+
+#[tauri::command]
+pub async fn app_info(app: AppHandle, state: State<'_, AppState>) -> Result<AppInfo, AppError> {
+    let identifier = app.config().identifier.clone();
+    let local_data_dir = state.dirs.local_data_dir().to_path_buf();
+    blocking::disk(move || AppInfo {
+        name: "Weaver".to_owned(),
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        identifier,
+        local_data_dir: local_data_dir.to_string_lossy().into_owned(),
+    })
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_names_are_the_snake_case_function_names() {
+        assert_eq!(CommandName::AppInfo.as_str(), "app_info");
+        assert_eq!(CommandName::StartupFailures.as_str(), "startup_failures");
+        assert_eq!(CommandName::OpenLog.as_str(), "open_log");
+        assert_eq!(CommandName::OpenUrl.as_str(), "open_url");
+        assert_eq!(CommandName::UpdateStatus.as_str(), "update_status");
+        assert_eq!(CommandName::UpdateLater.as_str(), "update_later");
+        assert_eq!(CommandName::UpdateInstall.as_str(), "update_install");
+        let json = serde_json::to_value(CommandName::AppInfo).unwrap();
+        assert_eq!(json, serde_json::json!("app_info"));
+    }
+
+    /// The capability grants exactly the commands of [`CommandName`] (as `allow-<name>`), and no
+    /// plugin permission: plugins are called from Rust only.
+    #[test]
+    fn the_capability_grants_exactly_weavers_commands_and_core_event_and_window_permissions() {
+        let text = include_str!("../capabilities/default.json");
+        let capability: serde_json::Value = serde_json::from_str(text).unwrap();
+        let permissions: Vec<&str> = capability["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap())
+            .collect();
+        let granted_commands: Vec<String> = permissions
+            .iter()
+            .filter(|p| !p.contains(':'))
+            .map(|p| {
+                p.strip_prefix("allow-")
+                    .expect("command permission")
+                    .replace('-', "_")
+            })
+            .collect();
+        let mut expected: Vec<String> = CommandName::ALL
+            .iter()
+            .map(|c| c.as_str().to_owned())
+            .collect();
+        expected.sort();
+        let mut granted = granted_commands;
+        granted.sort();
+        assert_eq!(granted, expected);
+        for permission in permissions.iter().filter(|p| p.contains(':')) {
+            assert!(
+                permission.starts_with("core:event:") || permission.starts_with("core:window:"),
+                "unexpected permission {permission}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_script_lists_the_same_commands() {
+        let build = include_str!("../build.rs");
+        let list = build
+            .split_once("const COMMANDS")
+            .and_then(|(_, rest)| rest.split_once("];"))
+            .map(|(list, _)| list)
+            .expect("COMMANDS in build.rs");
+        let names: Vec<&str> = list.split('"').skip(1).step_by(2).collect();
+        let expected: Vec<&str> = CommandName::ALL.iter().map(|c| c.as_str()).collect();
+        assert_eq!(names, expected);
+    }
+}

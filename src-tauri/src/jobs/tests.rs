@@ -1,0 +1,1157 @@
+//! The jobs against the scripted fake ACP agent: every transition of the Machine `job` as the app
+//! drives it, steering, permissions, forms, Stop, suspension and resume. No omp, no network.
+
+use std::sync::Arc;
+
+use serde_json::{json, Value};
+use trama_core::jobs::machine::RESUME_PROMPT;
+use trama_core::jobs::{JobState, JobStore};
+use trama_core::project::image::ProjectImage;
+use trama_core::settings::Permissions;
+
+use super::conversation::{Delivery, EndLine, Entry, PermissionState};
+use super::registry::Jobs;
+use super::starts::Ctx;
+use super::testing::{row, text_update, until, Project, TestHost, LIMIT, TASK};
+
+fn ctx<'a>(project: &'a Project, image: &'a ProjectImage) -> Ctx<'a> {
+    Ctx {
+        project_id: &project.id,
+        root: &project.root,
+        image,
+    }
+}
+
+fn run_task(jobs: &Jobs, project: &Project, task: &str) -> Result<String, String> {
+    let image = ProjectImage::load(&project.root);
+    jobs.start_run_task(&ctx(project, &image), task)
+        .map_err(|refusal| refusal.0)
+}
+
+async fn state_of(host: &TestHost, project: &Project, job: &str, wanted: JobState) {
+    until(&format!("job {job} to be {wanted:?}"), LIMIT, || {
+        row(host, &project.id, job).is_some_and(|r| r.state == wanted)
+    })
+    .await;
+}
+
+fn entries(jobs: &Jobs, project: &Project, job: &str) -> Vec<Entry> {
+    jobs.conversation(&project.id, job).unwrap().entries
+}
+
+fn agent(text: &str) -> Value {
+    json!({ "update": text_update("agent_message_chunk", text) })
+}
+
+fn setup() -> (Arc<TestHost>, Arc<Jobs>) {
+    let host = TestHost::new();
+    let jobs = Jobs::new(host.clone());
+    (host, jobs)
+}
+
+async fn one_task() -> (Arc<TestHost>, Arc<Jobs>, tempfile::TempDir, Project) {
+    let (host, jobs) = setup();
+    let (dir, project) = host
+        .project(&[("tasks/aaaaaaaa-first-task.md", TASK)])
+        .await;
+    (host, jobs, dir, project)
+}
+
+#[tokio::test]
+async fn a_run_goes_from_queued_through_running_to_done_with_its_conversation_and_its_shutdown() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({
+        "log": host.received_log(),
+        "logEnv": ["TRAMA_JOB", "TRAMA_RUN", "TRAMA_TASK", "TRAMA_ENDPOINT"],
+        "prompts": [[
+            agent("Reading "), agent("the Task."),
+            { "update": { "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Read a.rs", "kind": "read", "status": "in_progress" } },
+            { "update": { "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed" } },
+            { "update": text_update("agent_thought_chunk", "hmm") },
+        ]],
+    }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    assert_eq!(
+        row(&host, &project.id, &id).unwrap().state,
+        JobState::Queued,
+        "created Queued"
+    );
+    state_of(&host, &project, &id, JobState::Done).await;
+
+    let row = row(&host, &project.id, &id).unwrap();
+    assert_eq!(row.name, "Run T1");
+    assert!(row.started.is_some() && row.ended.is_some());
+
+    let conversation = entries(&jobs, &project, &id);
+    assert!(
+        matches!(&conversation[0], Entry::Instruction { text } if text.starts_with("Use the trama-implement skill on Task aaaaaaaa."))
+    );
+    assert!(conversation.contains(&Entry::Agent {
+        text: "Reading the Task.".into(),
+        complete: true
+    }));
+    assert!(conversation
+        .iter()
+        .any(|e| matches!(e, Entry::Tool(t) if t.title == "Read a.rs")));
+    assert_eq!(conversation.last(), Some(&Entry::End(EndLine::Finished)));
+
+    let received = host.received();
+    let env = &received[0];
+    // The inherited TRAMA_JOB never reaches omp; Weaver's own variables do.
+    assert_eq!(env["env"]["TRAMA_JOB"], json!(id));
+    assert_eq!(env["env"]["TRAMA_RUN"], "1");
+    assert_eq!(env["env"]["TRAMA_TASK"], "aaaaaaaa");
+    assert_eq!(env["env"]["TRAMA_ENDPOINT"], "/tmp/weaver-test.sock");
+    let args: Vec<&str> = env["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        args.contains(&"--advisor") && args.ends_with(&["--approval-mode", "yolo", "acp"]),
+        "{args:?}"
+    );
+
+    let initialize = received
+        .iter()
+        .find(|m| m["method"] == "initialize")
+        .unwrap();
+    assert_eq!(initialize["params"]["protocolVersion"], 1);
+    assert!(
+        initialize["params"]["clientCapabilities"]
+            .get("fs")
+            .is_none()
+            && initialize["params"]["clientCapabilities"]
+                .get("terminal")
+                .is_none()
+    );
+    let new = received
+        .iter()
+        .find(|m| m["method"] == "session/new")
+        .unwrap();
+    assert_eq!(
+        new["params"]["cwd"],
+        project.root.to_string_lossy().as_ref()
+    );
+    let prompt = received
+        .iter()
+        .find(|m| m["method"] == "session/prompt")
+        .unwrap();
+    assert!(prompt["params"]["prompt"][0]["text"]
+        .as_str()
+        .unwrap()
+        .starts_with("Use the trama-implement skill on Task aaaaaaaa."));
+    until("the shutdown", LIMIT, || {
+        host.received()
+            .iter()
+            .any(|m| m["method"] == "session/close")
+    })
+    .await;
+
+    // The registry keeps the record of the finished job; the overlay is gone.
+    jobs.flush();
+    let record = JobStore::new(&host.dirs).read(&id).unwrap().unwrap();
+    assert_eq!(
+        (record.state, record.session_id.as_deref()),
+        (JobState::Done, Some("fake-session"))
+    );
+    assert!(record.args.contains(&"--advisor".to_owned()) && record.env["TRAMA_JOB"] == id);
+    until("the overlay to be deleted", LIMIT, || {
+        !trama_core::jobs::record::overlay_file(&host.dirs, &id).exists()
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_session_omp_cannot_open_fails_the_job_with_the_reason_and_holds_nothing() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({ "newError": "no provider is logged in" }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Failed).await;
+    assert_eq!(
+        row(&host, &project.id, &id).unwrap().reason.as_deref(),
+        Some("no provider is logged in")
+    );
+    assert!(
+        matches!(entries(&jobs, &project, &id).last(), Some(Entry::End(EndLine::Failed { reason, .. })) if reason == "no provider is logged in")
+    );
+    assert!(
+        row(&host, &project.id, &id).unwrap().started.is_none(),
+        "it never started"
+    );
+    assert!(jobs.facts_of(&project.id).working_jobs.is_empty());
+}
+
+#[tokio::test]
+async fn an_omp_without_steering_or_without_session_loading_is_a_start_failure() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({ "steeringSupported": false }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Failed).await;
+    assert!(row(&host, &project.id, &id)
+        .unwrap()
+        .reason
+        .unwrap()
+        .contains("while the agent works"));
+    host.script(json!({ "loadSession": false }));
+    let again = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &again, JobState::Failed).await;
+    assert!(row(&host, &project.id, &again)
+        .unwrap()
+        .reason
+        .unwrap()
+        .contains("reload"));
+}
+
+#[tokio::test]
+async fn a_failed_turn_and_every_stop_reason_end_the_job_as_the_requirements_say() {
+    for (reason, state, text) in [
+        ("refusal", JobState::Failed, Some("the agent refused")),
+        (
+            "max_tokens",
+            JobState::Failed,
+            Some("the agent ran out of tokens"),
+        ),
+        (
+            "max_turn_requests",
+            JobState::Failed,
+            Some("the agent reached its turn limit"),
+        ),
+        ("cancelled", JobState::Done, None),
+    ] {
+        let (host, jobs, _dir, project) = one_task().await;
+        host.script(json!({ "prompts": [[{ "end": reason }]] }));
+        let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+        state_of(&host, &project, &id, state).await;
+        assert_eq!(
+            row(&host, &project.id, &id).unwrap().reason.as_deref(),
+            text,
+            "{reason}"
+        );
+    }
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({ "prompts": [[{ "error": "quota exceeded" }]] }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Failed).await;
+    assert_eq!(
+        row(&host, &project.id, &id).unwrap().reason.as_deref(),
+        Some("quota exceeded")
+    );
+}
+
+#[tokio::test]
+async fn omp_exiting_by_itself_fails_the_job_once_with_its_last_error_lines() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({ "prompts": [[agent("Working"), { "stderr": "warming up" }, { "stderr": "error: the provider closed the connection" }, { "sleep": 100 }, { "exit": 3 }]] }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Failed).await;
+    let conversation = entries(&jobs, &project, &id);
+    let Some(Entry::End(EndLine::Failed { reason, details })) = conversation.last() else {
+        panic!("{conversation:?}")
+    };
+    assert_eq!(reason, "error: the provider closed the connection");
+    assert_eq!(
+        details.as_deref(),
+        Some("warming up\nerror: the provider closed the connection")
+    );
+    assert_eq!(
+        conversation
+            .iter()
+            .filter(|e| matches!(e, Entry::End(_)))
+            .count(),
+        1,
+        "once"
+    );
+}
+
+#[tokio::test]
+async fn omp_exiting_without_a_word_is_the_exit_code() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({ "prompts": [[{ "exit": 7 }]] }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Failed).await;
+    assert_eq!(
+        row(&host, &project.id, &id).unwrap().reason.as_deref(),
+        Some("omp exited with code 7")
+    );
+}
+
+#[tokio::test]
+async fn a_message_while_running_steers_the_agent_without_stopping_it() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({ "log": host.received_log(), "steering": ["injected"], "prompts": [[agent("Start"), { "wait_steer": 1 }, agent("Got it")]] }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Running).await;
+    until("the first words", LIMIT, || {
+        entries(&jobs, &project, &id)
+            .iter()
+            .any(|e| matches!(e, Entry::Agent { text, .. } if text == "Start"))
+    })
+    .await;
+    jobs.send_message(&project.id, &id, "  Use the old parser  ")
+        .unwrap();
+    state_of(&host, &project, &id, JobState::Done).await;
+
+    let steer = host
+        .received()
+        .into_iter()
+        .find(|m| m["method"] == "_session/steering")
+        .unwrap();
+    assert_eq!(steer["params"]["prompt"][0]["text"], "Use the old parser");
+    assert!(
+        steer["params"].get("_meta").is_none(),
+        "no `_meta` while running"
+    );
+    let conversation = entries(&jobs, &project, &id);
+    assert!(conversation.iter().any(|e| matches!(e, Entry::Developer { text, delivery: Delivery::Delivered, .. } if text == "Use the old parser")));
+    assert!(
+        conversation.contains(&Entry::Agent {
+            text: "Got it".into(),
+            complete: true
+        }),
+        "{conversation:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_steer_shows_not_delivered_with_its_reason_and_the_job_goes_on() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({ "steering": ["failed:the turn is closing"], "prompts": [[{ "wait_steer": 1 }, agent("Still here")]] }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Running).await;
+    jobs.send_message(&project.id, &id, "Hello").unwrap();
+    state_of(&host, &project, &id, JobState::Done).await;
+    assert!(entries(&jobs, &project, &id).iter().any(|e| matches!(e, Entry::Developer { delivery: Delivery::NotDelivered { reason }, .. } if reason == "the turn is closing")));
+}
+
+#[tokio::test]
+async fn a_steer_that_needs_a_prompt_starts_a_new_turn_when_the_turn_ends() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({
+        "log": host.received_log(),
+        "steering": ["promptRequired"],
+        "prompts": [[{ "wait_steer": 1 }, agent("First turn")], [agent("Second turn")]],
+    }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Running).await;
+    jobs.send_message(&project.id, &id, "And also this")
+        .unwrap();
+    state_of(&host, &project, &id, JobState::Done).await;
+    let prompts: Vec<String> = host
+        .received()
+        .into_iter()
+        .filter(|m| m["method"] == "session/prompt")
+        .map(|m| {
+            m["params"]["prompt"][0]["text"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(prompts.len(), 2);
+    assert_eq!(
+        prompts[1], "And also this",
+        "the held message starts the new turn"
+    );
+    let conversation = entries(&jobs, &project, &id);
+    assert!(conversation.contains(&Entry::Agent {
+        text: "Second turn".into(),
+        complete: true
+    }));
+    assert!(conversation.iter().any(|e| matches!(
+        e,
+        Entry::Developer {
+            delivery: Delivery::Delivered,
+            ..
+        }
+    )));
+}
+
+#[tokio::test]
+async fn yolo_answers_a_permission_that_still_arrives_with_the_first_allow_always() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(
+        json!({ "log": host.received_log(), "prompts": [[{ "permission": {
+        "toolCall": { "toolCallId": "t1", "title": "$ rm -rf build", "kind": "execute" },
+        "options": [
+            { "optionId": "no", "name": "Reject", "kind": "reject_once" },
+            { "optionId": "once", "name": "Allow once", "kind": "allow_once" },
+            { "optionId": "always", "name": "Always allow", "kind": "allow_always" },
+        ] } }]] }),
+    );
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Done).await;
+    let answer = host
+        .received()
+        .into_iter()
+        .find(|m| m["answerTo"] == "session/request_permission")
+        .unwrap();
+    assert_eq!(
+        answer["result"],
+        json!({ "outcome": { "outcome": "selected", "optionId": "always" } })
+    );
+    assert!(
+        !entries(&jobs, &project, &id)
+            .iter()
+            .any(|e| matches!(e, Entry::Permission { .. })),
+        "the UI receives nothing"
+    );
+}
+
+#[tokio::test]
+async fn ask_sends_the_permission_to_the_ui_and_waits_for_the_developer_without_a_limit() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.permissions(Permissions::Ask);
+    host.script(json!({ "log": host.received_log(), "prompts": [[agent("About to run"), { "permission": {
+        "toolCall": { "toolCallId": "t1", "title": "$ rm -rf build", "kind": "execute", "rawInput": { "command": "rm -rf build" } },
+        "options": [
+            { "optionId": "allow", "name": "Allow once", "kind": "allow_once" },
+            { "optionId": "no", "name": "Reject", "kind": "reject_once" },
+        ] } }, agent("Done")]] }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Waiting).await;
+    assert_eq!(
+        jobs.working_count(&project.id),
+        1,
+        "waiting counts as working"
+    );
+    assert!(jobs.facts_of(&project.id).run_in_progress);
+    let (request, options) = entries(&jobs, &project, &id)
+        .into_iter()
+        .find_map(|e| {
+            if let Entry::Permission {
+                request, options, ..
+            } = e
+            {
+                Some((request, options))
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert_eq!(
+        options
+            .iter()
+            .map(|o| (o.name.as_str(), o.rejects))
+            .collect::<Vec<_>>(),
+        [("Allow once", false), ("Reject", true)]
+    );
+
+    // A message while waiting is held and never answers the permission.
+    jobs.send_message(&project.id, &id, "Careful").unwrap();
+    assert_eq!(
+        row(&host, &project.id, &id).unwrap().state,
+        JobState::Waiting
+    );
+    assert!(entries(&jobs, &project, &id).iter().any(|e| matches!(
+        e,
+        Entry::Developer {
+            delivery: Delivery::Queued,
+            ..
+        }
+    )));
+
+    jobs.answer_permission(&project.id, &id, request, "allow")
+        .unwrap();
+    state_of(&host, &project, &id, JobState::Done).await;
+    let answer = host
+        .received()
+        .into_iter()
+        .find(|m| m["answerTo"] == "session/request_permission")
+        .unwrap();
+    assert_eq!(
+        answer["result"],
+        json!({ "outcome": { "outcome": "selected", "optionId": "allow" } })
+    );
+    let conversation = entries(&jobs, &project, &id);
+    assert!(conversation.iter().any(|e| matches!(e, Entry::Permission { state: PermissionState::Chosen { name }, .. } if name == "Allow once")));
+    // The held message went out as a follow-up when the wait ended.
+    let steer = host
+        .received()
+        .into_iter()
+        .find(|m| m["method"] == "_session/steering")
+        .unwrap();
+    assert_eq!(
+        steer["params"]["_meta"],
+        json!({ "steering": { "queue": "followUp" } })
+    );
+}
+
+#[tokio::test]
+async fn stop_cancels_a_permission_that_still_asks_ends_omp_and_stops_the_job() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.permissions(Permissions::Ask);
+    host.script(
+        json!({ "log": host.received_log(), "prompts": [[{ "permission": {
+        "toolCall": { "toolCallId": "t1", "title": "Edit a.rs" },
+        "options": [{ "optionId": "allow", "name": "Allow", "kind": "allow_once" }] } }]] }),
+    );
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Waiting).await;
+    jobs.stop(&project.id, &id).unwrap();
+    state_of(&host, &project, &id, JobState::Stopped).await;
+    // What omp received: the agent may be ended before it logs the answer itself.
+    until("omp to be answered", LIMIT, || {
+        host.received()
+            .iter()
+            .any(|m| m["id"] == "req-1" && m.get("result").is_some())
+    })
+    .await;
+    let answer = host
+        .received()
+        .into_iter()
+        .find(|m| m["id"] == "req-1" && m.get("result").is_some())
+        .unwrap();
+    assert_eq!(
+        answer["result"],
+        json!({ "outcome": { "outcome": "cancelled" } })
+    );
+    let conversation = entries(&jobs, &project, &id);
+    assert!(conversation.iter().any(|e| matches!(
+        e,
+        Entry::Permission {
+            state: PermissionState::Cancelled,
+            ..
+        }
+    )));
+    assert_eq!(conversation.last(), Some(&Entry::End(EndLine::Stopped)));
+}
+
+#[tokio::test]
+async fn a_permission_answered_once_is_not_asked_again() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.permissions(Permissions::Ask);
+    // The fake agent's permission waits for an answer, so the turn ends only after the developer answers; a second
+    // request asks nothing more: the card of the first stays Chosen and the job ends.
+    host.script(json!({ "prompts": [[{ "permission": { "toolCall": { "toolCallId": "t1", "title": "Edit" }, "options": [{ "optionId": "a", "name": "Allow", "kind": "allow_once" }] } }]] }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Waiting).await;
+    let request = entries(&jobs, &project, &id)
+        .into_iter()
+        .find_map(|e| {
+            if let Entry::Permission { request, .. } = e {
+                Some(request)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    jobs.answer_permission(&project.id, &id, request, "a")
+        .unwrap();
+    state_of(&host, &project, &id, JobState::Done).await;
+    assert!(
+        jobs.answer_permission(&project.id, &id, request, "a")
+            .is_err(),
+        "it is not asked any more"
+    );
+}
+
+#[tokio::test]
+async fn forms_and_asks_are_declined_at_once_with_the_fixed_text_and_the_ui_hears_nothing() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(
+        json!({ "log": host.received_log(), "prompts": [[{ "elicit": true }, agent("Went on")]] }),
+    );
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Done).await;
+    let answer = host
+        .received()
+        .into_iter()
+        .find(|m| m["answerTo"] == "elicitation/create")
+        .unwrap();
+    assert_eq!(answer["result"]["action"], "decline");
+    assert_eq!(
+        answer["result"]["_meta"]["message"],
+        "In Weaver jobs, ask the developer only with `trama question new` (bash timeout 0). Do not ask in any other way."
+    );
+    assert!(!entries(&jobs, &project, &id)
+        .iter()
+        .any(|e| matches!(e, Entry::Permission { .. })));
+}
+
+#[tokio::test]
+async fn stop_cancels_the_turn_closes_the_session_and_ends_the_process_group() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({ "log": host.received_log(), "prompts": [[agent("Working"), { "wait_cancel": true }]] }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Running).await;
+    until("the agent to work", LIMIT, || {
+        host.received()
+            .iter()
+            .any(|m| m["method"] == "session/prompt")
+    })
+    .await;
+    jobs.stop(&project.id, &id).unwrap();
+    state_of(&host, &project, &id, JobState::Stopped).await;
+    until("the shutdown", LIMIT, || {
+        let methods: Vec<String> = host
+            .received()
+            .iter()
+            .filter_map(|m| m["method"].as_str().map(str::to_owned))
+            .collect();
+        methods.contains(&"session/cancel".to_owned())
+            && methods.contains(&"session/close".to_owned())
+    })
+    .await;
+    let methods: Vec<String> = host
+        .received()
+        .iter()
+        .filter_map(|m| m["method"].as_str().map(str::to_owned))
+        .collect();
+    let (cancel, close) = (
+        methods.iter().position(|m| m == "session/cancel").unwrap(),
+        methods.iter().position(|m| m == "session/close").unwrap(),
+    );
+    assert!(cancel < close, "cancel first, then close: {methods:?}");
+    assert!(jobs.facts_of(&project.id).working_jobs.is_empty());
+    assert!(
+        jobs.stop(&project.id, &id).is_ok(),
+        "stopping a stopped job changes nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_job_that_ends_gives_back_the_tasks_it_held_in_the_same_step() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({ "prompts": [[{ "wait_steer": 1 }]] }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Running).await;
+    // The agent takes the Task: In progress, held by this job.
+    let file = project.root.join(".trama/tasks/aaaaaaaa-first-task.md");
+    std::fs::write(
+        &file,
+        TASK.replace("column: todo", "column: doing")
+            .replace("created:", &format!("holder: {id}\ncreated:")),
+    )
+    .unwrap();
+    jobs.send_message(&project.id, &id, "Wrap up").unwrap();
+    state_of(&host, &project, &id, JobState::Done).await;
+    until("the Task to be released", LIMIT, || {
+        std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("column: todo")
+    })
+    .await;
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(!text.contains("holder"), "{text}");
+}
+
+#[tokio::test]
+async fn only_one_run_works_at_a_time_and_a_resolve_waits_for_it() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({ "prompts": [[{ "hold": true }]] }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Running).await;
+    let refusal = run_task(&jobs, &project, "aaaaaaaa").unwrap_err();
+    assert!(refusal.contains("A run is in progress"), "{refusal}");
+    let image = ProjectImage::load(&project.root);
+    let all = jobs.start_run_all(&ctx(&project, &image)).unwrap_err();
+    assert!(all.0.contains("A run is in progress"), "{}", all.0);
+    // A scan always starts.
+    assert!(jobs.start_scan(&ctx(&project, &image)).is_ok());
+    jobs.stop(&project.id, &id).unwrap();
+    state_of(&host, &project, &id, JobState::Stopped).await;
+    assert!(!jobs.facts_of(&project.id).run_in_progress);
+}
+
+#[tokio::test]
+async fn closing_the_window_suspends_the_job_and_opening_it_reloads_the_session() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({
+        "log": host.received_log(),
+        "replay": [text_update("user_message_chunk", "ignored: the conversation of this run is kept"), text_update("agent_message_chunk", "replayed")],
+        "prompts": [[agent("Before"), { "hold": true }], [agent("After the reload")]],
+    }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Running).await;
+    until("the first words", LIMIT, || {
+        entries(&jobs, &project, &id)
+            .iter()
+            .any(|e| matches!(e, Entry::Agent { text, .. } if text == "Before"))
+    })
+    .await;
+
+    jobs.window_closed(&project.id).await;
+    // The new omp process follows a script of its own: its first turn is the one after the reload.
+    host.script(json!({
+        "log": host.received_log(),
+        "replay": [text_update("user_message_chunk", "ignored: the conversation of this run is kept"), text_update("agent_message_chunk", "replayed")],
+        "prompts": [[agent("After the reload")]],
+    }));
+    assert_eq!(
+        row(&host, &project.id, &id).unwrap().state,
+        JobState::Suspended
+    );
+    assert_eq!(jobs.working_count(&project.id), 0);
+    assert!(
+        jobs.facts_of(&project.id).working_jobs.contains(&id),
+        "its Tasks stay held while it is suspended"
+    );
+    assert!(jobs.stop(&project.id, "zzzzzzzz").is_err());
+    let record = JobStore::new(&host.dirs).read(&id).unwrap().unwrap();
+    assert_eq!(
+        record.state,
+        JobState::Suspended,
+        "the registry was written before the window closed"
+    );
+
+    jobs.window_opened(&project.id, &project.root);
+    state_of(&host, &project, &id, JobState::Done).await;
+    let received = host.received();
+    let load = received
+        .iter()
+        .find(|m| m["method"] == "session/load")
+        .expect("the session is reloaded");
+    assert_eq!(load["params"]["sessionId"], "fake-session");
+    let prompts: Vec<&str> = received
+        .iter()
+        .filter(|m| m["method"] == "session/prompt")
+        .map(|m| m["params"]["prompt"][0]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(prompts.last().copied(), Some(RESUME_PROMPT));
+    let conversation = entries(&jobs, &project, &id);
+    assert!(conversation.contains(&Entry::Reloaded));
+    assert!(conversation.contains(&Entry::Agent {
+        text: "After the reload".into(),
+        complete: true
+    }));
+    assert!(
+        !conversation
+            .iter()
+            .any(|e| matches!(e, Entry::Agent { text, .. } if text == "replayed")),
+        "the replay adds nothing to a conversation kept in memory"
+    );
+}
+
+#[tokio::test]
+async fn a_job_left_working_by_a_crash_is_suspended_at_the_next_start_and_resumes_with_its_replayed_history(
+) {
+    let (host, first) = setup();
+    let (_dir, project) = host
+        .project(&[("tasks/aaaaaaaa-first-task.md", TASK)])
+        .await;
+    host.script(json!({ "prompts": [[{ "hold": true }]] }));
+    let id = run_task(&first, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Running).await;
+    first.flush();
+    // The record as the crash left it: Running, with the session and no process alive.
+    let store = JobStore::new(&host.dirs);
+    let mut record = store.read(&id).unwrap().unwrap();
+    assert_eq!(record.state, JobState::Running);
+    let process_group = record.pid.take();
+    record.pid_started = None;
+    record.id = "crashed1".to_owned();
+    record
+        .env
+        .insert("TRAMA_JOB".to_owned(), "crashed1".to_owned());
+    store.write(&record).unwrap();
+    first.stop(&project.id, &id).unwrap();
+    state_of(&host, &project, &id, JobState::Stopped).await;
+    first.flush();
+    assert!(process_group.is_some());
+
+    // A new run of the app: it reads the registry when the window opens.
+    let second = Jobs::new(host.clone());
+    host.script(json!({
+        "log": host.received_log(),
+        "replay": [text_update("user_message_chunk", "Use the trama-implement skill on Task aaaaaaaa."), text_update("agent_message_chunk", "I was reading.")],
+        "prompts": [[agent("Back at work")]],
+    }));
+    second.window_opened(&project.id, &project.root);
+    until("the crashed job to finish", LIMIT, || {
+        second
+            .record("crashed1")
+            .is_some_and(|r| r.state == JobState::Done)
+    })
+    .await;
+    let conversation = second
+        .conversation(&project.id, "crashed1")
+        .unwrap()
+        .entries;
+    assert!(
+        matches!(&conversation[0], Entry::Instruction { text } if text.starts_with("Use the trama-implement skill"))
+    );
+    assert!(conversation
+        .iter()
+        .any(|e| matches!(e, Entry::Agent { text, .. } if text == "I was reading.")));
+    assert!(conversation.contains(&Entry::Reloaded));
+    // The stopped one of the first run is in the registry but not in the list.
+    assert!(second.snapshot(&project.id).jobs.iter().all(|r| r.id != id));
+}
+
+#[tokio::test]
+async fn a_session_that_cannot_be_reloaded_fails_the_suspended_job() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({ "prompts": [[{ "hold": true }]] }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Running).await;
+    jobs.window_closed(&project.id).await;
+    host.script(json!({ "loadError": "unknown session" }));
+    jobs.window_opened(&project.id, &project.root);
+    state_of(&host, &project, &id, JobState::Failed).await;
+    assert_eq!(
+        row(&host, &project.id, &id).unwrap().reason.as_deref(),
+        Some("the session could not be resumed")
+    );
+}
+
+#[tokio::test]
+async fn closing_the_window_never_leaves_a_job_running() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({ "prompts": [[{ "hold": true }]] }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    jobs.window_closed(&project.id).await;
+    let state = jobs.record(&id).unwrap().state;
+    assert!(
+        matches!(state, JobState::Stopped | JobState::Suspended),
+        "{state:?}"
+    );
+}
+
+#[tokio::test]
+async fn notes_announcements_and_ghosts_follow_the_job_until_the_card_arrives_or_the_job_ends() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({ "prompts": [[{ "wait_steer": 1 }]] }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Running).await;
+
+    let kept = jobs
+        .declare_note(&id, "  Reading\nthe order Machine ")
+        .unwrap();
+    assert_eq!(kept.text, "Reading the order Machine");
+    jobs.declare_note(&id, "Reading the order Machine").unwrap();
+    assert_eq!(
+        jobs.record(&id).unwrap().notes.len(),
+        1,
+        "a repeat only renews the instant"
+    );
+    assert_eq!(
+        entries(&jobs, &project, &id)
+            .iter()
+            .filter(|e| matches!(e, Entry::Note { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        row(&host, &project.id, &id).unwrap().note.as_deref(),
+        Some("Reading the order Machine")
+    );
+
+    let first = jobs.announce(&id, "task", "Cancel an order").unwrap();
+    let second = jobs.announce(&id, "proposal", "Order changes").unwrap();
+    let ghosts = jobs.ghosts_of(&project.id);
+    assert_eq!(
+        ghosts
+            .iter()
+            .map(|g| (g.id.as_str(), g.title.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (first.as_str(), "Cancel an order"),
+            (second.as_str(), "Order changes")
+        ]
+    );
+    assert_eq!(ghosts[0].note.as_deref(), Some("Reading the order Machine"));
+
+    // An unknown or foreign announcement still creates the card, with a note.
+    assert!(jobs
+        .card_filed(Some(&id), "task", "bbbbbbbb", "zzzzzzzz")
+        .unwrap()
+        .contains("without a ghost"));
+    assert!(jobs
+        .card_filed(Some("otherjob"), "task", "bbbbbbbb", &first)
+        .unwrap()
+        .contains("without a ghost"));
+    assert_eq!(jobs.ghosts_of(&project.id).len(), 2);
+
+    // The card is filed: the ghost stays until the picture holds it (never both, never neither).
+    assert_eq!(jobs.card_filed(Some(&id), "task", "bbbbbbbb", &first), None);
+    assert_eq!(jobs.ghosts_of(&project.id).len(), 2);
+    std::fs::write(
+        project
+            .root
+            .join(".trama/tasks/bbbbbbbb-cancel-an-order.md"),
+        TASK.replace("First task", "Cancel an order"),
+    )
+    .unwrap();
+    host.pictures
+        .rebuild(&project.id, crate::pictures::Rebuild::All)
+        .await
+        .unwrap();
+    assert_eq!(
+        jobs.ghosts_of(&project.id)
+            .iter()
+            .map(|g| g.id.clone())
+            .collect::<Vec<_>>(),
+        std::slice::from_ref(&second)
+    );
+
+    // The job ends: what it announced and never filed is withdrawn.
+    jobs.send_message(&project.id, &id, "Wrap up").unwrap();
+    state_of(&host, &project, &id, JobState::Done).await;
+    assert!(jobs.ghosts_of(&project.id).is_empty());
+    assert!(
+        jobs.declare_note(&id, "too late").is_err() && jobs.announce(&id, "task", "Late").is_err(),
+        "a finished job declares nothing"
+    );
+}
+
+#[tokio::test]
+async fn the_authority_accepts_only_a_working_job_of_the_project_and_runs_the_job_commands() {
+    use trama_cli::exec::{execute, Authority};
+    use trama_cli::spec::Caller;
+    use trama_core::command::CommandRequest;
+
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({ "prompts": [[{ "wait_steer": 1 }]] }));
+    let authority = super::authority::AppAuthority { jobs: jobs.clone() };
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    assert!(
+        !authority.accepts_job(&project.root, &id),
+        "Queued is not working yet"
+    );
+    state_of(&host, &project, &id, JobState::Running).await;
+    assert!(authority.accepts_job(&project.root, &id));
+    assert!(
+        !authority.accepts_job(std::path::Path::new("/elsewhere"), &id)
+            && !authority.accepts_job(&project.root, "unknown1")
+    );
+
+    let request = |object: &str, verb: &str, input: Value| CommandRequest {
+        object: object.into(),
+        verb: verb.into(),
+        root: project.root.to_string_lossy().into_owned(),
+        card: None,
+        state: None,
+        input: input.as_object().unwrap().clone(),
+        general: None,
+    };
+    let caller = Caller {
+        job: Some(id.clone()),
+        ..Caller::default()
+    };
+    let edit = execute(
+        &request(
+            "job",
+            "edit",
+            json!({ "note": format!("{}x", "y".repeat(130)) }),
+        ),
+        &caller,
+        &authority,
+    )
+    .unwrap();
+    assert_eq!(edit.json["cut"], true);
+    assert_eq!(edit.json["note"].as_str().unwrap().chars().count(), 120);
+    let announced = execute(
+        &request(
+            "announcement",
+            "new",
+            json!({ "kind": "task", "title": "Cancel an order" }),
+        ),
+        &caller,
+        &authority,
+    )
+    .unwrap();
+    let announcement = announced.json["id"].as_str().unwrap().to_owned();
+    // The card is filed with it: the reply carries no note, and the ghost waits for the picture.
+    let filed = execute(
+        &request(
+            "task",
+            "new",
+            json!({ "title": "Cancel an order", "technical": true, "announcement": announcement }),
+        ),
+        &caller,
+        &authority,
+    )
+    .unwrap();
+    assert!(filed.note.is_none(), "{:?}", filed.note);
+    let foreign = execute(
+        &request(
+            "task",
+            "new",
+            json!({ "title": "Another", "technical": true, "announcement": "zzzzzzzz" }),
+        ),
+        &caller,
+        &authority,
+    )
+    .unwrap();
+    assert!(foreign.note.unwrap().contains("without a ghost"));
+
+    let list = execute(&request("job", "list", json!({})), &caller, &authority).unwrap();
+    assert_eq!(list.json["jobs"][0]["id"], json!(id));
+    let shown = execute(
+        &CommandRequest {
+            card: Some(id[..4].to_owned()),
+            ..request("job", "show", json!({}))
+        },
+        &Caller::default(),
+        &authority,
+    )
+    .unwrap();
+    assert_eq!(shown.json["job"]["task"], "aaaaaaaa");
+    // Not a job of this app, or a job after its end: forbidden.
+    let stranger = Caller {
+        job: Some("nobody01".into()),
+        ..Caller::default()
+    };
+    assert_eq!(
+        execute(
+            &request("job", "edit", json!({ "note": "x" })),
+            &stranger,
+            &authority
+        )
+        .unwrap_err()
+        .code,
+        trama_core::command::code::FORBIDDEN
+    );
+    // `job new` is for the working General only.
+    assert_eq!(
+        execute(
+            &request("job", "new", json!({ "kind": "scan" })),
+            &caller,
+            &authority
+        )
+        .unwrap_err()
+        .code,
+        trama_core::command::code::FORBIDDEN
+    );
+
+    jobs.send_message(&project.id, &id, "Wrap up").unwrap();
+    state_of(&host, &project, &id, JobState::Done).await;
+    assert_eq!(
+        execute(
+            &request("job", "edit", json!({ "note": "x" })),
+            &caller,
+            &authority
+        )
+        .unwrap_err()
+        .code,
+        trama_core::command::code::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn the_general_starts_a_job_with_the_developers_refusals() {
+    use trama_cli::exec::execute;
+    use trama_cli::spec::Caller;
+    use trama_core::command::CommandRequest;
+
+    struct Always;
+    impl super::authority::GeneralAuthority for Always {
+        fn accepts(&self, _root: &std::path::Path, token: &str) -> bool {
+            token == "general-token"
+        }
+        fn job_requested(
+            &self,
+            _root: &std::path::Path,
+            _token: &str,
+            _kind: &str,
+            _outcome: Result<&[(String, String)], &str>,
+        ) {
+        }
+    }
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({ "prompts": [[{ "hold": true }]] }));
+    jobs.set_general(Arc::new(Always));
+    let authority = super::authority::AppAuthority { jobs: jobs.clone() };
+    let request = |input: Value| CommandRequest {
+        object: "job".into(),
+        verb: "new".into(),
+        root: project.root.to_string_lossy().into_owned(),
+        card: None,
+        state: None,
+        input: input.as_object().unwrap().clone(),
+        general: Some("general-token".into()),
+    };
+    let general = Caller {
+        general: Some("general-token".into()),
+        ..Caller::default()
+    };
+    let started = execute(
+        &request(json!({ "kind": "run", "task": "t1" })),
+        &general,
+        &authority,
+    )
+    .unwrap();
+    let id = started.json["id"].as_str().unwrap().to_owned();
+    assert_eq!(started.json["kind"], "run");
+    assert_eq!(jobs.record(&id).unwrap().name, "Run T1");
+    // The developer's refusal: another Run works.
+    let refused = execute(&request(json!({ "kind": "run" })), &general, &authority).unwrap_err();
+    assert_eq!(refused.code, trama_core::command::code::REFUSED);
+    assert!(
+        refused.message.contains("A run is in progress"),
+        "{}",
+        refused.message
+    );
+    assert!(
+        execute(&request(json!({ "kind": "scan" })), &general, &authority).is_ok(),
+        "scans always start"
+    );
+    let wrong = Caller {
+        general: Some("another".into()),
+        ..Caller::default()
+    };
+    assert_eq!(
+        execute(&request(json!({ "kind": "scan" })), &wrong, &authority)
+            .unwrap_err()
+            .code,
+        trama_core::command::code::FORBIDDEN
+    );
+    // A design request cannot be sent before the design requests install their sender.
+    assert!(execute(
+        &request(json!({ "kind": "design", "request": "2026-11-02T10-00-00" })),
+        &general,
+        &authority
+    )
+    .is_err());
+}
+
+#[tokio::test]
+async fn a_finished_job_leaves_the_list_with_its_x_and_never_while_it_works() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({ "prompts": [[{ "wait_steer": 1 }]] }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Running).await;
+    assert!(jobs.remove(&project.id, &id).is_err());
+    jobs.send_message(&project.id, &id, "Wrap up").unwrap();
+    state_of(&host, &project, &id, JobState::Done).await;
+    assert!(jobs.snapshot(&project.id).jobs.iter().any(|r| r.id == id));
+    jobs.remove(&project.id, &id).unwrap();
+    assert!(jobs.snapshot(&project.id).jobs.is_empty());
+    assert!(
+        JobStore::new(&host.dirs).read(&id).unwrap().is_some(),
+        "the registry keeps it"
+    );
+}
+
+#[tokio::test]
+async fn the_list_is_ordered_waiting_running_queued_then_the_finished_and_keeps_30_of_them() {
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({ "prompts": [[{ "end": "end_turn" }]] }));
+    let image = ProjectImage::load(&project.root);
+    let mut finished = Vec::new();
+    for _ in 0..32 {
+        finished.push(jobs.start_scan(&ctx(&project, &image)).unwrap());
+    }
+    for id in &finished {
+        until("a scan to be done", LIMIT, || {
+            jobs.record(id).is_some_and(|r| r.state == JobState::Done)
+        })
+        .await;
+    }
+    let snapshot = jobs.snapshot(&project.id);
+    assert_eq!(
+        snapshot.jobs.len(),
+        30,
+        "only the 30 latest finished jobs are kept"
+    );
+    assert!(
+        snapshot
+            .jobs
+            .windows(2)
+            .all(|pair| pair[0].ended >= pair[1].ended),
+        "latest end first"
+    );
+    assert!(snapshot.jobs.iter().all(|r| r.name == "Scan"));
+}

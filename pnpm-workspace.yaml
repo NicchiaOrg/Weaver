@@ -1,0 +1,10 @@
+packages:
+  - ui
+  - e2e
+
+# Build scripts of dependencies never run: the browser drivers (edgedriver, geckodriver) are not
+# needed (tauri-driver wraps the platform driver), and esbuild ships its binary as an optional package.
+allowBuilds:
+  edgedriver: false
+  esbuild: false
+  geckodriver: false

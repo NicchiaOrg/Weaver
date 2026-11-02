@@ -1,0 +1,153 @@
+import { act, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { StartupFailure } from "@/bindings/StartupFailure";
+import type { WelcomeState } from "@/bindings/WelcomeState";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { WelcomeWindow } from "@/components/welcome-window";
+import { OmpProvider } from "@/hooks/use-omp";
+import { call, on } from "@/lib/backend";
+
+vi.mock("@/lib/backend", () => ({
+  call: vi.fn(),
+  on: vi.fn(),
+  isAppError: (value: unknown) => typeof value === "object" && value !== null && "code" in value && "message" in value,
+}));
+
+const alpha = { path: "/work/alpha", name: "alpha", opened: "2026-11-02T07:00:00.000Z", exists: true };
+const gone = { path: "/work/gone", name: "gone", opened: "2026-11-01T07:00:00.000Z", exists: false };
+
+const state = (recent: WelcomeState["recent"]): WelcomeState => ({ name: "Weaver", version: "0.1.0", recent });
+
+let answers: Record<string, (args?: unknown) => unknown>;
+
+function render_() {
+  return render(
+    <TooltipProvider>
+      <OmpProvider>
+        <WelcomeWindow />
+      </OmpProvider>
+    </TooltipProvider>,
+  );
+}
+
+beforeEach(() => {
+  answers = {
+    welcome_state: () => state([alpha, gone]),
+    startup_failures: () => [],
+    update_status: () => ({ available: null, downloading: false }),
+    omp_status: () => new Promise(() => {}),
+  };
+  vi.mocked(on).mockImplementation((() => Promise.resolve(() => {})) as unknown as typeof on);
+  vi.mocked(call).mockImplementation(((name: string, args?: unknown) => {
+    const answer = answers[name];
+    return answer ? Promise.resolve().then(() => answer(args)) : Promise.resolve(null);
+  }) as never);
+});
+
+describe("welcome window", () => {
+  it("shows the name and the version of the app", async () => {
+    render_();
+    expect(await screen.findByText("Version 0.1.0")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Weaver" })).toBeInTheDocument();
+  });
+
+  it("lists the recent projects with the folder name and the full path, most recent first", async () => {
+    render_();
+    const open = await screen.findByRole("button", { name: /alpha/ });
+    expect(open).toHaveTextContent("/work/alpha");
+    const items = screen.getAllByRole("listitem").map((item) => item.textContent);
+    expect(items[0]).toContain("alpha");
+    expect(items[1]).toContain("gone");
+  });
+
+  it("says when there is no recent project", async () => {
+    answers.welcome_state = () => state([]);
+    render_();
+    expect(await screen.findByText("No recent projects. Open a folder to start.")).toBeInTheDocument();
+  });
+
+  it("opens a recent project", async () => {
+    const user = userEvent.setup();
+    render_();
+    await user.click(await screen.findByRole("button", { name: /alpha/ }));
+    expect(call).toHaveBeenCalledWith("open_project", { path: "/work/alpha" });
+  });
+
+  it("marks a folder that no longer exists and removes it from the list", async () => {
+    const user = userEvent.setup();
+    answers.remove_recent = () => state([alpha]);
+    render_();
+    const item = (await screen.findByText("gone")).closest("li")!;
+    expect(within(item).getByText("Not found")).toBeInTheDocument();
+    expect(within(item).queryByRole("button", { name: /^gone/ })).not.toBeInTheDocument();
+    await user.click(within(item).getByRole("button", { name: "Remove gone from the recent projects" }));
+    expect(call).toHaveBeenCalledWith("remove_recent", { path: "/work/gone" });
+    await vi.waitFor(() => expect(screen.queryByText("gone")).not.toBeInTheDocument());
+  });
+
+  it("Open Folder asks for the system folder picker", async () => {
+    const user = userEvent.setup();
+    render_();
+    await user.click(await screen.findByRole("button", { name: "Open Folder" }));
+    expect(call).toHaveBeenCalledWith("open_folder");
+  });
+
+  it("is usable with the keyboard alone: Open Folder first, then the recent projects", async () => {
+    const user = userEvent.setup();
+    render_();
+    await screen.findByText("Version 0.1.0");
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Open Folder" })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: /alpha/ })).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(call).toHaveBeenCalledWith("open_project", { path: "/work/alpha" });
+  });
+
+  it("says why a project did not open", async () => {
+    const user = userEvent.setup();
+    answers.open_project = () => Promise.reject({ code: "invalid-input", message: "the folder does not exist" });
+    render_();
+    await user.click(await screen.findByRole("button", { name: /alpha/ }));
+    expect(await screen.findByText("alpha could not open: the folder does not exist")).toBeInTheDocument();
+  });
+
+  it("asks again when the window comes forward", async () => {
+    render_();
+    await screen.findByText("Version 0.1.0");
+    answers.welcome_state = () => state([]);
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(await screen.findByText("No recent projects. Open a folder to start.")).toBeInTheDocument();
+  });
+
+  it("shows the status of omp", async () => {
+    answers.omp_status = () => ({
+      revision: 1,
+      state: "missing",
+      ompPath: "",
+      version: null,
+      minVersion: "18.15.0",
+      models: [],
+      providers: [],
+      reason: null,
+      updateTarget: null,
+      updateFailure: null,
+      loginProvider: null,
+      terminalProblem: null,
+      logout: null,
+    });
+    render_();
+    expect(await screen.findByRole("button", { name: "Install omp" })).toBeInTheDocument();
+  });
+
+  it("tells a project of the last session that could not open", async () => {
+    const failure: StartupFailure = { projectId: "aaaa", projectName: "Acme", step: "project window", reason: "no display" };
+    answers.startup_failures = () => [failure];
+    render_();
+    expect(await screen.findByText("Acme could not open: no display")).toBeInTheDocument();
+  });
+});

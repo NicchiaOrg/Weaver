@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-general-stop"
+description = "Enables the general_stop command without any pre-configured scope."
+commands.allow = ["general_stop"]
+
+[[permission]]
+identifier = "deny-general-stop"
+description = "Denies the general_stop command without any pre-configured scope."
+commands.deny = ["general_stop"]

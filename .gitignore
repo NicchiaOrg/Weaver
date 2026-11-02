@@ -1,0 +1,20 @@
+# Rust
+/target/
+
+# Weaver sidecar: built by src-tauri/build.rs
+/src-tauri/binaries/
+/src-tauri/gen/
+
+# UI
+/node_modules/
+/ui/node_modules/
+/ui/dist/
+
+# End-to-end tests
+/e2e/node_modules/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json

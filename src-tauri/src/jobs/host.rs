@@ -1,0 +1,176 @@
+//! What the jobs need from the rest of the app, behind one trait: the folders, the settings, omp,
+//! the project pictures and their mutation queue, and the events to the UI. [`TauriHost`] is the
+//! real one; the tests of the jobs bring their own, so that no window and no omp is needed.
+
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use tauri::{AppHandle, Emitter, Manager};
+use trama_core::omp::machine::ReadyOmp;
+use trama_core::paths::AppDirs;
+use trama_core::project::image::ProjectImage;
+use trama_core::settings::Settings;
+
+use super::wire::{EntriesEvent, JobsSnapshot};
+use crate::error::{AppError, ErrorCode};
+use crate::omp::OmpSetup;
+use crate::state::AppState;
+use crate::windows::jobs::BoxFuture;
+
+/// The change a mutation of the project makes: the image after its write, to be published, or
+/// nothing when no file changed.
+pub type MutationResult = Result<Option<ProjectImage>, String>;
+
+pub trait Host: Send + Sync + 'static {
+    fn dirs(&self) -> &AppDirs;
+    /// The settings in force now.
+    fn settings(&self) -> Settings;
+    /// The endpoint of the CLI socket, once the server started.
+    fn endpoint(&self) -> Option<String>;
+    /// Waits until omp is ready and returns it.
+    fn omp_ready(&self) -> BoxFuture<Arc<ReadyOmp>>;
+    fn omp_is_ready(&self) -> bool;
+    /// The `PATH` of a process that runs omp.
+    fn child_path(&self, omp: &Path) -> OsString;
+    /// `omp.MISSING`: a job could not start omp.
+    fn report_omp_missing(&self, reason: Option<String>);
+    /// The environment Weaver itself runs in, to be inherited by omp (minus `TRAMA_*`).
+    fn inherited_env(&self) -> Vec<(OsString, OsString)> {
+        std::env::vars_os().collect()
+    }
+    /// The folder of omp's own session files, where background sub-agents write their records.
+    fn sessions_root(&self) -> Option<PathBuf> {
+        let agent = std::env::var_os("PI_CODING_AGENT_DIR")
+            .map(PathBuf::from)
+            .or_else(|| {
+                let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+                Some(PathBuf::from(home).join(".omp").join("agent"))
+            })?;
+        Some(agent.join("sessions"))
+    }
+    fn emit_jobs(&self, snapshot: &JobsSnapshot);
+    fn emit_entries(&self, event: &EntriesEvent);
+    /// What the Board shows changed with no file changing (a job started or ended, a ghost came
+    /// or went): a new revision, announced for the `board` slice.
+    fn board_changed(&self, project_id: &str);
+    /// The current picture of an open project.
+    fn picture(&self, project_id: &str) -> Option<(PathBuf, Arc<ProjectImage>)>;
+    /// Runs `change` in the project's mutation queue, under the project lock, and publishes the
+    /// image it returns. Fails when the project is not open.
+    fn mutate(
+        &self,
+        project_id: &str,
+        change: Box<dyn FnOnce(&Path) -> MutationResult + Send>,
+    ) -> BoxFuture<Result<(), String>>;
+}
+
+/// The host of the running app.
+pub struct TauriHost {
+    app: AppHandle,
+    dirs: AppDirs,
+}
+
+impl TauriHost {
+    pub fn new(app: AppHandle) -> Self {
+        let dirs = app.state::<AppState>().dirs.clone();
+        Self { app, dirs }
+    }
+
+    fn state(&self) -> tauri::State<'_, AppState> {
+        self.app.state::<AppState>()
+    }
+}
+
+impl Host for TauriHost {
+    fn dirs(&self) -> &AppDirs {
+        &self.dirs
+    }
+
+    fn settings(&self) -> Settings {
+        self.state().settings.current()
+    }
+
+    fn endpoint(&self) -> Option<String> {
+        self.state()
+            .server
+            .lock()
+            .expect("server slot poisoned")
+            .as_ref()
+            .map(|server| server.endpoint().to_owned())
+    }
+
+    fn omp_ready(&self) -> BoxFuture<Arc<ReadyOmp>> {
+        let omp = self.app.state::<OmpSetup>().inner().clone();
+        Box::pin(async move { omp.wait_ready().await })
+    }
+
+    fn omp_is_ready(&self) -> bool {
+        self.app.state::<OmpSetup>().ready().is_some()
+    }
+
+    fn child_path(&self, omp: &Path) -> OsString {
+        self.app.state::<OmpSetup>().child_path(omp)
+    }
+
+    fn report_omp_missing(&self, reason: Option<String>) {
+        self.app.state::<OmpSetup>().report_missing(reason);
+    }
+
+    fn emit_jobs(&self, snapshot: &JobsSnapshot) {
+        let _ = self
+            .app
+            .emit(crate::events::EventName::JobsChanged.as_str(), snapshot);
+    }
+
+    fn emit_entries(&self, event: &EntriesEvent) {
+        let _ = self
+            .app
+            .emit(crate::events::EventName::JobEntries.as_str(), event);
+    }
+
+    fn board_changed(&self, project_id: &str) {
+        let state = self.state();
+        // A project whose window is closed has no picture: nothing to tell.
+        let _ = crate::board::publish_agent_change(&self.app, &state.pictures, project_id);
+    }
+
+    fn picture(&self, project_id: &str) -> Option<(PathBuf, Arc<ProjectImage>)> {
+        self.state()
+            .pictures
+            .get(project_id)
+            .ok()
+            .map(|picture| (picture.root, picture.image))
+    }
+
+    fn mutate(
+        &self,
+        project_id: &str,
+        change: Box<dyn FnOnce(&Path) -> MutationResult + Send>,
+    ) -> BoxFuture<Result<(), String>> {
+        let app = self.app.clone();
+        let id = project_id.to_owned();
+        Box::pin(async move {
+            let state = app.state::<AppState>();
+            let root = state.pictures.get(&id).map_err(|error| error.message)?.root;
+            let pictures = state.pictures.clone();
+            let published_id = id.clone();
+            let revision = state
+                .mutations
+                .run(&id, move || {
+                    let image = change(&root)
+                        .map_err(|message| AppError::new(ErrorCode::Internal, message))?;
+                    match image {
+                        Some(image) => pictures.publish(&published_id, image),
+                        None => Ok(None),
+                    }
+                })
+                .await
+                .map_err(|error| error.message)?;
+            if let Some(revision) = revision {
+                let _ = crate::events::emit_project_changed(&app, &revision.event());
+            }
+            Ok(())
+        })
+    }
+}

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-general-clear"
+description = "Enables the general_clear command without any pre-configured scope."
+commands.allow = ["general_clear"]
+
+[[permission]]
+identifier = "deny-general-clear"
+description = "Denies the general_clear command without any pre-configured scope."
+commands.deny = ["general_clear"]

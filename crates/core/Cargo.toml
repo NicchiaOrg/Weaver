@@ -1,0 +1,33 @@
+[package]
+name = "trama-core"
+description = "Shared core of Weaver and the `trama` command line: folders, CLI-app protocol, locks and processes."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dirs = "6"
+dunce = "1"
+fd-lock = "4"
+getrandom = "0.3"
+include_dir = "0.7"
+interprocess = "2"
+pulldown-cmark = { version = "0.13", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml = "0.9"
+sha2 = "0.10"
+subtle = "2"
+thiserror.workspace = true
+ts-rs = { version = "11", features = ["serde-compat"] }
+unicode-normalization = "0.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
+[dev-dependencies]
+tempfile.workspace = true

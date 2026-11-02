@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-choose-proposal-model"
+description = "Enables the choose_proposal_model command without any pre-configured scope."
+commands.allow = ["choose_proposal_model"]
+
+[[permission]]
+identifier = "deny-choose-proposal-model"
+description = "Denies the choose_proposal_model command without any pre-configured scope."
+commands.deny = ["choose_proposal_model"]

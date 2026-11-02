@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-job-send-message"
+description = "Enables the job_send_message command without any pre-configured scope."
+commands.allow = ["job_send_message"]
+
+[[permission]]
+identifier = "deny-job-send-message"
+description = "Denies the job_send_message command without any pre-configured scope."
+commands.deny = ["job_send_message"]

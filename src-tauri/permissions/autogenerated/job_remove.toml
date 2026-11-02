@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-job-remove"
+description = "Enables the job_remove command without any pre-configured scope."
+commands.allow = ["job_remove"]
+
+[[permission]]
+identifier = "deny-job-remove"
+description = "Denies the job_remove command without any pre-configured scope."
+commands.deny = ["job_remove"]

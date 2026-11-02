@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-omp-log-in"
+description = "Enables the omp_log_in command without any pre-configured scope."
+commands.allow = ["omp_log_in"]
+
+[[permission]]
+identifier = "deny-omp-log-in"
+description = "Denies the omp_log_in command without any pre-configured scope."
+commands.deny = ["omp_log_in"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-omp-status"
+description = "Enables the omp_status command without any pre-configured scope."
+commands.allow = ["omp_status"]
+
+[[permission]]
+identifier = "deny-omp-status"
+description = "Denies the omp_status command without any pre-configured scope."
+commands.deny = ["omp_status"]
