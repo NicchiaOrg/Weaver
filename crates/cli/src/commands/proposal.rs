@@ -1437,7 +1437,7 @@ mod tests {
         let files = reply.json["files"].as_array().unwrap();
         let order = files[0]["file"].as_str().unwrap();
         assert!(
-            order.ends_with("proposals/pppppppp-t/model/shop/order.md"),
+            Path::new(order).ends_with("proposals/pppppppp-t/model/shop/order.md"),
             "{order}"
         );
         assert!(Path::new(order).is_file());

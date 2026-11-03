@@ -24,6 +24,7 @@ import {
   appProcessName,
   appVersion,
   applicationPath,
+  closeWindowKeepingSession,
   copyFixtureProject,
   driverOutput,
   findProjectWindow,
@@ -177,7 +178,7 @@ describe("Weaver smoke test", function () {
     assert.ok(state.projectWindow, "no project window was found by the earlier stages, so closing it cannot be checked");
     // Closing the last project window opens the welcome window.
     await retryWhileNoSuchWindow(() => browser.switchToWindow(state.projectWindow));
-    await browser.closeWindow();
+    await closeWindowKeepingSession(browser);
     await browser.waitUntil(
       async () => {
         const handles = await retryWhileNoSuchWindow(() => browser.getWindowHandles());

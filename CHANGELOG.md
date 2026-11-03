@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-03
+
 ### Added
 
 - Ask more opens a new conversation with omp about the Proposal, Task or Drift in a details dialog, a History entry with the Tasks it cites, the question in view of a round or the Requirements as a whole, from a button in the toolbar of the Requirements view. The first message reaches the agent together with what Weaver knows about the chosen thing; for the Requirements, the agent loads by itself the Requirement skills that fit the question. The conversation is in the Jobs view, is not a job and ends with the window.
