@@ -7,7 +7,7 @@ description: "Use when building any screen or control: theme, colours, icons, to
 
 ### Theme and components
 - shadcn/ui with the `zinc` base colour and a blue primary (Tailwind `blue-600` in light, `blue-500` in dark), in light and dark. The Theme setting is `auto` (follows the OS), `light` or `dark`; a change, of the setting or of the OS in `auto`, applies at once to every open window without a reload.
-- Every control is a shadcn/ui component (Button, DropdownMenu, Popover, Tooltip, Dialog, AlertDialog, Select, RadioGroup, Textarea, Badge, Alert, ScrollArea…); no hand-made widget where shadcn has one.
+- Every control is a shadcn/ui component (Button, DropdownMenu, ContextMenu, Popover, Tooltip, Dialog, AlertDialog, Select, RadioGroup, Textarea, Badge, Alert, ScrollArea…); no hand-made widget where shadcn has one. The File view's editor is CodeMirror (`requirements/ui#file-tab`).
 - Colours that carry a meaning (states, change kinds, label colours, the Drift and resolution marks) come from the Tailwind palette, shade 600 in light and 400 in dark. Everything else uses the theme tokens (`foreground`, `muted-foreground`, `border`, `ring`…).
 - Cards use `shadow-sm`; dialogs, popovers and menus `shadow-lg`. The border of an unchecked checkbox or radio has a contrast of at least 3:1.
 - Fonts: the system UI font stack at 14 px base; ids, paths and code use `ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`.
@@ -15,18 +15,30 @@ description: "Use when building any screen or control: theme, colours, icons, to
 - Status is never told by colour alone: every coloured dot, border or tint comes with a text, a badge or an icon, and with an accessible name.
 
 ### Window layout
-- A project window has a left sidebar, 208 px wide, with these entries in this order: Board, Chat, Jobs, Requirements, Specs, History, Settings. The selected entry is the one shown on the right; switching entries keeps the state of every view (focus, overlay, scroll).
-- Below a window width of 1024 px the sidebar shows icons only, 56 px wide, and then each entry gets its name as tooltip.
+- A project window has a left sidebar, 208 px wide, the full height of the window, with two groups of entries:
+  - at the top, in this order: Board, Chat, Jobs, Files, Requirements, Specs, History;
+  - at the bottom-left, kept apart from the top group by the free space between them: Hide, then Usage, then Settings, the last entry.
+- The selected entry is the view shown on the right; switching entries keeps the state of every view (focus, overlay, scroll), except the File view, which closes when another entry is chosen (`requirements/ui#file-view`). Usage is not a view: it opens the Usage dialog (`requirements/ui#usage`) over the view shown, is never the selected entry and never carries `aria-current`.
+- `Hide` is not a view either: always enabled, a click sends the window to the background at once (`developer.SEND_TO_BACKGROUND`), without confirmation. It is never the selected entry and never carries `aria-current`. When the window comes back it shows the same view, with every view's state as it was. When the window cannot be hidden, an error toast `Could not hide the window.` gives the reason as its description.
+- Below a window width of 1024 px the sidebar shows icons only, 56 px wide, and then each entry, Hide, Usage and Settings included, gets its name as tooltip.
 - The Board entry shows the number of real cards in Backlog; the Jobs entry shows the number of jobs waiting for the developer, in the warning colour (amber). No number is shown when it is 0.
 - The minimum size of a project window is the one in `requirements/tech#window` (960 × 600 px); its size and position are remembered per project.
+
+### View header
+- Every view (Board, Chat, Jobs, Files, Requirements, Specs, History, Settings) starts with one header row, full width of the view: the view's name as title on the left, the view's own controls, when it has any, on the right; the free space sits between them. One bottom border separates it from the content.
+- Every header has the same fixed height, 56 px plus its 1 px bottom border, whether or not it holds controls, so the border does not move when switching views. Side padding 16 px; controls are `size="sm"` Buttons and Selects, vertically centred.
+- The title is the sidebar entry's name, text only (no icon), 14 px semibold. It is the view's main heading for assistive technologies (the heading the view's region is labelled by); no other hidden heading repeats the view's name.
+- The header stays at the top while the content below it scrolls.
+- It shows in every state of the view (loading, load error, empty), but not in place of Get Started: where a view shows Get Started (`requirements/ui#project`), Get Started takes the whole view, header included.
 
 ### Icons
 lucide-react, 16 px, in the colour of the text, decorative (hidden from assistive technologies), always to the left of the text. Icon-only buttons have an accessible name and a tooltip.
 
 | Use | Icon |
 |---|---|
-| Board / Chat / Jobs | `SquareKanban` / `MessageSquare` / `Bot` |
-| Requirements / Specs / History / Settings | `ListChecks` / `Package` / `History` / `Settings` |
+| Board / Chat / Jobs / Files | `SquareKanban` / `MessageSquare` / `Bot` / `FolderTree` |
+| Requirements / Specs / History | `ListChecks` / `Package` / `History` |
+| Hide / Usage / Settings | `EyeOff` / `Gauge` / `Settings` |
 | Run, Run all | `Play` |
 | + Work Item | `Plus` |
 | Scan System | `ScanSearch` |
@@ -38,9 +50,13 @@ lucide-react, 16 px, in the colour of the text, decorative (hidden from assistiv
 | Dismiss Drift | `Ban` |
 | Fix the code / Accept Proposal | `Wrench` / `CheckCheck` |
 | Delete | `Trash2` |
-| Model of a Proposal | `Cpu` |
+| Model badge / model control of a Proposal | `Cpu` / `Settings` |
 | Open in editor | `SquareArrowOutUpRight` |
 | Open Folder | `FolderOpen` |
+| Folder / open folder / file (trees) | `Folder` / `FolderOpen` / `File` |
+| New file / New folder | `FilePlus` / `FolderPlus` |
+| Rename / Move to… | `Pencil` / `FolderInput` |
+| Agent editing a file | `Lock` |
 | Agent's choice (Specs) | `Sparkles` |
 | Split-button arrow | `ChevronDown` |
 | Warning toast / Error toast | `TriangleAlert` / `CircleX` |
@@ -62,6 +78,7 @@ lucide-react, 16 px, in the colour of the text, decorative (hidden from assistiv
 
 ### Dialogs and confirmations
 - Details and forms open in a shadcn `Dialog` (max width 720 px, the body scrolls inside); confirmations in an `AlertDialog` whose destructive button uses the `destructive` variant and whose Cancel has the initial focus.
+- A confirmation with three choices (`Save` / `Discard` / `Cancel` and the like) is an `AlertDialog` too: the choices that lose text use the `destructive` variant, the one that keeps it the default variant, and Cancel, the last button, has the initial focus.
 - Esc, the `X` button or a click outside close a Dialog; an AlertDialog closes only with its buttons or Esc. Closing puts the focus back on the control that opened it.
 - Every Dialog and AlertDialog, the question round included, is centred in the window by layout (for example a full-window flex or grid container), never by shifting it by a percentage of its own size; its top-left corner always sits on whole CSS pixels, whatever its content height and the window size (odd sizes included), so its text is never drawn between pixels.
 - They open with a 150 ms fade only, without zoom, scale or any other transform or filter; under reduced motion they appear at once. Popovers, menus, selects and tooltips keep their own opening animation.

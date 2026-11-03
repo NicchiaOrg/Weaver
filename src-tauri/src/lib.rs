@@ -32,12 +32,17 @@
 //! | [`cli_handler`]| The app side of the `weaver` commands that write: runs them in the project's queue |
 //! | [`omp`]       | The Machine `omp-setup`: where omp is, whether it is ready, installing, updating and logging in |
 //! | [`rounds`]    | Question rounds: the queue of each project, the agents waiting for the developer, the prepared question of a Drift |
+//! | [`file_view`] | The File view's tree: each window's listings and watches, the commands that create, rename, move and delete, released 10 s after the view is left |
 //! | [`windows`]   | The Machine `window`: one window per project, the welcome window, restore at start, close and quit confirmations, `Open in editor` |
+//! | [`system_certificates`] | The Machine `system-certificates`: the export of the certificates the system trusts, the status the windows show, the variables of omp processes |
+//! | [`file_tabs`] | The Machine `file-tab`: the files open in the tabs of the File view, what each read, its watch, its saving; the events of the tabs and of the agent lock |
+//! | [`file_lock`] | The Machine `file-lock`: which files open in a tab an agent of the project is changing, from the live updates of its conversations |
 //!
 //! Folders, protocol, locks and process spawning come from `weaver-core`, so the app and the
 //! `weaver` command line agree on them.
 
 pub mod agent_work;
+pub mod ask;
 pub mod bindings;
 pub mod blocking;
 pub mod board;
@@ -48,6 +53,9 @@ pub mod drift_view;
 pub mod drifts;
 pub mod error;
 pub mod events;
+pub mod file_lock;
+pub mod file_tabs;
+pub mod file_view;
 pub mod general;
 pub mod history;
 pub mod jobs;
@@ -68,7 +76,10 @@ pub mod shell;
 pub mod sidecar;
 pub mod startup;
 pub mod state;
+pub mod subagents;
+pub mod system_certificates;
 pub mod updates;
+pub mod usage;
 pub mod windows;
 
 use std::sync::Arc;
@@ -103,6 +114,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::new(dirs.clone()))
         .manage(omp::OmpSetup::new())
+        .manage(system_certificates::SystemCertificates::new())
         .menu(windows::menu::build)
         .on_menu_event(|app, event| windows::menu::on_event(app, event.id().as_ref()))
         .manage(StartupReport::default())
@@ -137,17 +149,26 @@ pub fn run() {
             omp::omp_install,
             omp::omp_log_in,
             omp::omp_log_out,
+            omp::omp_usage,
+            system_certificates::system_certificates_status,
+            system_certificates::system_certificates_refresh,
+            system_certificates::system_certificates_dismiss_notice,
+            system_certificates::system_certificates_dismiss_failure,
             windows::commands::welcome_state,
             windows::commands::open_project,
             windows::commands::open_folder,
             windows::commands::remove_recent,
             windows::commands::open_in_editor,
+            windows::commands::send_to_background,
             jobs::commands::jobs_snapshot,
             jobs::commands::job_conversation,
             jobs::commands::job_send_message,
             jobs::commands::job_stop,
             jobs::commands::job_answer_permission,
             jobs::commands::job_remove,
+            jobs::commands::job_sub_agents,
+            jobs::commands::job_sub_agent_conversation,
+            jobs::commands::job_sub_agents_view,
             jobs::commands::run_task,
             jobs::commands::run_all,
             jobs::commands::scan_system,
@@ -156,6 +177,19 @@ pub fn run() {
             general::commands::general_stop,
             general::commands::general_answer_permission,
             general::commands::general_clear,
+            general::commands::general_sub_agents,
+            general::commands::general_sub_agent_conversation,
+            general::commands::general_sub_agents_view,
+            ask::commands::ask_open,
+            ask::commands::ask_list,
+            ask::commands::ask_snapshot,
+            ask::commands::ask_send_message,
+            ask::commands::ask_stop,
+            ask::commands::ask_answer_permission,
+            ask::commands::ask_close,
+            ask::commands::ask_sub_agents,
+            ask::commands::ask_sub_agent_conversation,
+            ask::commands::ask_sub_agents_view,
             requests::requests_list,
             requests::request_read,
             requests::request_new,
@@ -166,6 +200,22 @@ pub fn run() {
             requests::request_image_import,
             requests::request_image,
             requests::requests_flushed,
+            windows::unsaved::files_unsaved,
+            windows::unsaved::files_flushed,
+            file_tabs::commands::file_open,
+            file_tabs::commands::file_reload,
+            file_tabs::commands::file_save,
+            file_tabs::commands::file_close,
+            file_view::commands::files_open_view,
+            file_view::commands::files_expand,
+            file_view::commands::files_collapse,
+            file_view::commands::files_folders,
+            file_view::commands::files_leave,
+            file_view::commands::files_create,
+            file_view::commands::files_rename,
+            file_view::commands::files_move,
+            file_view::commands::files_delete,
+            windows::unsaved::files_close_key,
             rounds::commands::question_round_get,
             rounds::commands::question_round_act
         ])
@@ -192,6 +242,17 @@ pub fn run() {
                 }),
             );
 
+            // The events of the File view's tabs and of the agent lock have somewhere to go before
+            // the first conversation of an agent can take a lock.
+            handle
+                .state::<AppState>()
+                .file_events
+                .attach(Arc::new(file_tabs::events::AppSink(handle.clone())));
+            // The tree of the File view tells its window when a listed folder changes.
+            handle
+                .state::<AppState>()
+                .file_view
+                .attach(file_view::emitter(handle.clone()));
             // The jobs of the agent: before the windows and the CLI socket, which use them.
             let jobs = jobs::install(&handle);
             requests::install(&handle, &jobs);
@@ -205,6 +266,18 @@ pub fn run() {
                 Step::app("settings", move || {
                     settings_handle.state::<AppState>().settings.load_now();
                     Ok(())
+                }),
+            );
+
+            // System Certificates: the bundle on disk and the setting; an export, when due, runs
+            // on the blocking pool and never holds up the start. It is spawned before `omp`: the
+            // age of the bundle and the Zscaler turn-on are decided before omp's first check,
+            // which waits for an export that started then (`SystemCertificates::startup_export`).
+            let certificates_handle = handle.clone();
+            startup::spawn(
+                &handle,
+                Step::app("system certificates", move || {
+                    system_certificates::start(&certificates_handle)
                 }),
             );
 
@@ -297,6 +370,8 @@ fn on_exit_or_destroyed(app: &AppHandle, event: RunEvent) {
         } => {
             if let Some(project_id) = pictures::project_of_label(&label) {
                 app.state::<AppState>().pictures.close(project_id);
+                // `window.CLOSED`: the File view's listings and watches go at once.
+                app.state::<AppState>().file_view.close_project(project_id);
             }
         }
         _ => {}

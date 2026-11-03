@@ -10,19 +10,21 @@ Every text of the interface is in English, whatever the language setting says; t
 ## app
 
 ### Overlay of a Proposal
-- The Requirements and Specs share one overlay picker per window: `Current Model` first, then every open Proposal not attached to a Drift, by id and title. Never a Draft, a Proposal being refined or an attached Proposal. When the chosen Proposal stops being open, the views go back to `Current Model` and a notice says why.
+- There is no overlay picker. The overlay is the Proposal of the last focus opened, while that focus lasts: `View requirements` on a Proposal that can be overlaid (open and not attached to a Drift; never a Draft, a Proposal being refined or an attached Proposal) draws it in both the Requirements and the Specs of the window. `View requirements` on any other Proposal opens its focus on the Current Model.
+- Opening a focus on another subject (a Task, a chip, a Proposal that cannot be overlaid), in either view, or ending the focus that drew the Proposal (`Clear` or Esc) returns both views to the Current Model.
+- When the drawn Proposal stops being open, the views go back to the Current Model and a notice says why; the focus stays, recomputed on the Current Model.
 - The overlay shows the Requirements and the Specs with the Proposal applied on top of the Proposals it requires.
 - Change colours (Tailwind 600 light / 400 dark): added `green`, changed `amber`, removed `red`. Every change also has a text label (`added`, `changed`, `removed`) and an accessible name.
 
 ### Focus
 - Requirements and Specs each have their own focus, opened by `View requirements` (a Proposal's scope or a Task's refs) or by a chip (a single ref). Steps: sections, Areas or fields in page order.
 - A chip opens the first of Requirements and Specs where its focus has at least one step. The focus of a Model element on Requirements holds the sections titled with that element or with an element containing it, up to its Feature. A chip whose focus has no step in either view is plain text, not a control.
-- Focus bar, full width under the view's toolbar: what it is about (`Proposal P3 – <title>`, `Task T4 – <title>`, or the ref), the step name (section, Area or field), `<n> of <N>`, `Previous` / `Next` (icon-only; disabled at the ends), `<M> not found` (muted, tooltip lists the missing refs one per line), on Requirements an `Only these` toggle (off at start), and `Clear`. With one step there is no counter nor arrows.
+- Focus bar, full width under the view's header: what it is about (`Proposal P3 – <title>`, `Task T4 – <title>`, or the ref), the step name (section, Area or field), `<n> of <N>`, `Previous` / `Next` (icon-only; disabled at the ends), `<M> not found` (muted, tooltip lists the missing refs one per line), on Requirements an `Only these` toggle (off at start), and `Clear`. With one step there is no counter nor arrows.
 - Focused sections and fields get a cyan (or change-colour) left border and tint; going to a step scrolls it to the top of the view.
-- When files change, the focus is recomputed and stays on the same step if it still exists. Esc clears the focus. `Clear` keeps the overlay. Step changes are announced to assistive technologies.
+- When files change, the focus is recomputed and stays on the same step if it still exists. Esc clears the focus. `Clear` and Esc also end the overlay the focus drew (see Overlay of a Proposal). Step changes are announced to assistive technologies.
 
 ### Requirements view
-- Toolbar: the overlay picker, then `Ask more` for the Requirements as a whole (see `ask-conversation`). The Specs view's toolbar has only the overlay picker.
+- Header (the view header of `requirements/ui#General`, title `Requirements`), on its right: only `Ask more` for the Requirements as a whole (see `ask-conversation`). The Specs view's header (title `Specs`) has no controls.
 - Areas in folder-name order, each with its title and prose; inside, fragments in file-name order (`<fragment>.md` in muted text next to the title); inside, sections with `General` first, then in file order.
 - Each section heading shows its title and `Open in editor` at the heading's line; it carries no reference chip and no `Ask more`. Area and fragment headings have no `Ask more` either.
 - Overlay labels: `new fragment`, `fragment removed`, `added`, `removed`, `changed`, `moved from <fragment>`. A removed section is shown struck through in muted text; a changed one shows the new text with a `Show before` toggle that shows the old text.
@@ -40,7 +42,7 @@ Every text of the interface is in English, whatever the language setting says; t
 
 - The History view lists entries newest first by their date (written or last updated), grouped by local day. Group headers: `Today · <n>`, `Yesterday · <n>`, then the long date (`Monday, 2 November 2026 · <n>`).
 - An entry row: title, one-line summary (cut with `…`, full text as tooltip), the time `HH:MM` in Today and Yesterday, the number of Tasks.
-- Period filter, a Select: `Today`, `Last 7 days` (default at each opening of the window), `Last 30 days`, `All`. A period has both bounds: from local midnight of its first day (today, 6 days ago, 29 days ago) to now; an entry dated in the future is shown only under `All`. Empty: `Nothing done in this period`.
+- Period filter, a Select on the right of the view header (`requirements/ui#General`, title `History`): `Today`, `Last 7 days` (default at each opening of the window), `Last 30 days`, `All`. A period has both bounds: from local midnight of its first day (today, 6 days ago, 29 days ago) to now; an entry dated in the future is shown only under `All`. Empty: `Nothing done in this period`.
 - Clicking an entry opens a Dialog: title, date, summary, rendered text, then its Tasks, from the copies kept in the entry, in the order cited: id, title, label badge, finished time; a row expands to show the Task's rendered body and refs, read-only. The Dialog's footer holds `Ask more` on the whole entry (see `ask-conversation`).
 
 ## window

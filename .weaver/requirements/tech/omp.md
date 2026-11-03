@@ -1,7 +1,7 @@
 ---
-description: "Use when finding, checking, installing, updating or starting omp, or building the ACP client of jobs and General."
+description: "Use when finding, checking, installing, updating or logging in omp, reading its usage limits, or opening the system terminal for its installer and logins."
 ---
-# omp and ACP
+# omp
 
 ## omp
 - **Lookup:** the first executable found wins (`omp.exe` on Windows):
@@ -14,6 +14,7 @@ description: "Use when finding, checking, installing, updating or starting omp, 
   - macOS and Linux: at start Weaver reads the login PATH once by running `$SHELL -l -c 'printf %s "$PATH"'`, with a 5 s limit. This is the only shell Weaver starts on its own. On failure it keeps the inherited PATH.
   - Windows: every lookup reads the current user and machine `Path` from the registry, so a fresh install is seen without restarting Weaver.
 - **Child PATH:** every omp process gets `<app local data>/bin`, omp's folder and bun's bin folder, then the PATH above.
+- **Certificate variables:** every omp process, of the table below, of jobs and of General, also gets the System Certificates variables of `requirements/tech#system-certificates`, read at each start.
 - **Minimum version:** `MIN_OMP_VERSION = 18.15.0`, one tested constant in `weaver-core`. It is compared as semver against `omp/<version>`. An unreadable version counts as outdated. Weaver has no fallbacks for older omp.
 - **Commands:** no shell, fixed arguments. Stdout is parsed and stderr kept for reasons. On timeout the process is killed and the run fails.
 
@@ -24,110 +25,35 @@ description: "Use when finding, checking, installing, updating or starting omp, 
 | `omp update --check` | 30 s | `UPDATE_AVAILABLE` |
 | `omp update` | 5 min | `UPDATE_ENDED` / `UPDATE_FAILED` |
 | `omp auth-broker logout <provider>` | 30 s | log out |
+| `omp usage --json` | 30 s | usage limits of the connected providers |
 
 - **Readiness:** one app-wide state, with each result tagged by the omp path it was computed for.
-- **Failure reasons:** the last non-empty stderr line, else `exit code N`, `could not start omp` or `timed out`. The same rule applies to ACP errors and job stderr tails.
-  - A certificate marker (`UNABLE_TO_GET_ISSUER_CERT_LOCALLY`, `SELF_SIGNED_CERT_IN_CHAIN`, `CERT_HAS_EXPIRED`, `certificate verify failed`, `SSL certificate problem`, `curl: (60)`) adds a plain hint: a proxy or security tool is likely inspecting HTTPS, and omp must trust its certificate.
-  - Otherwise, HTTP `403`, `407` or `5xx` (`HTTP <code>`, `status <code>`, `<code> <phrase>`) adds a proxy or provider hint.
+- **Failure reasons:** the last non-empty stderr line, else `exit code N`, `could not start omp` or `timed out`. The same rule applies to ACP errors (opening, turn and message errors) and job stderr tails.
+  - A reason that is a certificate or HTTP error (`requirements/rules#system-certificates`) is replaced by the explanation of `requirements/ui#system-certificates`, written when the failure happens with the setting as it is then. omp's own lines stay in the details where the surface has them.
 
 ## omp-setup
 - **System terminal launch:** the command runs where the developer sees it, and the terminal stays open at the end.
-  - macOS: `/usr/bin/osascript` with fixed `-e` lines: Terminal runs `do script "<command>"` and comes forward.
-  - Windows: Windows PowerShell 5.1, `powershell.exe -NoExit -NoProfile -ExecutionPolicy Bypass -Command <command>`, with `CREATE_NEW_CONSOLE`.
-  - Linux: the first of `x-terminal-emulator -e`, `gnome-terminal --`, `konsole -e`, `xfce4-terminal -x`, `xterm -e`. It runs `sh -c '<command>; printf "\nPress Enter to close"; read _'`. If none exists, Weaver shows the command to copy.
-- **Quoting:** these terminal commands do pass through a shell. One tested function quotes for the target shell. Only omp's absolute path and a provider id from the fixed list are inserted.
+  - macOS: `/usr/bin/osascript` with fixed `-e` lines: Terminal runs `do script "<command>"` and comes forward. Terminal starts the developer's own shell, which does not inherit Weaver's environment: with System Certificates on, `<command>` starts with `/usr/bin/env <NAME>=<bundle path> … ` and runs the rest under `/bin/sh -c`.
+  - Windows: Windows PowerShell 5.1, `powershell.exe -NoExit -NoProfile -ExecutionPolicy Bypass -Command <command>`, with `CREATE_NEW_CONSOLE`. The certificate variables go in its process environment.
+  - Linux: the first of `x-terminal-emulator -e`, `gnome-terminal --`, `konsole -e`, `xfce4-terminal -x`, `xterm -e`. It runs `sh -c '<command>; printf "\nPress Enter to close"; read _'`; with System Certificates on, the script starts with `export <NAME>=<bundle path> …;`, since some terminals do not pass Weaver's environment on. If none exists, Weaver shows the command to copy, certificate variables included.
+- **Quoting:** these terminal commands do pass through a shell. One tested function quotes for the target shell. Only omp's absolute path, a provider id from the fixed list, the bundle path and the installer marker path are inserted.
 - **Commands:**
-  - Installer: `curl -fsSL https://omp.sh/install | sh`, or `irm https://omp.sh/install.ps1 | iex` on Windows. Weaver never writes `ompPath` afterwards.
+  - Installer: it downloads the official installer to a temporary file and runs it, never piping it into a shell, so that a failed download counts as a failure; then it writes the exit code of the first step that failed, else `0`, to `<app local data>/omp-install/<nonce>.code`, with a new nonce at each `INSTALL_OMP`, and deletes the temporary file. Weaver never writes `ompPath` afterwards.
+    - macOS and Linux: `curl -fsSL https://omp.sh/install -o <temp>`, then `sh <temp>`, in `/bin/sh`.
+    - Windows: `Invoke-RestMethod https://omp.sh/install.ps1 -OutFile <temp>.ps1`, then a child `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <temp>.ps1`, so that the installer's `exit` ends only the child; its `$LASTEXITCODE` is the code, and a terminating error of the download is `1`.
   - Login: `omp login <provider>`.
 - **Providers,** in this order: `openai-codex` (ChatGPT), `anthropic`, `github-copilot`, `google-gemini-cli`, `google-antigravity`, `cursor`, `xai-oauth`.
   - A provider is connected when any model from `omp models --json` has it as `provider`.
   - `cursor` is offered through login only. Weaver has no API key field and stores no secret.
 - **Re-checks:** every 3 s while Installing or Logging in, one at a time. A check runs the lookup, `omp --version` and `omp models --json`. Re-checks stop when the state is left.
+  - While Installing, a check that finds no omp then reads the marker of the current nonce: a code other than `0` is `omp.INSTALL_FAILED`; `0`, no marker or an unreadable one is `omp.MISSING`. Weaver keeps the code until the next `INSTALL_OMP` or until omp is found.
 - **Updates:** the check runs at most once per hour app-wide, and its result is cached in memory. One `omp update` runs at a time app-wide.
 
-## job
-- **Command line:** `<omp> [--model <m>] [--slow <scan>] [--advisor] --config <overlay> --approval-mode <yolo|always-ask> acp`.
-  - The working folder is the project root, with stdio piped.
-  - `--model` is passed only for a non-empty role or Proposal model. A thinking suffix `:<level>` is passed whole, in `--model`, `--slow` and the advisor role.
-  - `--slow` is passed only when the instruction names `trama-analysis` and the scan model is set.
-  - `--advisor` is passed only for Runs.
-- **Process lifetime:** omp never outlives Weaver. On Unix it runs in a new process group, with `PR_SET_PDEATHSIG(SIGTERM)` on Linux. On Windows it runs in a Job Object with `KILL_ON_JOB_CLOSE`.
-- **Environment:**
-  - Inherited `WEAVER_*` variables are removed.
-  - Weaver adds `WEAVER_JOB=<job id>` and `WEAVER_ENDPOINT`. Runs also get `WEAVER_RUN=1`, and Runs of one Task get `WEAVER_TASK=<task id>`.
-  - PATH is set as in `## omp`.
-- **Overlay:** `<app local data>/overlays/<job id>.yml`, never in the repository, deleted when the job ends.
-  - Always: `bash.autoBackground.enabled: false` and `tools.maxTimeout: 0`. The skills tell the agent to run `weaver question new` with bash `timeout: 0`, since omp's default is 300 s.
-  - Runs also get `modelRoles.advisor` set to the quoted scan model, only when set, and `task.agentAdvisor` enabled for `trama-implementer`.
-  - Acceptance: at the minimum version, a `weaver question new` left unanswered for 10 minutes still gets its answers.
-- **Advisor:** in Runs, omp's advisor reads the installed `.omp/WATCHDOG.yml`. It defines two advisors with tools `read`, `grep`, `glob` and `bash`, and no model:
-  - a turn reviewer (`reviewMode: turn`, `syncBacklog: off`);
-  - a final reviewer (`reviewMode: agent-end`, `syncBacklog: strict`), so the turn ends only after its review.
+## usage
+- **Reading:** `omp usage --json` (table in `requirements/tech#omp`), run by the Rust backend only while omp is Ready; never with `invalidate`, `reset`, `--history` or any other action that writes omp's state. One reading runs at a time app-wide: an opening or a `Retry` while one runs waits for that one. Weaver never reads usage in the background or on a timer, and relies on omp's own cache of the providers' answers.
+- **Parsing:** from `reports[]`: `provider`, `fetchedAt` and each of `limits[]` with `label`, `window.resetsAt`, `amount` (`used`, `limit`, `usedFraction`, `remainingFraction`, `unit`) and `status`; from `accountsWithoutUsage[]` and `disabledCredentials[]`: `provider`. Unknown fields are ignored; output that is not valid JSON of this shape fails with the reason `omp did not return valid usage`.
+- **Providers:** only the fixed list of `requirements/tech#omp-setup`, and of it only the connected providers; reports of other providers are dropped. A connected provider without a report is `No usage data` when it is in `accountsWithoutUsage`, `Login expired` when it is in `disabledCredentials`, otherwise `Not reported by omp`. Email, account, organisation and other identity fields are never parsed, kept or sent to the interface.
+- **Used fraction**, computed in `weaver-core`: `usedFraction`, else `used / limit` when `limit` is above 0, else `used / 100` when the unit is `percent`, else `1 − remainingFraction`, else unknown; clamped to 0–1 for the bar. **Status:** omp's `status` (`ok`, `warning` = almost used up, `exhausted` = used up); without it, almost used up from 0.8 and used up from 1 of the used fraction.
+- **Last result:** one app-wide value in the backend's memory, tagged with the omp path it was read for, never written to disk; it is replaced only by a successful reading and dropped when the omp path changes. A reading that ends after its dialog closed still replaces it. Every window receives it through the backend's events; the interface keeps no copy of its own.
+- **Waiting for omp:** a dialog in Waiting for omp starts a reading when the app-wide omp state becomes Ready.
 
-  Their instructions run `weaver job show` first in each session. Without the Run marker they stay silent.
-- **Opening:**
-  - One 30 s limit covers spawn, `initialize` and `session/new` (or `session/load`).
-  - `initialize` sends protocol version 1 and `clientCapabilities` without `fs` and `terminal`, with `elicitation.form`. Missing `loadSession` or `_meta.steering.supported` is a start failure.
-  - `SESSION_STARTED` is when `session/new` returned and the instruction went out as `session/prompt`. An error reply to that prompt before any `session/update` is `START_FAILED`.
-- **Forms:** every elicitation or omp ask request in a job is answered `decline` at once, with the fixed text: "In Weaver jobs, ask the developer only with `weaver question new` (bash timeout 0). Do not ask in any other way." The UI receives nothing.
-- **Permissions:**
-  - `yolo`: a request that still arrives is answered with the first `allow_always` option, else `allow_once`.
-  - `ask`: the request goes to the UI with omp's own options and no time limit. Stop and close answer `cancelled`. The end of the turn voids it.
-- **Messages:**
-  - While Running, a message goes out as `_session/steering` with no `_meta`.
-  - Replies:
-    - `injected`: delivered;
-    - `promptRequired`: sent as `session/prompt`, then delivered;
-    - `failed` or an error: failed, with the reason.
-  - While Waiting for the developer, Weaver holds messages as queued. They go out with `_meta: {steering: {queue: "followUp"}}` once the wait ends. Stop discards held messages.
-- **Turn end:** the reply to `session/prompt` carries the stop reason.
-  - `end_turn` and `cancelled` are `TURN_ENDED`.
-  - `refusal`, `max_tokens`, `max_turn_requests` and request errors are `TURN_FAILED`.
-  - An exit Weaver did not ask for, or a closed connection, is `EXITED`, once.
-- **Shutdown:** in order:
-  1. `session/cancel` if a turn runs;
-  2. `session/close`, waiting at most 2 s;
-  3. SIGTERM to the process group (Windows: `TerminateJobObject`);
-  4. SIGKILL to the group after 3 s.
-
-  A shutdown Weaver started produces no `EXITED`.
-- **Stderr:** the last 40 lines (at most 4 KB) are kept in memory only. Reasons add them after the exit code or signal.
-- **Resume registry:**
-  - `<app local data>/jobs/<job id>.json`, written atomically at every state change and deleted when the job ends.
-  - It holds the job id, project root, kind, name, ACP session id, arguments, the env Weaver set (never the inherited env), the state, and the pid plus process start time.
-- **Resume:**
-  1. Weaver kills any leftover group whose pid and start time match.
-  2. It spawns omp again with the same arguments and env, and rewrites the overlay.
-  3. It runs `initialize` and `session/load` within 30 s, then sends the prompt "Weaver stopped and reloaded your session. Continue your work from where it stopped."
-
-  The jobs of a project resume together. The replayed history reaches the UI in one batch at the end of the load.
-
-  `session/load` is sent ordered with the incoming `session/update` notifications, as `session/prompt` is: the load ends when its answer is handled, always after every replayed update read before it. No replayed update reaches the live conversation, and the first agent message after the load starts a new entry.
-- **Sub-agents:** read from the `task` tool call's `rawOutput.details.progress[]`.
-  - Status mapping:
-    - `pending` and `running`: working;
-    - `completed`: succeeded;
-    - `failed`: failed;
-    - `aborted`: interrupted.
-  - Background sub-agents (omp `async.enabled`) end at the `session_exit` record of `<main session file minus .jsonl>/<id>.jsonl`, under omp's sessions folder (main file: name ending `_<sessionId>.jsonl`).
-    - `kind: normal` means succeeded, an error means failed, anything else means interrupted.
-    - The `id` must match `^[A-Za-z0-9_.-]+$` without a leading `.`, and the real path must stay in that folder.
-  - Any sub-agent still working when omp exits becomes interrupted.
-  - These omp internals are re-verified at each `MIN_OMP_VERSION` bump.
-
-## general-chat
-- **Process:** one omp per project's General, kept until the window closes, which shuts it down as in `## job`.
-  - With a kept session, it starts when the window opens, or as soon as omp-setup becomes Ready if it was not; it is never started for a window with no kept session.
-  - Otherwise, and after it stopped, it is started by the next message.
-- **Command line:** `<omp> [--model <analysis>] --approval-mode <mode> --append-system-prompt <file> acp`.
-  - `<file>` is the embedded General instruction, written to `<app local data>/general.md`.
-  - No `--advisor`, `--slow` or overlay.
-- **Environment:**
-  - `WEAVER_GENERAL=<General identity>` and `WEAVER_ENDPOINT`, with no `WEAVER_JOB`, so `weaver` refuses job-bound commands.
-  - The exception is `weaver job new`. The app accepts it only from the live General identity of an open project, with the same refusals as the developer's request.
-- **Session:**
-  - The session id and arguments are kept in `<app local data>/general/<project hash>.json`.
-  - A later start reloads the session with `session/load`, within the 30 s limit of `## job` and sent ordered with the replayed updates as in `## job` (Resume). If the load fails, an empty session starts and a notice says so.
-  - The start at window open sends no prompt. The replay is shown in one piece when the load answers; messages sent meanwhile are held, placed below the replay and then prompted in order.
-  - Clear closes the session and deletes the entry; during the load at window open it also ends that omp.
-- **Forms and permissions:** forms are declined, with a text telling the agent to ask in its reply. Permissions work as in `## job`.

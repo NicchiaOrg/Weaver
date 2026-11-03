@@ -3,4 +3,4 @@
 /**
  * A view of the project window, named as the sidebar's `ViewId`.
  */
-export type ShowView = "board" | "requirements" | "specs" | "history" | "jobs" | "general" | "settings";
+export type ShowView = "board" | "requirements" | "specs" | "history" | "jobs" | "files" | "general" | "settings";

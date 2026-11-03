@@ -3,6 +3,7 @@ import { useId, useRef, useState } from "react";
 
 import type { HistoryEntry } from "@/bindings/HistoryEntry";
 import type { HistoryTask } from "@/bindings/HistoryTask";
+import { AskMoreButton } from "@/components/ask/ask-button";
 import { CardId } from "@/components/card-id";
 import { FormDialog } from "@/components/dialogs";
 import {
@@ -20,6 +21,7 @@ import { useProject } from "@/components/project-context";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ViewHeader } from "@/components/view-header";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDate, formatStarted, formatTime } from "@/lib/format";
@@ -117,7 +119,7 @@ function TaskRow({ task, now }: { task: HistoryTask; now: number }) {
   );
 }
 
-/** The entry in a Dialog: title, date, summary, text, then its Tasks from the copies it keeps. */
+/** The entry in a Dialog: title, date, summary, text, then its Tasks from the copies it keeps; `Ask more` on the whole entry in its footer. */
 function EntryDialog({
   entry,
   now,
@@ -139,6 +141,7 @@ function EntryDialog({
       onOpenChange={onClose}
       title={shown.title}
       description={`${formatDate(time)}, ${formatTime(time)}`}
+      footer={<AskMoreButton target={{ kind: "history", entry: shown.id }} noun="History entry" name={shown.id} />}
     >
       <div className="flex flex-col gap-4">
         <div className="font-medium">
@@ -176,20 +179,40 @@ export function HistoryView({ now = Date.now }: HistoryViewProps) {
   const [openedId, setOpenedId] = useState<string | null>(null);
   const instant = now();
 
+  const periodSelect = (
+    <Select value={period} onValueChange={(value) => setPeriod(value as Period)}>
+      <SelectTrigger aria-label="Period" size="sm" className="w-44">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {PERIODS.map((choice) => (
+          <SelectItem key={choice.id} value={choice.id}>
+            {choice.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+
   if (!snapshot) {
-    return loadError ? (
-      <div className="flex flex-col items-start gap-3 p-4">
-        <Alert variant="error" role="alert">
-          <p className="min-w-0 flex-1">{loadError}</p>
-        </Alert>
-        <Button variant="outline" onClick={reload}>
-          Try again
-        </Button>
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <ViewHeader view="history">{periodSelect}</ViewHeader>
+        {loadError ? (
+          <div className="flex flex-col items-start gap-3 p-4">
+            <Alert variant="error" role="alert">
+              <p className="min-w-0 flex-1">{loadError}</p>
+            </Alert>
+            <Button variant="outline" onClick={reload}>
+              Try again
+            </Button>
+          </div>
+        ) : (
+          <p role="status" className="p-4 text-muted-foreground">
+            Loading the History…
+          </p>
+        )}
       </div>
-    ) : (
-      <p role="status" className="p-4 text-muted-foreground">
-        Loading the History…
-      </p>
     );
   }
 
@@ -197,21 +220,8 @@ export function HistoryView({ now = Date.now }: HistoryViewProps) {
   const opened = snapshot.entries.find((entry) => entry.id === openedId) ?? null;
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center gap-3 border-b px-4 py-2">
-        <Select value={period} onValueChange={(value) => setPeriod(value as Period)}>
-          <SelectTrigger aria-label="Period" className="w-44">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {PERIODS.map((choice) => (
-              <SelectItem key={choice.id} value={choice.id}>
-                {choice.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </header>
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+      <ViewHeader view="history">{periodSelect}</ViewHeader>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
         {groups.length === 0 ? (
           <p className="p-3 text-muted-foreground">Nothing done in this period</p>
         ) : (

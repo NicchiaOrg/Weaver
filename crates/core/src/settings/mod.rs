@@ -129,6 +129,18 @@ pub struct EditorSettings {
     pub command: String,
 }
 
+/// The System Certificates group (`requirements/tech#system-certificates`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemCertificatesSettings {
+    /// Whether omp trusts the certificates the system trusts (off by default). The first boolean
+    /// setting; its text form is `true` or `false`.
+    pub enabled: bool,
+}
+
+/// The message of a refused boolean.
+pub const BOOLEAN_MESSAGE: &str = "Choose on or off.";
+
 /// The settings in force.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -143,6 +155,7 @@ pub struct Settings {
     pub theme: Theme,
     pub editor: EditorSettings,
     pub permissions: Permissions,
+    pub system_certificates: SystemCertificatesSettings,
 }
 
 impl Default for Settings {
@@ -158,6 +171,7 @@ impl Default for Settings {
                 command: String::new(),
             },
             permissions: Permissions::Yolo,
+            system_certificates: SystemCertificatesSettings { enabled: false },
         }
     }
 }
@@ -185,13 +199,15 @@ pub enum SettingKey {
     EditorCommand,
     #[serde(rename = "permissions")]
     Permissions,
+    #[serde(rename = "systemCertificates.enabled")]
+    SystemCertificatesEnabled,
 }
 
 /// The message of a refused whole number.
 pub const WHOLE_NUMBER_MESSAGE: &str = "Enter a whole number of at least 1.";
 
 impl SettingKey {
-    pub const ALL: [SettingKey; 10] = [
+    pub const ALL: [SettingKey; 11] = [
         SettingKey::OmpPath,
         SettingKey::ModelsAnalysis,
         SettingKey::ModelsScan,
@@ -202,6 +218,7 @@ impl SettingKey {
         SettingKey::EditorPreset,
         SettingKey::EditorCommand,
         SettingKey::Permissions,
+        SettingKey::SystemCertificatesEnabled,
     ];
 
     /// The key in the file: `models.analysis` is `analysis` inside `models`.
@@ -217,6 +234,7 @@ impl SettingKey {
             SettingKey::EditorPreset => "editor.preset",
             SettingKey::EditorCommand => "editor.command",
             SettingKey::Permissions => "permissions",
+            SettingKey::SystemCertificatesEnabled => "systemCertificates.enabled",
         }
     }
 }
@@ -250,6 +268,7 @@ impl Settings {
             SettingKey::EditorPreset => self.editor.preset.as_str().to_owned(),
             SettingKey::EditorCommand => self.editor.command.clone(),
             SettingKey::Permissions => self.permissions.as_str().to_owned(),
+            SettingKey::SystemCertificatesEnabled => self.system_certificates.enabled.to_string(),
         }
     }
 
@@ -296,6 +315,13 @@ impl Settings {
                 self.permissions = Permissions::parse(trimmed)
                     .ok_or_else(|| "Choose Run without asking or Ask before acting.".to_owned())?;
             }
+            SettingKey::SystemCertificatesEnabled => {
+                self.system_certificates.enabled = match trimmed {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err(BOOLEAN_MESSAGE.to_owned()),
+                };
+            }
         }
         Ok(())
     }
@@ -304,6 +330,10 @@ impl Settings {
     /// other invalid value.
     fn set_json(&mut self, key: SettingKey, value: &Value) -> Result<(), String> {
         let text = match (key, value) {
+            (SettingKey::SystemCertificatesEnabled, Value::Bool(on)) => on.to_string(),
+            (SettingKey::SystemCertificatesEnabled, _) => {
+                return Err("Expected true or false.".to_owned())
+            }
             (SettingKey::MaxParallelAgents, Value::Number(n)) => n
                 .as_u64()
                 .map(|n| n.to_string())
@@ -400,6 +430,9 @@ impl Settings {
         {
             let value = match key {
                 SettingKey::MaxParallelAgents => Value::from(self.max_parallel_agents),
+                SettingKey::SystemCertificatesEnabled => {
+                    Value::from(self.system_certificates.enabled)
+                }
                 _ => Value::from(self.text(key)),
             };
             match key.path().split_once('.') {
@@ -439,6 +472,56 @@ mod tests {
         assert_eq!(defaults.editor.preset, EditorPreset::Vscode);
         assert_eq!(defaults.editor.command, "");
         assert_eq!(defaults.permissions, Permissions::Yolo);
+        assert!(!defaults.system_certificates.enabled);
+    }
+
+    #[test]
+    fn the_boolean_setting_reads_writes_and_refuses_like_the_others() {
+        let key = SettingKey::SystemCertificatesEnabled;
+        let mut settings = Settings::default();
+        settings.set_text(key, " true ").unwrap();
+        assert!(settings.system_certificates.enabled);
+        assert_eq!(settings.text(key), "true");
+        assert!(!settings.is_default(key));
+        for bad in ["", "yes", "1", "True", "on"] {
+            assert_eq!(
+                settings.set_text(key, bad),
+                Err(BOOLEAN_MESSAGE.to_owned()),
+                "{bad}"
+            );
+            assert!(settings.system_certificates.enabled);
+        }
+        // The file holds a JSON boolean, and only when it differs from the default.
+        let file: Value = serde_json::from_str(&settings.file_text()).unwrap();
+        assert_eq!(
+            file,
+            serde_json::json!({ "version": 1, "systemCertificates": { "enabled": true } })
+        );
+        settings.set_text(key, "false").unwrap();
+        let file: Value = serde_json::from_str(&settings.file_text()).unwrap();
+        assert_eq!(file, serde_json::json!({ "version": 1 }));
+        // Reading: a JSON boolean is accepted.
+        let (read, issues) =
+            Settings::parse_file(r#"{"systemCertificates":{"enabled":true}}"#).unwrap();
+        assert!(read.system_certificates.enabled && issues.is_empty());
+    }
+
+    #[test]
+    fn a_wrong_type_for_the_boolean_counts_as_the_default_and_is_reported() {
+        for text in [
+            r#"{"systemCertificates":{"enabled":"true"}}"#,
+            r#"{"systemCertificates":{"enabled":1}}"#,
+            r#"{"systemCertificates":{"enabled":null}}"#,
+        ] {
+            let (read, issues) = Settings::parse_file(text).unwrap();
+            assert!(!read.system_certificates.enabled, "{text}");
+            assert_eq!(issues.len(), 1, "{text}");
+            assert_eq!(issues[0].key, SettingKey::SystemCertificatesEnabled);
+            assert!(!issues[0].reason.is_empty());
+        }
+        let (read, issues) = Settings::parse_file(r#"{"systemCertificates":true}"#).unwrap();
+        assert!(!read.system_certificates.enabled);
+        assert_eq!(issues.len(), 1);
     }
 
     #[test]
@@ -486,6 +569,7 @@ mod tests {
                 "theme": "auto",
                 "editor": { "preset": "vscode", "command": "" },
                 "permissions": "yolo",
+                "systemCertificates": { "enabled": false },
             })
         );
     }

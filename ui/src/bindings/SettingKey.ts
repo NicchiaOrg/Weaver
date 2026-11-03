@@ -3,4 +3,4 @@
 /**
  * One setting. The serialised form is the dotted key of the file.
  */
-export type SettingKey = "ompPath" | "models.analysis" | "models.scan" | "models.execution" | "maxParallelAgents" | "language" | "theme" | "editor.preset" | "editor.command" | "permissions";
+export type SettingKey = "ompPath" | "models.analysis" | "models.scan" | "models.execution" | "maxParallelAgents" | "language" | "theme" | "editor.preset" | "editor.command" | "permissions" | "systemCertificates.enabled";

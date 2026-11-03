@@ -25,11 +25,18 @@
 //! | [`notification`] | System notifications (Machine `notification`): foreground test, texts, grouping, click routing |
 //! | [`project_files`] | Files Weaver installs for the agent: generated Requirement skills, initialisation, sync |
 //! | [`question`] | Question rounds (Machine `question-round`): request validation, the round, the queue of a project |
+//! | [`system_certificates`] | System Certificates: the bundle of the certificates the system trusts, its export, the variables of omp processes, the Machine `system-certificates` |
+//! | [`file_tab`] | The files open in the tabs of the File view: checked paths, reading, saving, tab rules |
+//! | [`file_lock`] | The Machine `file-lock`: which files open in a tab an agent is changing |
+//! | [`file_view`] | The File view's tree: listing, create / rename / move / delete, the Machine `file-view` |
 
 pub mod agent_files;
 pub mod atomic;
 pub mod command;
 pub mod endpoint;
+pub mod file_lock;
+pub mod file_tab;
+pub mod file_view;
 pub mod ipc;
 pub mod job_instruction;
 pub mod jobs;
@@ -45,3 +52,4 @@ pub mod protocol;
 pub mod question;
 pub mod runtime;
 pub mod settings;
+pub mod system_certificates;

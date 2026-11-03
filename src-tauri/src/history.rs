@@ -9,7 +9,6 @@
 use serde::Serialize;
 use tauri::State;
 use ts_rs::TS;
-use weaver_core::project::cards::CardKind;
 use weaver_core::project::history::{self, Entry, TaskCopy};
 use weaver_core::project::image::ProjectImage;
 
@@ -91,12 +90,7 @@ fn entry_of(image: &ProjectImage, entry: Entry) -> HistoryEntry {
         .iter()
         .map(|id| {
             // A cited Task still a file (its copy could not be made yet) is shown from the file.
-            let copy = entry
-                .cleared
-                .get(id)
-                .cloned()
-                .or_else(|| history::copy_of(image, image.card(CardKind::Task, id)?).ok());
-            task_of(id, copy)
+            task_of(id, history::shown_copy(image, &entry, id))
         })
         .collect();
     HistoryEntry {

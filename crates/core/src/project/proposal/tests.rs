@@ -967,11 +967,12 @@ fn approving_a_change_of_requirements_writes_the_requirement_skills_in_the_same_
         report
             .changes
             .iter()
-            .any(|c| c.path == ".agents/skills/trama-req-ui-main/SKILL.md"),
+            .any(|c| c.path == ".agents/skills/weaver-req-ui-main/SKILL.md"),
         "{:?}",
         report.changes
     );
-    let skill = fs::read_to_string(root.join(".agents/skills/trama-req-ui-main/SKILL.md")).unwrap();
+    let skill =
+        fs::read_to_string(root.join(".agents/skills/weaver-req-ui-main/SKILL.md")).unwrap();
     assert!(skill.contains("changed"), "{skill}");
     // Nothing else of the installed list is written by an approval.
     assert!(!root.join(".omp").exists());

@@ -65,7 +65,7 @@ impl JobKind {
         }
     }
 
-    /// Whether the job's skill hands work to `trama-analysis` sub-agents, which run on omp's slow
+    /// Whether the job's skill hands work to `weaver-analysis` sub-agents, which run on omp's slow
     /// role: only the scan does.
     pub fn uses_analysis_agents(self) -> bool {
         self == JobKind::Scan

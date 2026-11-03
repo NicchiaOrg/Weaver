@@ -6,9 +6,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SettingChange } from "@/bindings/SettingChange";
 import type { SettingField } from "@/bindings/SettingField";
 import type { SettingsSnapshot } from "@/bindings/SettingsSnapshot";
+import type { SystemCertificatesStatus } from "@/bindings/SystemCertificatesStatus";
 import { SettingsView, type ModelCatalog } from "@/components/settings-view";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { SettingsProvider } from "@/hooks/use-settings";
 import { call, on } from "@/lib/backend";
+
+const OFF: SystemCertificatesStatus = { revision: 1, phase: "off", automatic: false, count: null, writtenAt: null, error: null, turnOnNotice: false, failureBanner: false, failureReason: null };
 
 vi.mock("@/lib/backend", () => ({
   call: vi.fn(),
@@ -61,6 +65,16 @@ const schema: SettingField[] = [
       { value: "ask", label: "Ask before acting" },
     ],
   },
+  {
+    key: "systemCertificates.enabled",
+    title: "System Certificates",
+    description:
+      "omp trusts the certificates your system trusts, for proxies that inspect HTTPS. Replaces NODE_EXTRA_CA_CERTS, SSL_CERT_FILE and similar variables.",
+    advice: null,
+    kind: "boolean",
+    defaultValue: "false",
+    choices: [],
+  },
 ];
 
 function snapshot(revision = 1, patch: Partial<SettingsSnapshot["settings"]> = {}, rest: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
@@ -74,6 +88,7 @@ function snapshot(revision = 1, patch: Partial<SettingsSnapshot["settings"]> = {
       theme: "auto",
       editor: { preset: "vscode", command: "" },
       permissions: "yolo",
+      systemCertificates: { enabled: false },
       ...patch,
     },
     issues: [],
@@ -93,12 +108,13 @@ function install(initial: SettingsSnapshot) {
   current = initial;
   saved = [];
   failWrites = null;
-  vi.mocked(on).mockImplementation(((_name: string, handler: (next: SettingsSnapshot) => void) => {
-    push = handler;
+  vi.mocked(on).mockImplementation(((name: string, handler: (next: SettingsSnapshot) => void) => {
+    if (name === "settings-changed") push = handler;
     return Promise.resolve(() => {});
   }) as unknown as typeof on);
   vi.mocked(call).mockImplementation(((name: string, args: { change?: SettingChange }) => {
     if (name === "settings_get") return Promise.resolve(current);
+    if (name === "system_certificates_status") return Promise.resolve(OFF);
     const change = args.change!;
     saved.push(change);
     if (change.key === "maxParallelAgents" && !/^[1-9][0-9]*$/.test(change.value)) {
@@ -122,6 +138,9 @@ function install(initial: SettingsSnapshot) {
       case "permissions":
         s.permissions = change.value as typeof s.permissions;
         break;
+      case "systemCertificates.enabled":
+        s.systemCertificates.enabled = change.value === "true";
+        break;
       case "editor.preset":
         s.editor.preset = change.value as typeof s.editor.preset;
         break;
@@ -141,9 +160,11 @@ function install(initial: SettingsSnapshot) {
 
 async function show(props: Parameters<typeof SettingsView>[0] = {}) {
   render(
-    <SettingsProvider>
-      <SettingsView {...props} />
-    </SettingsProvider>,
+    <TooltipProvider>
+      <SettingsProvider>
+        <SettingsView {...props} />
+      </SettingsProvider>
+    </TooltipProvider>,
   );
   await screen.findByRole("heading", { name: "omp" });
 }
@@ -161,11 +182,32 @@ describe("settings view", () => {
     }
   });
 
+  it("starts with the view header, titled Settings, and its groups are 14 px semibold, never larger than the title", async () => {
+    await show({ projectSlot: <p>Update skills box</p> });
+    const title = screen.getByRole("heading", { level: 1, name: "Settings" });
+    expect(title.closest("header")).toHaveClass("h-14", "border-b");
+    expect(title.closest("header")?.nextElementSibling).toContainElement(screen.getByRole("heading", { name: "omp" }));
+    for (const group of screen.getAllByRole("heading", { level: 2 })) {
+      expect(group).toHaveClass("text-sm", "font-semibold");
+    }
+  });
+
   it("shows the Project group only with its slot, and the omp slot first in its group", async () => {
     await show({ ompSlot: <p>omp status box</p> });
     expect(screen.queryByRole("heading", { name: "Project" })).not.toBeInTheDocument();
     const group = screen.getByRole("region", { name: "omp" });
     expect(group.firstElementChild?.nextElementSibling?.textContent).toBe("omp status box");
+  });
+
+  it("puts System Certificates last in the omp group, after Permissions, and never shows its key", async () => {
+    await show({ ompSlot: <p>omp status box</p> });
+    const group = screen.getByRole("region", { name: "omp" });
+    const labels = Array.from(group.children).map((child) => child.textContent ?? "");
+    expect(labels[1]).toBe("omp status box");
+    expect(labels.findIndex((text) => text.startsWith("Permissions"))).toBeLessThan(labels.findIndex((text) => text.startsWith("System Certificates")));
+    expect(labels.at(-1)).toMatch(/^System Certificates/);
+    expect(screen.getByRole("switch", { name: "System Certificates" })).not.toBeChecked();
+    expect(screen.queryByText("systemCertificates.enabled")).not.toBeInTheDocument();
   });
 
   it("shows titles, bold advice and descriptions from the schema", async () => {

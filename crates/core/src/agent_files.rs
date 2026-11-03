@@ -10,7 +10,7 @@
 //! | `omp/agents/<name>.md` (sub-agent definitions) | `.omp/agents/<name>.md` |
 //! | `omp/WATCHDOG.yml` (instructions of the advisor of the Advisor Scanner) | `.omp/WATCHDOG.yml` |
 //!
-//! The generated `trama-req-*` skills are not in this list: they come from the Requirements
+//! The generated `weaver-req-*` skills are not in this list: they come from the Requirements
 //! of each project. Writing and comparing the files in a project is not done here; this module
 //! only says which files exist and what each one holds.
 //!
@@ -27,7 +27,7 @@
 //!
 //! returning the whole file: Markdown, LF, a final newline. The CLI crate also owns the way
 //! the file is regenerated (it writes [`COMMAND_REFERENCE_ASSET`], relative to the folder of
-//! `weaver-core`, i.e. `crates/core/assets/skills/trama-design/COMMANDS.md`).
+//! `weaver-core`, i.e. `crates/core/assets/skills/weaver-design/COMMANDS.md`).
 //! Nothing in this crate depends on the format, only on the reference naming every command
 //! as `weaver <object> <verb>` (see the tests).
 
@@ -49,23 +49,23 @@ pub const OMP_DIR: &str = ".omp";
 
 /// The installed skills, one folder each with a `SKILL.md`.
 pub const SKILL_NAMES: [&str; 7] = [
-    "trama-setup",
-    "trama-design",
-    "trama-import",
-    "trama-scan",
-    "trama-compare",
-    "trama-implement",
-    "trama-resolve-drifts",
+    "weaver-setup",
+    "weaver-design",
+    "weaver-import",
+    "weaver-scan",
+    "weaver-compare",
+    "weaver-implement",
+    "weaver-resolve-drifts",
 ];
 
 /// A sub-agent definition is smaller than this, in bytes (6 KB).
 pub const SUBAGENT_DEFINITION_LIMIT: usize = 6 * 1024;
 
 /// Where the generated command reference sits in the sources, relative to `crates/core/assets/`.
-pub const COMMAND_REFERENCE_ASSET: &str = "skills/trama-design/COMMANDS.md";
+pub const COMMAND_REFERENCE_ASSET: &str = "skills/weaver-design/COMMANDS.md";
 
 /// Where the generated command reference is installed, relative to the project root.
-pub const COMMAND_REFERENCE_PATH: &str = ".agents/skills/trama-design/COMMANDS.md";
+pub const COMMAND_REFERENCE_PATH: &str = ".agents/skills/weaver-design/COMMANDS.md";
 
 /// One file Weaver installs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,10 +171,9 @@ mod tests {
         "diagram",
         "diagrams",
     ];
-    const OUT_OF_SCOPE_PHRASES: [&str; 13] = [
+    const OUT_OF_SCOPE_PHRASES: [&str; 12] = [
         "trama-merge",
         "pr check",
-        "ask more",
         "pre-flight",
         "preflight",
         "\"progress\"",
@@ -220,10 +219,10 @@ mod tests {
             .map(|n| format!("{SKILLS_DIR}/{n}/SKILL.md"))
             .collect();
         expected.extend([
-            ".agents/skills/trama-design/FORMAT.md".to_owned(),
+            ".agents/skills/weaver-design/FORMAT.md".to_owned(),
             COMMAND_REFERENCE_PATH.to_owned(),
-            ".omp/agents/trama-analysis.md".to_owned(),
-            ".omp/agents/trama-implementer.md".to_owned(),
+            ".omp/agents/weaver-analysis.md".to_owned(),
+            ".omp/agents/weaver-implementer.md".to_owned(),
             ".omp/WATCHDOG.yml".to_owned(),
         ]);
         expected.sort();
@@ -449,7 +448,7 @@ mod tests {
                 "{name}: front matter"
             );
             assert!(
-                file.contents.contains("../trama-design/COMMANDS.md"),
+                file.contents.contains("../weaver-design/COMMANDS.md"),
                 "{name}: no command reference"
             );
             assert!(
@@ -462,12 +461,12 @@ mod tests {
             );
         }
         for name in [
-            "trama-setup",
-            "trama-design",
-            "trama-import",
-            "trama-scan",
-            "trama-implement",
-            "trama-resolve-drifts",
+            "weaver-setup",
+            "weaver-design",
+            "weaver-import",
+            "weaver-scan",
+            "weaver-implement",
+            "weaver-resolve-drifts",
         ] {
             let file = installed_file(&format!("{SKILLS_DIR}/{name}/SKILL.md")).expect("skill");
             assert!(
@@ -483,10 +482,10 @@ mod tests {
 
     #[test]
     fn the_sub_agent_definitions_have_the_models_the_requirement_gives() {
-        let analysis = installed_file(".omp/agents/trama-analysis.md").expect("analysis");
+        let analysis = installed_file(".omp/agents/weaver-analysis.md").expect("analysis");
         assert!(analysis.contents.contains("\nmodel: \"@slow\"\n"));
-        assert!(analysis.contents.contains("trama-compare"));
-        let implementer = installed_file(".omp/agents/trama-implementer.md").expect("implementer");
+        assert!(analysis.contents.contains("weaver-compare"));
+        let implementer = installed_file(".omp/agents/weaver-implementer.md").expect("implementer");
         let front_matter = implementer
             .contents
             .split("\n---\n")

@@ -25,6 +25,24 @@ const TEMP_SUFFIX: &str = ".tmp";
 ///
 /// `unix_mode` (for example `0o600`) is applied at creation on Unix and ignored elsewhere.
 pub fn write(path: &Path, bytes: &[u8], unix_mode: Option<u32>) -> io::Result<()> {
+    write_with(path, bytes, unix_mode, None)
+}
+
+/// Like [`write`], for a file that is replaced and keeps its permission bits: the temp file gets
+/// the permissions of the file at `path` (the executable bit included, whatever the umask),
+/// when there is one; a new file gets the default ones. Where permissions are not copied
+/// (outside Unix) this is [`write`].
+pub fn write_keeping_permissions(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let permissions = fs::metadata(path).ok().map(|meta| meta.permissions());
+    write_with(path, bytes, None, permissions)
+}
+
+fn write_with(
+    path: &Path,
+    bytes: &[u8],
+    unix_mode: Option<u32>,
+    permissions: Option<fs::Permissions>,
+) -> io::Result<()> {
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -37,7 +55,8 @@ pub fn write(path: &Path, bytes: &[u8], unix_mode: Option<u32>) -> io::Result<()
     temp_name.push(name);
     temp_name.push(format!(".{}{TEMP_SUFFIX}", random_hex(12)));
     let temp = parent.join(temp_name);
-    let result = write_temp(&temp, bytes, unix_mode).and_then(|()| rename_with_retry(&temp, path));
+    let result = write_temp(&temp, bytes, unix_mode, permissions)
+        .and_then(|()| rename_with_retry(&temp, path));
     if result.is_err() {
         let _ = fs::remove_file(&temp);
     }
@@ -50,7 +69,12 @@ pub fn is_temp_name(name: &str) -> bool {
     name.len() > 1 + TEMP_SUFFIX.len() && name.starts_with('.') && name.ends_with(TEMP_SUFFIX)
 }
 
-fn write_temp(temp: &Path, bytes: &[u8], unix_mode: Option<u32>) -> io::Result<()> {
+fn write_temp(
+    temp: &Path,
+    bytes: &[u8],
+    unix_mode: Option<u32>,
+    permissions: Option<fs::Permissions>,
+) -> io::Result<()> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -62,10 +86,18 @@ fn write_temp(temp: &Path, bytes: &[u8], unix_mode: Option<u32>) -> io::Result<(
     let _ = unix_mode;
     let mut file: File = options.open(temp)?;
     file.write_all(bytes)?;
+    // Copied from the replaced file with `fchmod`, which the umask does not touch.
+    #[cfg(unix)]
+    if let Some(permissions) = permissions {
+        file.set_permissions(permissions)?;
+    }
+    #[cfg(not(unix))]
+    let _ = permissions;
     file.sync_all()
 }
 
-fn rename_with_retry(from: &Path, to: &Path) -> io::Result<()> {
+/// Renames `from` over `to`, retrying a refusal for sharing reasons on Windows (see the module).
+pub fn rename_with_retry(from: &Path, to: &Path) -> io::Result<()> {
     let deadline = Instant::now() + RENAME_RETRY_WINDOW;
     loop {
         match fs::rename(from, to) {

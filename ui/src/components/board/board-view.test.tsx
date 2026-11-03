@@ -256,6 +256,34 @@ describe("Scan System", () => {
   });
 });
 
+describe("the view header", () => {
+  it("holds the title `Board` on the left and Scan System with the count on the right, in one row", async () => {
+    install(board(1, { doneSinceLastScan: 3 }));
+    await show();
+    const header = screen.getByRole("heading", { level: 1, name: "Board" }).closest("header")!;
+    expect(within(header).getByRole("button", { name: "Scan System" })).toBeInTheDocument();
+    expect(within(header).getByText("· 3 done since last scan")).toBeInTheDocument();
+    expect(document.querySelectorAll("header")).toHaveLength(1);
+  });
+
+  it("shows while the Board loads", async () => {
+    vi.mocked(call).mockImplementation((() => new Promise(() => {})) as unknown as typeof call);
+    render(
+      <TooltipProvider>
+        <ProjectContext.Provider value={{ projectId: PROJECT, showView: vi.fn(), openJob: vi.fn(), openedJob: null }}>
+          <BoardActionsContext.Provider value={{}}>
+            <BoardProvider projectId={PROJECT}>
+              <BoardView />
+            </BoardProvider>
+          </BoardActionsContext.Provider>
+        </ProjectContext.Provider>
+      </TooltipProvider>,
+    );
+    expect(screen.getByRole("heading", { level: 1, name: "Board" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading the Board…");
+  });
+});
+
 describe("details", () => {
   const body = "Carry out the **cart**.";
 

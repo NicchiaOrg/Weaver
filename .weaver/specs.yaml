@@ -24,11 +24,19 @@ frameworks:
   - name: schemars
     chosenByAgent: produces the JSON Schemas printed by `--help --json` from the same input types
   - name: notify
-    chosenByAgent: cross-platform file watching of each open project
+    chosenByAgent: cross-platform file watching of each open project's `.weaver/` and of what its File view shows
   - name: pulldown-cmark
     chosenByAgent: Markdown parsing of Model and Requirement files in the core
+  - name: trash
+    chosenByAgent: moves what the File view deletes to the system's trash on macOS, Windows and Linux
   - name: fd-lock
     chosenByAgent: OS file locks that serialise writes of the app and of command line processes
+  - name: rustls-native-certs
+    note: reads the certificate authorities the operating system trusts for System Certificates, with no child process
+  - name: webpki-root-certs
+    note: Mozilla's public root authorities as whole certificates, compiled into Weaver and added to the System Certificates bundle; the sibling of `webpki-roots`, which holds only trust anchors that cannot be written as PEM
+  - name: x509-parser
+    chosenByAgent: parses each certificate of the System Certificates export to keep only certificate authorities
   - name: Vite
     chosenByAgent: the bundler Tauri recommends for a React interface
   - name: React
@@ -54,6 +62,9 @@ frameworks:
     note: renders Markdown with `remark-gfm`; raw HTML disabled
   - name: remark-gfm
     note: tables, strikethrough, task lists and autolinks in Markdown
+  - name: CodeMirror
+    version: "6"
+    note: the File view's editor, with `@codemirror/language-data` for syntax colours, each language loaded on first use; no WASM, no completion, no lint, no language server
 data:
   - name: Project files
     note: Markdown and YAML under `.weaver/` in the developer's repository; no database

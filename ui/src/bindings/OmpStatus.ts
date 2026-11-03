@@ -48,4 +48,13 @@ loginProvider: string | null,
 /**
  * Installing and Logging in: the terminal could not be opened.
  */
-terminalProblem: TerminalProblem | null, logout: LogoutNote | null, };
+terminalProblem: TerminalProblem | null, logout: LogoutNote | null, 
+/**
+ * Checking at the app's start: the first check waits for the export of System Certificates
+ * (`Exporting system certificates first…`).
+ */
+waitingForExport: boolean, 
+/**
+ * Missing after a failed installer: its text, with the exit code, for the setting as it is.
+ */
+installerFailure: string | null, };

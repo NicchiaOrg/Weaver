@@ -349,7 +349,7 @@ mod tests {
         assert!(dir.path().join(".weaver/requirements/ui/area.md").is_file());
         assert!(dir
             .path()
-            .join(".agents/skills/trama-design/COMMANDS.md")
+            .join(".agents/skills/weaver-design/COMMANDS.md")
             .is_file());
         assert!(dir.path().join(".omp/WATCHDOG.yml").is_file());
         let image = ProjectImage::load(dir.path());
@@ -380,7 +380,7 @@ mod tests {
     #[test]
     fn differing_agent_files_are_all_listed_and_nothing_is_created_unless_forced() {
         let dir = tempfile::tempdir().unwrap();
-        for file in [".agents/skills/trama-design/SKILL.md", ".omp/WATCHDOG.yml"] {
+        for file in [".agents/skills/weaver-design/SKILL.md", ".omp/WATCHDOG.yml"] {
             let path = dir.path().join(file);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, "mine").unwrap();
@@ -389,13 +389,13 @@ mod tests {
         assert!(
             error
                 .message
-                .contains("- .agents/skills/trama-design/SKILL.md"),
+                .contains("- .agents/skills/weaver-design/SKILL.md"),
             "{}",
             error.message
         );
         assert!(error.message.contains("- .omp/WATCHDOG.yml"));
         assert!(!dir.path().join(".weaver").exists());
-        assert!(!dir.path().join(".agents/skills/trama-setup").exists());
+        assert!(!dir.path().join(".agents/skills/weaver-setup").exists());
         assert_eq!(
             fs::read_to_string(dir.path().join(".omp/WATCHDOG.yml")).unwrap(),
             "mine"

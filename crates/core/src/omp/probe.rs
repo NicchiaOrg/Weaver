@@ -8,6 +8,7 @@
 //! | `omp update --check` | 30 s | a newer version exists |
 //! | `omp update` | 5 min | the update ended or failed |
 //! | `omp auth-broker logout <provider>` | 30 s | log out |
+//! | `omp usage --json` | 30 s | usage limits of the connected providers (see [`super::usage`]) |
 
 use std::path::{Path, PathBuf};
 
@@ -32,8 +33,8 @@ pub struct OmpModel {
     pub thinking_levels: Vec<String>,
 }
 
-/// What a check found. The four outcomes are the events `omp.READY`, `omp.MISSING`,
-/// `omp.OUTDATED` and `omp.NO_PROVIDER`.
+/// What a check found. The outcomes are the events `omp.READY`, `omp.MISSING`, `omp.OUTDATED`,
+/// `omp.NO_PROVIDER` and, while Installing, `omp.INSTALL_FAILED`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeResult {
     /// omp answers with the minimum version and at least one model.
@@ -51,6 +52,9 @@ pub enum ProbeResult {
     },
     /// omp answers with the minimum version and no model.
     NoProvider { omp: PathBuf, version: String },
+    /// Only while Installing (`omp.INSTALL_FAILED`): omp is still not found, and the installer
+    /// ended with an exit code other than 0.
+    InstallFailed { exit_code: i32 },
 }
 
 /// The models in the output of `omp models --json`: `{"models": [...]}` or the array itself.
@@ -108,13 +112,12 @@ pub fn probe(setting: &str, env: &LookupEnv, exec: &dyn Exec) -> ProbeResult {
 
 /// A check of an omp already found (the lookup is not repeated).
 pub fn probe_found(omp: &Path, exec: &dyn Exec) -> ProbeResult {
+    let missing = |failure: Failure| ProbeResult::Missing {
+        reason: Some(failure.status_text_for(exec.system_certificates_on())),
+    };
     let version_output = match exec.run(omp, &["--version"], limits::VERSION) {
         Ok(output) => output,
-        Err(failure) => {
-            return ProbeResult::Missing {
-                reason: Some(failure.status_text()),
-            }
-        }
+        Err(failure) => return missing(failure),
     };
     let version = parse_omp_version(&version_output.stdout);
     if !is_supported(version.as_ref()) {
@@ -126,11 +129,7 @@ pub fn probe_found(omp: &Path, exec: &dyn Exec) -> ProbeResult {
     let version = version.expect("a supported version was read").to_string();
     let models_output = match exec.run(omp, &["models", "--json"], limits::MODELS) {
         Ok(output) => output,
-        Err(failure) => {
-            return ProbeResult::Missing {
-                reason: Some(failure.status_text()),
-            }
-        }
+        Err(failure) => return missing(failure),
     };
     match parse_models(&models_output.stdout) {
         None => ProbeResult::Missing {
@@ -209,19 +208,24 @@ pub fn check_for_update(omp: &Path, exec: &dyn Exec) -> Result<Option<String>, F
         .map(|output| parse_update_check(&output.stdout))
 }
 
-/// `omp update`.
-pub fn run_update(omp: &Path, exec: &dyn Exec) -> Result<(), Failure> {
-    exec.run(omp, &["update"], limits::UPDATE).map(|_| ())
+/// `omp update`. On failure, its reason: the explanation of a proxy problem, else the last line
+/// of stderr (`requirements/tech#omp`, "Failure reasons"), chosen with the setting as it is now.
+pub fn run_update(omp: &Path, exec: &dyn Exec) -> Result<(), String> {
+    exec.run(omp, &["update"], limits::UPDATE)
+        .map(|_| ())
+        .map_err(|failure| failure.reason_for(exec.system_certificates_on()))
 }
 
-/// `omp auth-broker logout <provider>`; `provider` is an id of the fixed list.
+/// `omp auth-broker logout <provider>`; `provider` is an id of the fixed list. On failure, its
+/// reason, as for [`run_update`].
 pub fn logout(
     omp: &Path,
     provider: &super::providers::Provider,
     exec: &dyn Exec,
-) -> Result<(), Failure> {
+) -> Result<(), String> {
     exec.run(omp, &["auth-broker", "logout", provider.id], limits::LOGOUT)
         .map(|_| ())
+        .map_err(|failure| failure.reason_for(exec.system_certificates_on()))
 }
 
 #[cfg(test)]
@@ -240,11 +244,18 @@ pub(crate) mod fake {
     pub struct FakeOmp {
         answers: Mutex<Vec<(Vec<String>, Answer)>>,
         pub calls: Mutex<Vec<(Vec<String>, Duration)>>,
+        certificates_on: bool,
     }
 
     impl FakeOmp {
         pub fn new() -> Self {
             Self::default()
+        }
+
+        /// System Certificates is on in this fake.
+        pub fn certificates_on(mut self) -> Self {
+            self.certificates_on = true;
+            self
         }
 
         pub fn on(self, args: &[&str], answer: Answer) -> Self {
@@ -275,6 +286,10 @@ pub(crate) mod fake {
                 .map(|(_, answer)| answer.clone())
                 .unwrap_or(Err(Failure::NotStarted))
         }
+
+        fn system_certificates_on(&self) -> bool {
+            self.certificates_on
+        }
     }
 }
 
@@ -286,6 +301,7 @@ mod tests {
     use super::*;
     use crate::omp::lookup::Os;
     use crate::omp::providers::provider;
+    use crate::omp::run::Output;
 
     const MODELS: &str = r#"{"models":[
         {"provider":"anthropic","kind":"chat","id":"a","selector":"anthropic/a","name":"Model A","thinking":["low","high"]},
@@ -532,5 +548,60 @@ mod tests {
             too_old_text(None, "timed out."),
             "omp is older than 18.15.0 and could not be updated (timed out)."
         );
+    }
+
+    fn certificate_failure() -> Result<Output, Failure> {
+        Err(Failure::Exit {
+            code: Some(1),
+            stderr: "fetching models\nunable to get local issuer certificate\nclosing\n".into(),
+        })
+    }
+
+    #[test]
+    fn a_certificate_error_replaces_the_reason_with_the_setting_as_it_is_at_the_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let omp = omp_in(dir.path());
+        let off = FakeOmp::new().on(&["--version"], certificate_failure());
+        let ProbeResult::Missing { reason: Some(text) } = probe_found(&omp, &off) else {
+            panic!("missing expected")
+        };
+        assert!(text.contains("turning on System Certificates"), "{text}");
+        assert!(!text.ends_with('.'), "{text}");
+        let on = FakeOmp::new()
+            .certificates_on()
+            .on(&["--version"], certificate_failure());
+        let ProbeResult::Missing { reason: Some(text) } = probe_found(&omp, &on) else {
+            panic!("missing expected")
+        };
+        assert!(text.contains("even with System Certificates on"), "{text}");
+    }
+
+    #[test]
+    fn a_failed_update_or_logout_carries_the_explained_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let omp = omp_in(dir.path());
+        let http = || {
+            Err(Failure::Exit {
+                code: Some(1),
+                stderr: "request failed: HTTP 407\nbye\n".into(),
+            })
+        };
+        let fake = FakeOmp::new()
+            .on(&["update"], http())
+            .on(&["auth-broker", "logout", "anthropic"], http());
+        let expected = "omp received an HTTP 407 error; a corporate proxy that inspects HTTPS traffic may be blocking the request, and turning on System Certificates in Weaver's settings may fix it";
+        assert_eq!(run_update(&omp, &fake), Err(expected.to_owned()));
+        assert_eq!(
+            logout(&omp, provider("anthropic").unwrap(), &fake),
+            Err(expected.to_owned())
+        );
+        let plain = FakeOmp::new().on(
+            &["update"],
+            Err(Failure::Exit {
+                code: Some(2),
+                stderr: "no space left\n".into(),
+            }),
+        );
+        assert_eq!(run_update(&omp, &plain), Err("no space left".to_owned()));
     }
 }

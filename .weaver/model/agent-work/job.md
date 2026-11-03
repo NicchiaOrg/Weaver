@@ -1,6 +1,6 @@
 # Job
 
-One piece of work Weaver gives the agent: a setup, a design on a written request, an import, a scan of the whole System, a Run of one Task or of all runnable Tasks, a resolve of one Drift, the rework of a rejected Proposal, or the refinement of a stale Proposal. It has a fixed name, one omp process and one ACP session, and a conversation in Weaver that shows the agent's messages, its tool calls and its sub-agents. A job owns the Tasks it holds, the cards it announced and the question rounds it asked; when it ends, for any reason, all of them are released or withdrawn in the same step. A card a job handed over can be decided or run only once that job has ended. A job ends only on a definite fact, never because time passed or because the agent seems idle.
+One piece of work Weaver gives the agent: a setup, a design on a written request, an import, a scan of the whole System, a Run of one Task or of all runnable Tasks, a resolve of one Drift, the rework of a rejected Proposal, or the refinement of a stale Proposal. It has a fixed name, one omp process and one ACP session, and a conversation in Weaver that shows the agent's messages, its tool calls and its sub-agents. The developer can open the conversation of each of its sub-agents, and of the sub-agents those start, to read what it is doing, while the job works and after it ends, as long as the job is listed; these conversations are read-only. A job owns the Tasks it holds, the cards it announced and the question rounds it asked; when it ends, for any reason, all of them are released or withdrawn in the same step. A card a job handed over can be decided or run only once that job has ended. A job ends only on a definite fact, never because time passed or because the agent seems idle.
 
 ## States
 
@@ -16,7 +16,7 @@ No job exists yet. Only one Run works at a time in a project, Run all counting a
 - `question-round.ANSWERED` → Queued: a resolve job, when the answer to a prepared Drift question needs the agent.
 - `developer.REWORK_PROPOSAL` → Queued: a rework job with the skill of the Proposal's kind and the feedback; for a resolution, only on its Drifts still open, and none when no Drift is open.
 - `developer.APPROVE_PROPOSAL` → Queued: a refinement job, when the Proposal approved must be refined first.
-- `agent.START_JOB` → Queued: the job the agent of General asked for on the developer's explicit request, with the same refusals as when the developer asks for it.
+- `agent.START_JOB` → Queued: the job the agent of General or of an Ask more conversation asked for on the developer's explicit request, with the same refusals as when the developer asks for it.
 
 ### Queued
 Created, waiting for omp to be ready and for the omp process to open its session. Weaver starts omp in the project, with the `weaver` command line on its path and the job known to it, and sends the instruction.

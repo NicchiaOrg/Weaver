@@ -107,7 +107,7 @@ fn access_text(command: &Command) -> Option<&'static str> {
             "Only the agent of a job Weaver started can use it (Weaver sets `WEAVER_JOB` in the environment of that agent). For any other caller the outcome is `unavailable`, with exit 0.",
         ),
         Access::General => Some(
-            "Only the agent of the project's General that Weaver started can run it (Weaver sets `WEAVER_GENERAL` in the environment of that agent). Any other caller is refused with exit 1 and nothing is written.",
+            "Only the agent of the project's General or of an Ask more conversation that Weaver started can run it (Weaver sets `WEAVER_GENERAL` or `WEAVER_ASK` in the environment of that agent). Any other caller is refused with exit 1 and nothing is written.",
         ),
     }
 }
@@ -231,7 +231,7 @@ impl Command {
 // ---------------------------------------------------------------------------------------------
 // The command reference of the installed skills
 
-/// The Markdown reference of every command, installed with the `trama-design` skill as
+/// The Markdown reference of every command, installed with the `weaver-design` skill as
 /// `COMMANDS.md`: LF, with a final newline. A test of this crate fails when it differs from the
 /// copy embedded in `weaver-core`.
 pub fn command_reference() -> String {

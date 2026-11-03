@@ -29,6 +29,11 @@ use super::conversation::{Conversation, Delivery, EndLine, PermissionState};
 use super::host::Host;
 use super::wire::{ConversationSnapshot, EntriesEvent, JobInfo, JobObserver, JobRow, JobsSnapshot};
 use crate::agent_work::{Ghost, GhostKind, GhostPhase};
+use crate::subagents::poller::{Access, Poller};
+use crate::subagents::reader::{Done, Location};
+use crate::subagents::tree::Plan;
+use crate::subagents::wire::{Outgoing, Owner, Step, SubAgentConversation, SubAgentsEvent};
+use crate::subagents::Agents;
 use crate::{log_info, log_warn};
 
 /// The most finished jobs the Jobs list keeps.
@@ -73,6 +78,9 @@ pub(crate) struct Live {
     pub exit_details: Option<String>,
     /// The order of the announcements, for the ghosts.
     pub announced: HashMap<String, u64>,
+    /// Its sub-agents, and the loop that reads their transcripts.
+    pub agents: Agents,
+    pub poller: Arc<Poller>,
 }
 
 impl Live {
@@ -309,6 +317,103 @@ impl Jobs {
         })
     }
 
+    // -----------------------------------------------------------------------------------------
+    // Sub-agents
+    // -----------------------------------------------------------------------------------------
+
+    /// The sub-agents of a job, as the list shows them.
+    pub fn sub_agents(&self, project_id: &str, job_id: &str) -> Result<SubAgentsEvent, String> {
+        let mut inner = self.lock();
+        let live = inner
+            .jobs
+            .get_mut(job_id)
+            .filter(|l| l.project_id == project_id)
+            .ok_or_else(|| format!("the job {job_id} does not exist"))?;
+        Ok(SubAgentsEvent {
+            project_id: project_id.to_owned(),
+            owner: Owner::Job {
+                id: job_id.to_owned(),
+            },
+            nodes: live.agents.list(&live.conversation),
+        })
+    }
+
+    /// The conversation of the sub-agent at `path` of a job, as it is now.
+    pub fn sub_agent_conversation(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        path: &[Step],
+    ) -> Result<SubAgentConversation, String> {
+        let mut inner = self.lock();
+        let live = inner
+            .jobs
+            .get_mut(job_id)
+            .filter(|l| l.project_id == project_id)
+            .ok_or_else(|| format!("the job {job_id} does not exist"))?;
+        let owner = Owner::Job {
+            id: job_id.to_owned(),
+        };
+        live.agents
+            .conversation(&live.conversation, project_id, &owner, path)
+    }
+
+    /// What the Jobs view shows now: whether the list of the sub-agents of the job is on screen,
+    /// and the conversation of which sub-agent. Transcripts are read only for what is on screen.
+    pub fn sub_agents_view(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        list_shown: bool,
+        shown: Option<Vec<Step>>,
+    ) -> Result<(), String> {
+        let poller = {
+            let mut inner = self.lock();
+            let live = inner
+                .jobs
+                .get_mut(job_id)
+                .filter(|l| l.project_id == project_id)
+                .ok_or_else(|| format!("the job {job_id} does not exist"))?;
+            live.agents.interest(list_shown, shown);
+            live.poller.clone()
+        };
+        poller.poke(|| self.access(job_id));
+        Ok(())
+    }
+
+    fn access(&self, job_id: &str) -> Arc<dyn Access> {
+        Arc::new(JobAccess {
+            jobs: self.arc(),
+            id: job_id.to_owned(),
+        })
+    }
+
+    /// The session of the job is open: its sub-agents' transcripts are under it.
+    pub(crate) fn locate_agents(&self, id: &str, session: &str) {
+        let Some(root) = self.host.sessions_root() else {
+            return;
+        };
+        if let Some(live) = self.lock().jobs.get_mut(id) {
+            live.agents.locate(Location {
+                root,
+                session: session.to_owned(),
+                owner_name: live.record.name.clone(),
+            });
+        }
+    }
+
+    /// The conversation lists sub-agents that may need reading: starts the loop that reads them.
+    pub(crate) fn wake_agents(&self, id: &str) {
+        let poller = self.lock().jobs.get(id).map(|l| l.poller.clone());
+        if let Some(poller) = poller {
+            self.wake_poller(&poller, id);
+        }
+    }
+
+    fn wake_poller(&self, poller: &Arc<Poller>, id: &str) {
+        poller.wake(|| self.access(id));
+    }
+
     /// How many jobs of the project work (the agent runs or waits): what closing the window asks
     /// the developer about.
     pub fn working_count(&self, project_id: &str) -> usize {
@@ -515,6 +620,8 @@ impl Jobs {
                     instruction,
                     proposal_model: new.plan.proposal_model.clone(),
                     exit_details: None,
+                    agents: Agents::new(),
+                    poller: Arc::new(Poller::default()),
                     announced: HashMap::new(),
                 },
             );
@@ -664,6 +771,7 @@ impl Jobs {
                         },
                     };
                     live.conversation.finish(end);
+                    live.agents.interrupt();
                     live.record.ended = Some(self.now());
                     live.record.pid = None;
                     live.record.pid_started = None;
@@ -700,6 +808,13 @@ impl Jobs {
         if let Some(info) = outcome.ended.clone() {
             log_info!(ctx: crate::logging::Context { project: None, job: Some(&info.id) }, "job ended: {:?}", info.state);
             self.release(&info);
+            // `job.ENDED` (Done, Failed, Stopped): what its agent was changing is not held any more.
+            if let Some(locks) = self.host.file_locks() {
+                locks.conversation_ended(
+                    &info.project_id,
+                    &weaver_core::file_lock::job_conversation(&info.id),
+                );
+            }
             for observer in &observers {
                 observer.job_ended(&info);
             }
@@ -746,19 +861,30 @@ impl Jobs {
         });
     }
 
-    /// Emits the conversation changes of a job, if any.
+    /// Emits the conversation changes of a job, if any, and what changed in its sub-agents.
     pub(crate) fn emit_entries(&self, live: &mut Live, reset: bool) {
         let changes = live.conversation.take_changes();
-        if changes.is_empty() && !reset {
-            return;
+        if !changes.is_empty() || reset {
+            self.host.emit_entries(&EntriesEvent {
+                project_id: live.project_id.clone(),
+                job_id: live.record.id.clone(),
+                seq: live.conversation.seq(),
+                reset,
+                changes,
+            });
         }
-        self.host.emit_entries(&EntriesEvent {
-            project_id: live.project_id.clone(),
-            job_id: live.record.id.clone(),
-            seq: live.conversation.seq(),
-            reset,
-            changes,
-        });
+        let owner = Owner::Job {
+            id: live.record.id.clone(),
+        };
+        for outgoing in live
+            .agents
+            .collect(&live.conversation, &live.project_id, &owner)
+        {
+            match outgoing {
+                Outgoing::List(event) => self.host.emit_sub_agents(&event),
+                Outgoing::Entries(event) => self.host.emit_sub_agent_entries(&event),
+            }
+        }
     }
 
     /// The list of a project changed: tells the UI and the Board.
@@ -829,7 +955,13 @@ impl Jobs {
         }
         replayed.mark_sent();
         live.conversation = replayed;
+        // The sub-agents are rebuilt from the replayed history, and their transcripts are read
+        // again from the start.
+        live.agents.reset();
         self.emit_entries(live, true);
+        let poller = live.poller.clone();
+        drop(inner);
+        self.wake_poller(&poller, id);
     }
 
     // -----------------------------------------------------------------------------------------
@@ -920,6 +1052,8 @@ impl Jobs {
                 return Err("A job that works cannot be removed.".to_owned());
             }
             live.hidden = true;
+            // Removing the job removes its sub-agents.
+            live.agents = Agents::new();
         }
         self.changed(project_id, Some(job_id));
         Ok(())
@@ -1222,6 +1356,8 @@ impl Jobs {
                     instruction: String::new(),
                     proposal_model: None,
                     exit_details: None,
+                    agents: Agents::new(),
+                    poller: Arc::new(Poller::default()),
                     announced,
                     record,
                 },
@@ -1306,6 +1442,29 @@ impl Jobs {
             let flush = jobs.clone();
             let _ = tauri::async_runtime::spawn_blocking(move || flush.flush()).await;
         }
+    }
+}
+
+/// The poller of the sub-agents of a job reads and applies through the registry, under its lock.
+struct JobAccess {
+    jobs: Arc<Jobs>,
+    id: String,
+}
+
+impl Access for JobAccess {
+    fn plan(&self) -> Option<Plan> {
+        let mut inner = self.jobs.lock();
+        let live = inner.jobs.get_mut(&self.id)?;
+        live.agents.plan(&live.conversation)
+    }
+
+    fn apply(&self, generation: u64, done: Vec<Done>) {
+        let mut inner = self.jobs.lock();
+        let Some(live) = inner.jobs.get_mut(&self.id) else {
+            return;
+        };
+        live.agents.apply(&mut live.conversation, generation, done);
+        self.jobs.emit_entries(live, false);
     }
 }
 

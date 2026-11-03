@@ -26,6 +26,11 @@ pub trait Authority {
     fn accepts_job(&self, root: &Path, job: &str) -> bool;
     /// Whether `token` is the identity of the working General of the project at `root`.
     fn accepts_general(&self, root: &Path, token: &str) -> bool;
+    /// Whether `token` is the identity of a working Ask more conversation of the project at
+    /// `root`.
+    fn accepts_ask(&self, _root: &Path, _token: &str) -> bool {
+        false
+    }
     /// What the app knows about the agent's work in the project at `root`: which jobs work, which
     /// Run or resolve is in progress. Nothing when no app answers.
     fn facts(&self, _root: &Path) -> AgentFacts {
@@ -69,7 +74,9 @@ impl Authority for NoJobs {
 /// The failure of a command refused for its caller.
 pub fn access_failure(command: &Command) -> Failure {
     let who = match command.access {
-        Access::General => "the agent of the General that Weaver started for this project",
+        Access::General => {
+            "the agent of the General or of an Ask more conversation that Weaver started for this project"
+        }
         _ => "the agent of a job that Weaver started",
     };
     Failure::new(
@@ -190,10 +197,16 @@ pub fn execute(
             .job
             .as_deref()
             .is_some_and(|job| authority.accepts_job(root, job)),
-        Access::General => caller
-            .general
-            .as_deref()
-            .is_some_and(|token| authority.accepts_general(root, token)),
+        Access::General => {
+            caller
+                .general
+                .as_deref()
+                .is_some_and(|token| authority.accepts_general(root, token))
+                || caller
+                    .ask
+                    .as_deref()
+                    .is_some_and(|token| authority.accepts_ask(root, token))
+        }
     };
     if !allowed {
         return Err(access_failure(command));
@@ -305,6 +318,7 @@ mod tests {
             state: state.map(Into::into),
             input: input.as_object().cloned().unwrap_or_else(Map::new),
             general: None,
+            ask: None,
         }
     }
 

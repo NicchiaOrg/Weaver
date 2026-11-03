@@ -3,23 +3,28 @@
 //! the load fails, Stop, the exit of omp, Clear, permissions and forms, and `weaver job new` from
 //! General. No omp, no network.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 use weaver_core::jobs::general::{GeneralRecord, GeneralStore};
+use weaver_core::jobs::subagents::SubAgentState;
 use weaver_core::settings::Permissions;
 
 use super::service::General;
-use super::wire::{GeneralEntries, GeneralEvents, GeneralState};
+use super::wire::{AskClosed, AskEntries, AskRow, GeneralEntries, GeneralEvents, GeneralState};
 use crate::jobs::conversation::{Delivery, Entry, PermissionState};
 use crate::jobs::testing::{text_update, until, Project, TestHost, LIMIT, TASK};
 use crate::jobs::Jobs;
+use crate::subagents::wire::{Owner, Step};
 
 #[derive(Default)]
 struct Recorder {
     states: Mutex<Vec<GeneralState>>,
     entries: Mutex<Vec<GeneralEntries>>,
+    rows: Mutex<Vec<AskRow>>,
+    ask_entries: Mutex<Vec<AskEntries>>,
+    closed: Mutex<Vec<AskClosed>>,
 }
 
 impl GeneralEvents for Recorder {
@@ -29,6 +34,18 @@ impl GeneralEvents for Recorder {
 
     fn entries(&self, entries: &GeneralEntries) {
         self.entries.lock().unwrap().push(entries.clone());
+    }
+
+    fn ask_changed(&self, row: &AskRow) {
+        self.rows.lock().unwrap().push(row.clone());
+    }
+
+    fn ask_entries(&self, entries: &AskEntries) {
+        self.ask_entries.lock().unwrap().push(entries.clone());
+    }
+
+    fn ask_closed(&self, closed: &AskClosed) {
+        self.closed.lock().unwrap().push(closed.clone());
     }
 }
 
@@ -814,6 +831,151 @@ async fn a_turn_that_fails_shows_its_reason_and_keeps_omp() {
     assert!(f.general.identity(f.id()).is_some(), "omp stays");
 }
 
+/// A certificate error and an HTTP error, each with the setting on and off, and the explanation
+/// each one must produce.
+fn proxy_cases() -> Vec<(String, bool, String)> {
+    let mut cases = Vec::new();
+    for text in [
+        "fetch failed: UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+        "request failed: HTTP 407",
+    ] {
+        for on in [false, true] {
+            let expected = weaver_core::omp::failure::explain(text, on).unwrap();
+            assert_eq!(expected.contains("turning on System Certificates"), !on);
+            cases.push((text.to_owned(), on, expected));
+        }
+    }
+    cases
+}
+
+fn stopped(f: &Fixture) -> Option<(String, Option<String>)> {
+    f.entries().into_iter().find_map(|e| match e {
+        Entry::OmpStopped { reason, details } => Some((reason, details)),
+        _ => None,
+    })
+}
+
+#[tokio::test]
+async fn an_exit_or_an_opening_with_a_proxy_error_stops_omp_with_the_explanation_and_omps_lines_as_details(
+) {
+    for (text, on, expected) in proxy_cases() {
+        // omp exits: the error is not on the last line, the whole tail is tested.
+        let f = fixture().await;
+        f.host.settings.lock().unwrap().system_certificates.enabled = on;
+        f.host.script(json!({ "prompts": [[agent("Starting"), { "stderr": text }, { "stderr": "error: giving up" }, { "exit": 3 }]] }));
+        f.send("Hello");
+        until("omp to stop", LIMIT, || stopped(&f).is_some()).await;
+        let (reason, details) = stopped(&f).unwrap();
+        assert_eq!(reason, expected, "exit {text} {on}");
+        assert_eq!(details, Some(format!("{text}\nerror: giving up")));
+
+        // The session cannot be opened.
+        let f = fixture().await;
+        f.host.settings.lock().unwrap().system_certificates.enabled = on;
+        f.host.script(json!({ "newError": text }));
+        f.send("Hello");
+        until("omp to stop", LIMIT, || stopped(&f).is_some()).await;
+        assert_eq!(stopped(&f).unwrap().0, expected, "opening {text} {on}");
+    }
+}
+
+#[tokio::test]
+async fn a_turn_and_a_refused_message_with_a_proxy_error_show_the_explanation_and_omp_stays() {
+    for (text, on, expected) in proxy_cases() {
+        let f = fixture().await;
+        f.host.settings.lock().unwrap().system_certificates.enabled = on;
+        f.host
+            .script(json!({ "prompts": [[agent("Working"), { "error": text }]] }));
+        f.send("Hello");
+        until("the failure", LIMIT, || {
+            f.entries()
+                .iter()
+                .any(|e| matches!(e, Entry::TurnFailed { reason } if *reason == expected))
+        })
+        .await;
+        assert!(f.general.identity(f.id()).is_some(), "omp stays");
+
+        let f = fixture().await;
+        f.host.settings.lock().unwrap().system_certificates.enabled = on;
+        f.host.script(json!({ "log": f.host.received_log(), "steering": [format!("failed:{text}")], "prompts": [[{ "wait_steer": 1 }, agent("Still here")]] }));
+        f.send("Hello");
+        f.received("the first prompt", |m| m["method"] == "session/prompt")
+            .await;
+        f.send("Meanwhile");
+        until("the refusal", LIMIT, || {
+            f.entries().iter().any(|e| matches!(e, Entry::Developer { text, delivery: Delivery::NotDelivered { reason }, .. } if text == "Meanwhile" && *reason == expected))
+        })
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn an_error_that_is_not_a_proxy_problem_keeps_its_reason_in_chat() {
+    let f = fixture().await;
+    f.host
+        .script(json!({ "prompts": [[{ "error": "status 404" }]] }));
+    f.send("Hello");
+    until("the failure", LIMIT, || {
+        f.entries()
+            .iter()
+            .any(|e| matches!(e, Entry::TurnFailed { reason } if reason == "status 404"))
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn every_start_of_omp_reads_the_certificate_setting_again_also_the_one_a_message_makes_after_a_stop(
+) {
+    let names = [
+        "NODE_EXTRA_CA_CERTS",
+        "SSL_CERT_FILE",
+        "PI_REQUEST_COMPRESSION",
+    ];
+    let f = fixture().await;
+    let bundle = f.host.dirs.system_certificates_file();
+    std::fs::create_dir_all(bundle.parent().unwrap()).unwrap();
+    std::fs::write(&bundle, "pem").unwrap();
+    f.host.settings.lock().unwrap().system_certificates.enabled = true;
+    f.host.script(json!({
+        "log": f.host.received_log(),
+        "logEnv": names,
+        "prompts": [[{ "exit": 3 }]],
+    }));
+    let stops = || {
+        f.entries()
+            .iter()
+            .filter(|e| matches!(e, Entry::OmpStopped { .. }))
+            .count()
+    };
+    f.send("Hello");
+    until("the first stop", LIMIT, || stops() == 1).await;
+
+    // The setting is turned off while omp is stopped: the next start gets nothing.
+    f.host.settings.lock().unwrap().system_certificates.enabled = false;
+    f.send("Again");
+    until("the second stop", LIMIT, || stops() == 2).await;
+
+    // And on again: the third start gets the variables of that moment.
+    f.host.settings.lock().unwrap().system_certificates.enabled = true;
+    f.send("Once more");
+    until("the third stop", LIMIT, || stops() == 3).await;
+
+    let environments: Vec<Value> = f
+        .host
+        .received()
+        .into_iter()
+        .filter_map(|line| line.get("env").cloned())
+        .collect();
+    assert_eq!(environments.len(), 3);
+    let bundle = json!(bundle.to_string_lossy());
+    assert_eq!(environments[0]["NODE_EXTRA_CA_CERTS"], bundle);
+    assert_eq!(environments[0]["SSL_CERT_FILE"], bundle);
+    assert_eq!(environments[0]["PI_REQUEST_COMPRESSION"], "0");
+    assert!(names.iter().all(|name| environments[1][name].is_null()));
+    assert_eq!(environments[2]["SSL_CERT_FILE"], bundle);
+    assert_eq!(environments[2]["PI_REQUEST_COMPRESSION"], "0");
+}
+
 #[tokio::test]
 async fn clear_deletes_the_record_and_the_conversation_also_during_a_turn_and_a_new_one_starts_empty(
 ) {
@@ -1007,6 +1169,7 @@ mod job_new {
             root: root.to_string_lossy().into_owned(),
             input: input.as_object().unwrap().clone(),
             general: token.map(str::to_owned),
+            ask: None,
         }
     }
 
@@ -1288,5 +1451,840 @@ async fn clear_right_after_the_window_opened_leaves_no_omp_alive_however_far_it_
                 },
             )
             .unwrap();
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Sub-agents
+// ---------------------------------------------------------------------------------------------
+
+/// The folder of the sub-agents' transcripts of the fake agent's session, under the sessions
+/// folder of the test host; its main session file is created.
+fn agents_folder(host: &TestHost) -> PathBuf {
+    let folder = host
+        .dirs
+        .local_data_dir()
+        .join("omp-sessions")
+        .join("--project--");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("2026-11-02T07-00-00-000Z_fake-session.jsonl"),
+        "{}\n",
+    )
+    .unwrap();
+    folder.join("2026-11-02T07-00-00-000Z_fake-session")
+}
+
+fn user_line(text: &str) -> String {
+    format!(
+        "{}\n",
+        json!({ "type": "message", "message": { "role": "user", "content": [{ "type": "text", "text": text }] } })
+    )
+}
+
+fn assistant_line(text: &str) -> String {
+    format!(
+        "{}\n",
+        json!({ "type": "message", "message": { "role": "assistant", "content": [{ "type": "text", "text": text }] } })
+    )
+}
+
+fn exit_line(kind: &str) -> String {
+    format!(
+        "{}\n",
+        json!({ "type": "custom", "customType": "session_exit", "data": { "kind": kind } })
+    )
+}
+
+fn progress_step(call: &str, status: &str, progress: Value) -> Value {
+    json!({ "update": { "sessionUpdate": "tool_call_update", "toolCallId": call, "status": status, "rawOutput": { "details": { "progress": progress } } } })
+}
+
+fn step(call: &str, id: &str) -> Step {
+    Step {
+        call: call.into(),
+        id: id.into(),
+    }
+}
+
+fn agent_states(general: &General, project: &str) -> Vec<(String, SubAgentState)> {
+    general
+        .sub_agents(project)
+        .unwrap()
+        .nodes
+        .iter()
+        .map(|node| (node.id.clone(), node.state))
+        .collect()
+}
+
+#[tokio::test]
+async fn the_sub_agents_of_the_chat_are_listed_read_while_shown_and_interrupted_when_omp_exits() {
+    let f = fixture().await;
+    let agents = agents_folder(&f.host);
+    let gate = f.host.dirs.local_data_dir().join("gate");
+    f.host.script(json!({
+        "prompts": [[
+            { "update": { "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Task", "status": "in_progress" } },
+            progress_step("t1", "in_progress", json!([
+                { "id": "0-A", "name": "A", "status": "running" },
+                { "id": "1-B", "name": "B", "status": "running" },
+                { "id": "__advisor.turn", "status": "running" },
+            ])),
+            { "write": { "path": agents.join("0-A.jsonl"), "text": user_line("Read the code.") + &assistant_line("Done reading.") + &exit_line("normal") } },
+            { "write": { "path": agents.join("1-B.jsonl"), "text": user_line("Write the test.") } },
+            // The call returns while they still work: they run in the background.
+            progress_step("t1", "completed", json!([
+                { "id": "0-A", "name": "A", "status": "pending" },
+                { "id": "1-B", "name": "B", "status": "pending" },
+            ])),
+            { "wait_file": gate },
+            { "stderr": "error: gone" },
+            { "exit": 3 },
+        ]],
+    }));
+    f.send("Start the work");
+    until("the two sub-agents to be listed", LIMIT, || {
+        agent_states(&f.general, f.id()).len() == 2
+    })
+    .await;
+    assert!(
+        f.general
+            .sub_agent_conversation(f.id(), &[step("t1", "__advisor.turn")])
+            .is_err(),
+        "an advisor is never listed or shown"
+    );
+
+    // A's conversation is shown: its transcript is read, and its exit record (the fallback)
+    // settles it while the task call says it still works.
+    let path_a = vec![step("t1", "0-A")];
+    f.general
+        .sub_agents_view(f.id(), Some(path_a.clone()))
+        .unwrap();
+    until("A to be read and settled", LIMIT, || {
+        agent_states(&f.general, f.id())
+            .iter()
+            .any(|(id, state)| id == "0-A" && *state == SubAgentState::Succeeded)
+    })
+    .await;
+    let a = f.general.sub_agent_conversation(f.id(), &path_a).unwrap();
+    assert_eq!(a.owner, Owner::General);
+    assert_eq!(a.unavailable, None);
+    assert_eq!(
+        a.entries,
+        [
+            Entry::Assignment {
+                from: "Chat".into(),
+                text: "Read the code.".into()
+            },
+            Entry::Agent {
+                text: "Done reading.".into(),
+                complete: true
+            },
+        ]
+    );
+    assert!(f
+        .host
+        .lists
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|list| list.owner == Owner::General && list.project_id == f.id()));
+    assert_eq!(
+        agent_states(&f.general, f.id())[1],
+        ("1-B".to_owned(), SubAgentState::Working)
+    );
+
+    // omp exits with B still working: B is interrupted, in the list and under the task row.
+    std::fs::write(&gate, "").unwrap();
+    until("omp to stop", LIMIT, || {
+        f.entries()
+            .iter()
+            .any(|e| matches!(e, Entry::OmpStopped { .. }))
+    })
+    .await;
+    assert_eq!(
+        agent_states(&f.general, f.id()),
+        [
+            ("0-A".to_owned(), SubAgentState::Succeeded),
+            ("1-B".to_owned(), SubAgentState::Interrupted),
+        ]
+    );
+    let row_states: Vec<SubAgentState> = f
+        .entries()
+        .iter()
+        .filter_map(|entry| match entry {
+            Entry::Tool(tool) if tool.id == "t1" => Some(tool.sub_agents.iter().map(|a| a.state)),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(
+        row_states,
+        [SubAgentState::Succeeded, SubAgentState::Interrupted]
+    );
+}
+
+#[tokio::test]
+async fn the_sub_agents_are_rebuilt_from_the_replayed_history_and_clear_forgets_them() {
+    let f = fixture().await;
+    f.host.script(json!({ "prompts": [[agent("Answer")]] }));
+    f.send("Question");
+    until("the turn", LIMIT, || {
+        f.entries().contains(&Entry::Agent {
+            text: "Answer".into(),
+            complete: true,
+        })
+    })
+    .await;
+    f.general.window_closed(f.id()).await;
+    f.record().unwrap();
+
+    let agents = agents_folder(&f.host);
+    std::fs::create_dir_all(&agents).unwrap();
+    std::fs::write(
+        agents.join("0-A.jsonl"),
+        user_line("Read the code.") + &assistant_line("Read it.") + &exit_line("normal"),
+    )
+    .unwrap();
+
+    // A new run of Weaver: the replay is what omp keeps; the sub-agents come from it.
+    f.host.script(json!({
+        "replay": [
+            { "sessionUpdate": "user_message_chunk", "content": { "type": "text", "text": "Question" } },
+            { "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Task", "status": "completed",
+              "rawOutput": { "details": { "progress": [{ "id": "0-A", "name": "A", "status": "completed" }] } } },
+        ],
+    }));
+    let general = General::new(f.host.clone(), Arc::new(Recorder::default()));
+    general.open(f.id(), &f.project.root).await;
+    until("the history to come back", LIMIT, || {
+        let state = general.snapshot(f.id()).unwrap().state;
+        !state.loading && !general.entries(f.id()).is_empty()
+    })
+    .await;
+    assert_eq!(
+        agent_states(&general, f.id()),
+        [("0-A".to_owned(), SubAgentState::Succeeded)],
+        "rebuilt from the history, not from the live updates"
+    );
+
+    // Its transcript is read from the start when it is shown.
+    let path = vec![step("t1", "0-A")];
+    general.sub_agents_view(f.id(), Some(path.clone())).unwrap();
+    until("the transcript to be read", LIMIT, || {
+        general
+            .sub_agent_conversation(f.id(), &path)
+            .is_ok_and(|c| c.entries.len() == 2)
+    })
+    .await;
+
+    // Clear starts again empty: the sub-agents are gone with the conversation.
+    general.clear(f.id()).unwrap();
+    assert!(general.sub_agents(f.id()).unwrap().nodes.is_empty());
+    assert!(general.sub_agent_conversation(f.id(), &path).is_err());
+    general.window_closed(f.id()).await;
+}
+
+// -----------------------------------------------------------------------------------------------
+// Ask more: conversations about one thing, not jobs (`requirements/tech#ask-conversation`)
+// -----------------------------------------------------------------------------------------------
+
+mod ask_more {
+    use weaver_core::jobs::ask;
+
+    use super::*;
+    use crate::general::service::{AskOpening, Rebuild};
+    use crate::general::wire::{AskKind, AskStatus};
+
+    const INSTRUCTION: &str = "Weaver: Ask more\n\nthe chosen thing\n";
+
+    /// The instruction a lost session would be replaced with, changeable by the test.
+    type Rebuilt = Arc<Mutex<Option<String>>>;
+
+    fn rebuilt(text: Option<&str>) -> (Rebuild, Rebuilt) {
+        let shared: Rebuilt = Arc::new(Mutex::new(text.map(str::to_owned)));
+        let seen = shared.clone();
+        (Arc::new(move || seen.lock().unwrap().clone()), shared)
+    }
+
+    fn open(f: &Fixture, rebuild: Rebuild) -> String {
+        f.general.open_ask(AskOpening {
+            project_id: f.id().to_owned(),
+            root: f.project.root.clone(),
+            name: "Ask T3".to_owned(),
+            kind: AskKind::Task,
+            round: None,
+            instruction: INSTRUCTION.to_owned(),
+            rebuild,
+        })
+    }
+
+    fn prompts(f: &Fixture) -> Vec<String> {
+        f.host
+            .received()
+            .iter()
+            .filter(|m| m["method"] == "session/prompt")
+            .map(|m| {
+                m["params"]["prompt"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    fn status(f: &Fixture, id: &str) -> AskStatus {
+        f.general
+            .asks(f.id())
+            .into_iter()
+            .find(|row| row.id == id)
+            .expect("the conversation is listed")
+            .status
+    }
+
+    async fn answered(f: &Fixture, id: &str, text: &str) {
+        until("the turn to end", LIMIT, || {
+            !f.general.working(id)
+                && f.general.entries(id).contains(&Entry::Agent {
+                    text: text.into(),
+                    complete: true,
+                })
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn opening_sends_nothing_starts_no_omp_and_closing_before_the_first_message_starts_none()
+    {
+        let f = fixture().await;
+        f.host.script(json!({
+            "log": f.host.received_log(),
+            "logEnv": ["WEAVER_ASK"],
+            "prompts": [[agent("never")]],
+        }));
+        let (rebuild, _) = rebuilt(Some("again"));
+        let id = open(&f, rebuild);
+
+        let listed = f.general.asks(f.id());
+        assert_eq!(listed.len(), 1);
+        assert_eq!(
+            (
+                listed[0].id.as_str(),
+                listed[0].name.as_str(),
+                listed[0].status
+            ),
+            (id.as_str(), "Ask T3", AskStatus::Idle)
+        );
+        assert!(!listed[0].starting);
+        assert!(f.general.ask_snapshot(&id).unwrap().entries.is_empty());
+        assert_eq!(
+            f.events
+                .rows
+                .lock()
+                .unwrap()
+                .last()
+                .map(|row| row.id.clone()),
+            Some(id.clone()),
+            "the row is announced at opening"
+        );
+        // Not a job and not General: nothing of it is the General of the project.
+        assert!(f.general.is_ask(&id));
+        assert!(!f.general.is_ask(f.id()), "General's slot is not an Ask");
+        assert!(f.general.identity(&id).is_none(), "no omp, no identity");
+
+        let ended = f.general.close_ask(&id).unwrap();
+        ended.await;
+        assert!(f.general.asks(f.id()).is_empty());
+        assert_eq!(
+            f.events.closed.lock().unwrap().as_slice(),
+            [AskClosed {
+                project_id: f.id().to_owned(),
+                id: id.clone()
+            }]
+        );
+        assert!(f.general.ask_snapshot(&id).is_err());
+        assert!(f.general.send_message(&id, "late").is_err());
+        assert!(
+            f.methods().is_empty(),
+            "no omp ever started: {:?}",
+            f.methods()
+        );
+        assert!(f.general.close_ask(&id).is_err(), "closed once");
+    }
+
+    #[tokio::test]
+    async fn the_first_prompt_carries_the_instruction_and_the_message_the_next_ones_the_message_alone(
+    ) {
+        let f = fixture().await;
+        f.host.script(json!({
+            "log": f.host.received_log(),
+            "logEnv": ["WEAVER_ASK", "WEAVER_GENERAL", "WEAVER_JOB", "WEAVER_ENDPOINT"],
+            "prompts": [[agent("First")], [agent("Second")]],
+        }));
+        let (rebuild, _) = rebuilt(Some("not used"));
+        let id = open(&f, rebuild);
+
+        f.general.send_message(&id, "  What is this?  ").unwrap();
+        assert_eq!(status(&f, &id), AskStatus::Running);
+        assert!(f.general.asks(f.id())[0].starting, "omp is starting");
+        answered(&f, &id, "First").await;
+        assert_eq!(status(&f, &id), AskStatus::Idle);
+
+        f.general.send_message(&id, "And then?").unwrap();
+        answered(&f, &id, "Second").await;
+        assert_eq!(
+            prompts(&f),
+            [
+                ask::first_prompt(INSTRUCTION, "What is this?"),
+                "And then?".to_owned()
+            ]
+        );
+
+        // The conversation shows only the developer's messages, never the instruction.
+        let entries = f.general.entries(&id);
+        assert_eq!(
+            developers(&entries),
+            vec![
+                ("What is this?", &Delivery::Delivered),
+                ("And then?", &Delivery::Delivered)
+            ]
+        );
+        assert!(!entries
+            .iter()
+            .any(|e| matches!(e, Entry::Instruction { .. })));
+
+        // omp started once, on the analysis model with no instruction file, and knows the
+        // conversation, never a job or General.
+        let received = f.host.received();
+        let start = &received[0];
+        assert_eq!(start["env"]["WEAVER_ASK"], json!(id));
+        assert_eq!(start["env"]["WEAVER_ENDPOINT"], "/tmp/weaver-test.sock");
+        for name in ["WEAVER_GENERAL", "WEAVER_JOB"] {
+            assert_eq!(start["env"][name], Value::Null, "{name}");
+        }
+        let args: Vec<&str> = start["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(args, ["--approval-mode", "yolo", "acp"]);
+        assert!(
+            !weaver_core::jobs::general::instruction_file(&f.host.dirs).exists(),
+            "nothing of Ask more is written to disk"
+        );
+        assert_eq!(
+            f.methods().iter().filter(|m| *m == "initialize").count(),
+            1,
+            "omp stays for the second message"
+        );
+        // Nothing of the conversation is kept: no record of it and no General record.
+        f.general.flush();
+        assert!(GeneralStore::new(&f.host.dirs)
+            .read(f.id())
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn after_omp_stopped_the_next_message_reloads_the_session_and_a_failed_reload_sends_the_instruction_again(
+    ) {
+        let f = fixture().await;
+        let (rebuild, rebuilt_now) = rebuilt(Some("REBUILT"));
+        let id = open(&f, rebuild);
+        let log = f.host.received_log();
+        let stopped = |count: usize| {
+            let (f, id) = (&f, &id);
+            move || {
+                f.general
+                    .entries(id)
+                    .iter()
+                    .filter(|e| matches!(e, Entry::OmpStopped { .. }))
+                    .count()
+                    == count
+            }
+        };
+
+        // 1. The first turn ends with omp exiting.
+        f.host
+            .script(json!({ "log": log, "prompts": [[agent("one"), { "exit": 3 }]] }));
+        f.general.send_message(&id, "first").unwrap();
+        until("omp to stop", LIMIT, stopped(1)).await;
+        assert_eq!(status(&f, &id), AskStatus::Idle);
+
+        // 2. The next message starts omp and loads the session: it goes alone.
+        f.host
+            .script(json!({ "log": log, "prompts": [[agent("two"), { "exit": 3 }]] }));
+        f.general.send_message(&id, "second").unwrap();
+        until("omp to stop again", LIMIT, stopped(2)).await;
+        assert!(f.methods().contains(&"session/load".to_owned()));
+
+        // 3. The session cannot be loaded: an empty one starts with the notice, and the message
+        // carries the instruction read again from the files at that moment.
+        f.host.script(json!({
+            "log": log,
+            "loadError": "session not found",
+            "sessionId": "fresh",
+            "prompts": [[agent("three"), { "exit": 3 }]],
+        }));
+        *rebuilt_now.lock().unwrap() = Some("REBUILT AGAIN".to_owned());
+        f.general.send_message(&id, "third").unwrap();
+        until("omp to stop a third time", LIMIT, stopped(3)).await;
+        assert!(f.general.entries(&id).iter().any(|e| matches!(e, Entry::Notice { text } if text == "The conversation could not be reloaded (session not found). A new one started.")));
+
+        // 4. The chosen thing no longer exists: the message goes alone.
+        f.host.script(json!({
+            "log": log,
+            "loadError": "session not found",
+            "sessionId": "fresher",
+            "prompts": [[agent("four")]],
+        }));
+        *rebuilt_now.lock().unwrap() = None;
+        f.general.send_message(&id, "fourth").unwrap();
+        answered(&f, &id, "four").await;
+
+        assert_eq!(
+            prompts(&f),
+            [
+                ask::first_prompt(INSTRUCTION, "first"),
+                "second".to_owned(),
+                ask::first_prompt("REBUILT AGAIN", "third"),
+                "fourth".to_owned(),
+            ]
+        );
+        // Every start of omp is the same conversation, with the same identity.
+        assert_eq!(f.general.identity(&id).as_deref(), Some(id.as_str()));
+        f.general.close_ask(&id).unwrap().await;
+    }
+
+    #[tokio::test]
+    async fn when_no_session_was_ever_opened_the_next_message_carries_the_instruction_prepared_at_opening(
+    ) {
+        let f = fixture().await;
+        let (rebuild, _) = rebuilt(Some("not this one"));
+        let id = open(&f, rebuild);
+        f.host
+            .script(json!({ "newError": "no provider is logged in" }));
+        f.general.send_message(&id, "first").unwrap();
+        until("omp to stop", LIMIT, || {
+            f.general
+                .entries(&id)
+                .iter()
+                .any(|e| matches!(e, Entry::OmpStopped { .. }))
+        })
+        .await;
+        assert!(matches!(
+            &f.general.entries(&id)[0],
+            Entry::Developer {
+                delivery: Delivery::NotDelivered { .. },
+                ..
+            }
+        ));
+
+        f.host
+            .script(json!({ "log": f.host.received_log(), "prompts": [[agent("Fine")]] }));
+        f.general.send_message(&id, "second").unwrap();
+        answered(&f, &id, "Fine").await;
+        assert_eq!(prompts(&f), [ask::first_prompt(INSTRUCTION, "second")]);
+        assert!(
+            !f.methods().contains(&"session/load".to_owned()),
+            "there was no session to load"
+        );
+        f.general.close_ask(&id).unwrap().await;
+    }
+
+    #[tokio::test]
+    async fn a_permission_waits_in_the_conversation_and_a_form_is_declined_naming_ask_more() {
+        let f = fixture().await;
+        f.host.permissions(Permissions::Ask);
+        f.host.script(json!({
+            "log": f.host.received_log(),
+            "prompts": [[
+                { "elicit": true },
+                { "permission": { "toolCall": { "toolCallId": "t1", "title": "$ ls", "kind": "execute", "rawInput": { "command": "ls" } }, "options": [
+                    { "optionId": "allow", "name": "Allow once", "kind": "allow_once" },
+                ] } },
+                agent("Listed"),
+            ]],
+        }));
+        let (rebuild, _) = rebuilt(None);
+        let id = open(&f, rebuild);
+        f.general.send_message(&id, "List the files").unwrap();
+        until("the permission card", LIMIT, || {
+            f.general.entries(&id).iter().any(|e| {
+                matches!(
+                    e,
+                    Entry::Permission {
+                        state: PermissionState::Asking,
+                        ..
+                    }
+                )
+            })
+        })
+        .await;
+        assert_eq!(status(&f, &id), AskStatus::Waiting);
+        let declined = f
+            .host
+            .received()
+            .into_iter()
+            .find(|m| m["answerTo"] == "elicitation/create")
+            .unwrap();
+        let message = declined["result"]["_meta"]["message"].as_str().unwrap();
+        assert!(
+            message.contains("In Ask more") && !message.contains("General"),
+            "{message}"
+        );
+        // A message sent meanwhile waits behind the permission.
+        f.general.send_message(&id, "Meanwhile").unwrap();
+        assert!(matches!(
+            f.general.entries(&id).last(),
+            Some(Entry::Developer {
+                delivery: Delivery::Queued,
+                ..
+            })
+        ));
+
+        let request = f.general.entries(&id).iter().find_map(|e| match e {
+            Entry::Permission { request, .. } => Some(*request),
+            _ => None,
+        });
+        f.general
+            .answer_permission(&id, request.unwrap(), "allow")
+            .unwrap();
+        answered(&f, &id, "Listed").await;
+        assert_eq!(status(&f, &id), AskStatus::Idle);
+        f.general.close_ask(&id).unwrap().await;
+    }
+
+    #[tokio::test]
+    async fn stop_cancels_only_the_turn_and_the_conversation_stays() {
+        let f = fixture().await;
+        f.host.script(json!({
+            "log": f.host.received_log(),
+            "prompts": [[agent("Working"), { "wait_cancel": true }], [agent("Next")]],
+        }));
+        let (rebuild, _) = rebuilt(None);
+        let id = open(&f, rebuild);
+        f.general.send_message(&id, "Long thing").unwrap();
+        until("the agent to answer", LIMIT, || {
+            f.general.entries(&id).contains(&Entry::Agent {
+                text: "Working".into(),
+                complete: false,
+            })
+        })
+        .await;
+        f.general.stop(&id).unwrap();
+        assert_eq!(status(&f, &id), AskStatus::Idle);
+        f.received("session/cancel", |m| m["method"] == "session/cancel")
+            .await;
+        assert_eq!(f.general.asks(f.id()).len(), 1, "the conversation stays");
+        f.general.send_message(&id, "Again").unwrap();
+        answered(&f, &id, "Next").await;
+        assert_eq!(
+            f.methods().iter().filter(|m| *m == "initialize").count(),
+            1,
+            "omp stayed"
+        );
+        f.general.close_ask(&id).unwrap().await;
+    }
+
+    #[tokio::test]
+    async fn closing_a_working_conversation_cancels_the_turn_and_ends_omp() {
+        let f = fixture().await;
+        f.host.script(json!({
+            "log": f.host.received_log(),
+            "prompts": [[agent("Working"), { "hold": true }]],
+        }));
+        let (rebuild, _) = rebuilt(None);
+        let id = open(&f, rebuild);
+        f.general.send_message(&id, "Long thing").unwrap();
+        until("the turn", LIMIT, || f.general.working(&id)).await;
+        until("the agent to answer", LIMIT, || {
+            f.general
+                .entries(&id)
+                .iter()
+                .any(|e| matches!(e, Entry::Agent { .. }))
+        })
+        .await;
+        f.general.close_ask(&id).unwrap().await;
+        f.received("session/close", |m| m["method"] == "session/close")
+            .await;
+        assert!(f.general.asks(f.id()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_window_closing_ends_every_conversation_of_its_project_and_keeps_general() {
+        let f = fixture().await;
+        f.host.script(json!({
+            "log": f.host.received_log(),
+            "prompts": [[agent("Hi")], [agent("General")]],
+        }));
+        let (rebuild, _) = rebuilt(None);
+        let first = open(&f, rebuild.clone());
+        let second = open(&f, rebuild);
+        assert_ne!(first, second, "every request opens a new conversation");
+        let names: Vec<String> = f.general.asks(f.id()).into_iter().map(|r| r.id).collect();
+        assert_eq!(
+            names,
+            [second.clone(), first.clone()],
+            "the most recent first"
+        );
+
+        f.general.send_message(&first, "Hello").unwrap();
+        answered(&f, &first, "Hi").await;
+        f.send("In General");
+        f.general.window_closed(f.id()).await;
+
+        assert!(f.general.asks(f.id()).is_empty());
+        assert_eq!(f.events.closed.lock().unwrap().len(), 2);
+        assert!(f.general.ask_snapshot(&first).is_err());
+        assert!(f.general.ask_snapshot(&second).is_err());
+        assert!(
+            f.general.snapshot(f.id()).is_ok(),
+            "General outlives its window"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_sub_agents_of_a_conversation_belong_to_it() {
+        let f = fixture().await;
+        f.host.script(json!({
+            "log": f.host.received_log(),
+            "prompts": [[agent("Hi")]],
+        }));
+        let (rebuild, _) = rebuilt(None);
+        let id = open(&f, rebuild);
+        let list = f.general.sub_agents(&id).unwrap();
+        assert_eq!(list.owner, Owner::Ask { id: id.clone() });
+        assert_eq!(list.project_id, f.id());
+        assert!(list.nodes.is_empty());
+        assert!(f.general.sub_agents_interest(&id, true, None).is_ok());
+        f.general.close_ask(&id).unwrap().await;
+        assert!(f.general.sub_agents(&id).is_err());
+    }
+}
+
+mod ask_job_new {
+    use weaver_cli::exec::execute;
+    use weaver_cli::spec::Caller;
+    use weaver_core::command::{code, CommandRequest};
+
+    use super::*;
+    use crate::general::service::{AskOpening, Rebuild};
+    use crate::general::wire::AskKind;
+    use crate::jobs::authority::AppAuthority;
+
+    fn run(
+        f: &Fixture,
+        authority: &AppAuthority,
+        input: Value,
+        token: Option<&str>,
+        as_general: bool,
+    ) -> Result<weaver_core::command::CommandReply, weaver_cli::spec::Failure> {
+        let request = CommandRequest {
+            object: "job".into(),
+            verb: "new".into(),
+            card: None,
+            state: None,
+            root: f.project.root.to_string_lossy().into_owned(),
+            input: input.as_object().unwrap().clone(),
+            general: token.filter(|_| as_general).map(str::to_owned),
+            ask: token.filter(|_| !as_general).map(str::to_owned),
+        };
+        let caller = Caller {
+            general: request.general.clone(),
+            ask: request.ask.clone(),
+            ..Caller::default()
+        };
+        execute(&request, &caller, authority)
+    }
+
+    #[tokio::test]
+    async fn job_new_is_accepted_from_a_working_conversation_and_refused_from_an_idle_or_closed_one(
+    ) {
+        let host = TestHost::new();
+        let events = Arc::new(Recorder::default());
+        let general = General::new(host.clone(), events.clone());
+        let jobs = Jobs::new(host.clone());
+        jobs.set_general(general.clone());
+        let (dir, project) = host
+            .project(&[("tasks/aaaaaaaa-first-task.md", TASK)])
+            .await;
+        let f = Fixture {
+            host,
+            general,
+            events,
+            _dir: dir,
+            project,
+        };
+        let authority = AppAuthority { jobs: jobs.clone() };
+        f.host
+            .script(json!({ "log": f.host.received_log(), "prompts": [[agent("Starting"), { "hold": true }]] }));
+        let rebuild: Rebuild = Arc::new(|| None);
+        let id = f.general.open_ask(AskOpening {
+            project_id: f.id().to_owned(),
+            root: f.project.root.clone(),
+            name: "Ask T3".into(),
+            kind: AskKind::Task,
+            round: None,
+            instruction: "Weaver: Ask more\n".into(),
+            rebuild,
+        });
+
+        // Empty: no omp, nothing is accepted.
+        let refused = run(&f, &authority, json!({ "kind": "scan" }), Some(&id), false);
+        assert_eq!(refused.unwrap_err().code, code::FORBIDDEN, "idle");
+
+        f.general.send_message(&id, "Please scan").unwrap();
+        until("the agent to answer", LIMIT, || {
+            f.general.working(&id)
+                && f.general
+                    .entries(&id)
+                    .iter()
+                    .any(|e| matches!(e, Entry::Agent { .. }))
+        })
+        .await;
+
+        // The identity of another caller, or of the conversation given as General's, is refused.
+        let wrong = run(
+            &f,
+            &authority,
+            json!({ "kind": "scan" }),
+            Some("another1"),
+            false,
+        );
+        assert_eq!(wrong.unwrap_err().code, code::FORBIDDEN);
+        let as_general = run(&f, &authority, json!({ "kind": "scan" }), Some(&id), true);
+        assert_eq!(as_general.unwrap_err().code, code::FORBIDDEN);
+        assert!(jobs.list_for(&f.project.root, true).is_empty());
+
+        // Working: accepted, the job is shown in that conversation, and the developer's refusals
+        // are shown too.
+        let started = run(
+            &f,
+            &authority,
+            json!({ "kind": "run", "task": "t1" }),
+            Some(&id),
+            false,
+        )
+        .unwrap();
+        let job = started.json["id"].as_str().unwrap().to_owned();
+        assert_eq!(jobs.record(&job).unwrap().name, "Run T1");
+        assert!(f.general.entries(&id).contains(&Entry::JobStarted {
+            job: job.clone(),
+            name: "Run T1".into()
+        }));
+        let refused = run(&f, &authority, json!({ "kind": "run" }), Some(&id), false).unwrap_err();
+        assert_eq!(refused.code, code::REFUSED);
+        assert!(f
+            .general
+            .entries(&id)
+            .iter()
+            .any(|e| matches!(e, Entry::JobRefused { job_kind, .. } if job_kind == "run")));
+
+        // Closed: refused.
+        f.general.close_ask(&id).unwrap().await;
+        let closed = run(&f, &authority, json!({ "kind": "scan" }), Some(&id), false);
+        assert_eq!(closed.unwrap_err().code, code::FORBIDDEN, "closed");
     }
 }

@@ -24,8 +24,8 @@ description: "Use when building or changing Get Started, import exclusions, omp 
 
 | State | Icon | Text | Action |
 |---|---|---|---|
-| Checking | `Loader` | `Checking omp…` | — |
-| Missing | `TriangleAlert` (warning) | `omp is not installed.` or the reason: `omp not found at <path>`, `omp did not answer within 15 s`, `omp exited with code <N>`; after a failed update of a too-old omp: `omp <version> is older than <minimum> and could not be updated (<reason>).` | `Install omp` |
+| Checking | `Loader` | `Checking omp…`; at the app's start, while System Certificates exports, with the secondary line `Exporting system certificates first…` | — |
+| Missing | `TriangleAlert` (warning) | `omp is not installed.` or the reason: `omp not found at <path>`, `omp did not answer within 15 s`, `omp exited with code <N>`, a proxy explanation; after a failed update of a too-old omp: `omp <version> is older than <minimum> and could not be updated (<reason>).`; after a failed installer, its text (`requirements/ui#system-certificates`) | `Install omp` |
 | Installing | `Loader` | `Installing omp in the terminal…` | `Open installer again` |
 | Updating | `Loader` | `Updating omp to <version>…` (`Updating omp…` without a known version) | — |
 | Not connected | `TriangleAlert` (warning) | `omp <version> has no model provider. Log in to one below.` | provider rows |
@@ -52,8 +52,8 @@ description: "Use when building or changing Get Started, import exclusions, omp 
 - **Images:** PNG, JPEG, GIF or WebP pasted or dropped into the text are saved in the request's images folder next to it as `image-<n>.<ext>` (next free number), and `![](<images folder>/image-<n>.<ext>)` is inserted at the cursor. At most 10 MB per image; anything else is refused with an error toast `Only PNG, JPEG, GIF or WebP images up to 10 MB.` The preview shows images only from that folder.
 
 ## developer.CHANGE_SETTINGS
-- **Settings view:** one centred column, ~720 px wide, scrolling; groups in this order, each a heading with its settings below:
-  1. `omp`: the status box, `Providers`, `omp path` (text; empty = the official installer's places), `Permissions` (`Run without asking` = yolo, default; `Ask before acting` = ask).
+- **Settings view:** the view header (`requirements/ui#General`, title `Settings`, no controls) across the whole view, then one centred column, ~720 px wide, that scrolls under it; groups in this order, each a heading with its settings below. Group headings are 14 px semibold, never larger than the header's title:
+  1. `omp`: the status box, `Providers`, `omp path` (text; empty = the official installer's places), `Permissions` (`Run without asking` = yolo, default; `Ask before acting` = ask), `System Certificates` (`requirements/ui#system-certificates`).
   2. `Models`: `Analysis`, `Scan`, `Execution`, with the bold advice `Your most capable model.`, `A fast, light model.`, `A mid-range model.`
   3. `Agents`: `Max parallel sub-agents` (whole number ≥ 1, default 20), `Language of the agent's texts` (empty = English).
   4. `Editor`: preset Select (`VS Code`, `Cursor`, `Zed`, `JetBrains`, `Sublime Text`, `Custom command`); with `Custom command`, a text field that must contain `{file}` (`{line}` optional).

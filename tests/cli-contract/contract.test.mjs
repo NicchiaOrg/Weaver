@@ -713,7 +713,7 @@ describe("project new", { skip: SKIP }, () => {
   test("a fresh project passes `model check`, has the five Areas and installs the agent files", async () => {
     const root = await newProject(environment);
     assert.deepEqual(entries(path.join(root, ".weaver", "requirements")), ["data", "quality", "rules", "tech", "ui"]);
-    assert.ok(existsSync(path.join(root, ".agents", "skills", "trama-design", "COMMANDS.md")));
+    assert.ok(existsSync(path.join(root, ".agents", "skills", "weaver-design", "COMMANDS.md")));
     assert.ok(existsSync(path.join(root, ".omp", "WATCHDOG.yml")));
     const check = await exec(["model", "check", "--root", root], { cwd: root });
     assert.equal(check.status, 0, `${check.stdout}${check.stderr}`);
@@ -721,14 +721,14 @@ describe("project new", { skip: SKIP }, () => {
 
   test("agent files that differ are all listed and nothing is created, unless force is true", async () => {
     const root = emptyFolder();
-    for (const file of [".agents/skills/trama-design/SKILL.md", ".omp/WATCHDOG.yml"]) {
+    for (const file of [".agents/skills/weaver-design/SKILL.md", ".omp/WATCHDOG.yml"]) {
       makeFolder(root, path.dirname(file));
       writeFileSync(path.join(root, file), "mine");
     }
     const before = snapshot(root);
     const refused = await exec(["project", "new", "--input", "{}", "--root", root], { cwd: root });
     assert.equal(refused.status, 1, `${refused.stdout}${refused.stderr}`);
-    assert.ok(refused.stderr.includes(".agents/skills/trama-design/SKILL.md") && refused.stderr.includes(".omp/WATCHDOG.yml"), refused.stderr);
+    assert.ok(refused.stderr.includes(".agents/skills/weaver-design/SKILL.md") && refused.stderr.includes(".omp/WATCHDOG.yml"), refused.stderr);
     assert.deepEqual(snapshot(root), before);
     const forced = await exec(["project", "new", "--input", '{"force":true}', "--root", root], { cwd: root });
     assert.equal(forced.status, 0, `${forced.stdout}${forced.stderr}`);

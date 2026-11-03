@@ -15,7 +15,7 @@ vi.mock("@/lib/backend", () => ({
 }));
 
 const PROJECT = "0123456789abcdef";
-const FILES = [".agents/skills/trama-setup/SKILL.md", ".omp/agents/trama-analysis.md", ".omp/WATCHDOG.yml"];
+const FILES = [".agents/skills/weaver-setup/SKILL.md", ".omp/agents/weaver-analysis.md", ".omp/WATCHDOG.yml"];
 
 function status(patch: Partial<ProjectStatus> = {}): ProjectStatus {
   return {
@@ -78,14 +78,14 @@ describe("Get Started", () => {
 
   it("asks before overwriting agent files, with Cancel focused, and changes nothing on Cancel", async () => {
     const user = userEvent.setup();
-    initialise = () => Promise.resolve({ conflicts: [".omp/WATCHDOG.yml", ".agents/skills/trama-setup/SKILL.md"] });
+    initialise = () => Promise.resolve({ conflicts: [".omp/WATCHDOG.yml", ".agents/skills/weaver-setup/SKILL.md"] });
     renderGetStarted();
     const button = await screen.findByRole("button", { name: "Initialise" });
     await user.click(button);
     const dialog = await screen.findByRole("alertdialog", { name: "Some agent files already exist" });
     expect(within(dialog).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
       ".omp/WATCHDOG.yml",
-      ".agents/skills/trama-setup/SKILL.md",
+      ".agents/skills/weaver-setup/SKILL.md",
     ]);
     expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus();
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -120,12 +120,13 @@ describe("ProjectGate", () => {
   it("shows Get Started in place of a view until the project is initialised, then the view", async () => {
     render(
       <ProjectStatusProvider projectId={PROJECT}>
-        <ProjectGate>
+        <ProjectGate view="board">
           <p>The Board</p>
         </ProjectGate>
       </ProjectStatusProvider>,
     );
     expect(await screen.findByRole("heading", { name: "Set up Weaver in this folder" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Set up Weaver in this folder" })).toHaveAttribute("id", "view-board");
     expect(screen.queryByText("The Board")).not.toBeInTheDocument();
     // An older status than the one shown is dropped.
     act(() => push(status({ revision: 0, state: "has-model" })));
@@ -136,11 +137,24 @@ describe("ProjectGate", () => {
     expect(screen.getByRole("heading", { name: "Set up Weaver in this folder" })).toBeInTheDocument();
   });
 
+  it("shows only the view header while the status is not known", async () => {
+    vi.mocked(call).mockImplementation((() => new Promise(() => {})) as unknown as typeof call);
+    render(
+      <ProjectStatusProvider projectId={PROJECT}>
+        <ProjectGate view="board">
+          <p>The Board</p>
+        </ProjectGate>
+      </ProjectStatusProvider>,
+    );
+    expect(screen.getByRole("heading", { level: 1, name: "Board" })).toBeInTheDocument();
+    expect(screen.queryByText("The Board")).not.toBeInTheDocument();
+  });
+
   it("shows the view as it is when the status cannot be read", async () => {
     vi.mocked(call).mockImplementation((() => Promise.reject(new Error("closed"))) as unknown as typeof call);
     render(
       <ProjectStatusProvider projectId={PROJECT}>
-        <ProjectGate>
+        <ProjectGate view="board">
           <p>The Board</p>
         </ProjectGate>
       </ProjectStatusProvider>,

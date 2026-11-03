@@ -37,7 +37,33 @@ import type { ActionInput } from "@/bindings/ActionInput";
 import type { QuestionRoundChanged } from "@/bindings/QuestionRoundChanged";
 import type { QuestionRoundView } from "@/bindings/QuestionRoundView";
 import type { RequestsSnapshot } from "@/bindings/RequestsSnapshot";
+import type { Step } from "@/bindings/Step";
+import type { SubAgentConversation } from "@/bindings/SubAgentConversation";
+import type { SubAgentEntries } from "@/bindings/SubAgentEntries";
+import type { SubAgentsEvent } from "@/bindings/SubAgentsEvent";
+import type { UsageStatus } from "@/bindings/UsageStatus";
 import type { WelcomeState } from "@/bindings/WelcomeState";
+import type { SystemCertificatesStatus } from "@/bindings/SystemCertificatesStatus";
+import type { AskClosed } from "@/bindings/AskClosed";
+import type { AskEntries } from "@/bindings/AskEntries";
+import type { AskRow } from "@/bindings/AskRow";
+import type { AskSnapshot } from "@/bindings/AskSnapshot";
+import type { AsksSnapshot } from "@/bindings/AsksSnapshot";
+import type { AskTarget } from "@/bindings/AskTarget";
+import type { EntryChange } from "@/bindings/EntryChange";
+import type { FileEntry } from "@/bindings/FileEntry";
+import type { TreeChanged } from "@/bindings/TreeChanged";
+import type { TreeSnapshot } from "@/bindings/TreeSnapshot";
+import type { TreeUpdate } from "@/bindings/TreeUpdate";
+import type { FilesCloseTab } from "@/bindings/FilesCloseTab";
+import type { FilesFlush } from "@/bindings/FilesFlush";
+import type { FilesSaveFailed } from "@/bindings/FilesSaveFailed";
+import type { TabText } from "@/bindings/TabText";
+import type { FileLockChanged } from "@/bindings/FileLockChanged";
+import type { FileOpenResult } from "@/bindings/FileOpenResult";
+import type { FileReloadResult } from "@/bindings/FileReloadResult";
+import type { FileSaveResult } from "@/bindings/FileSaveResult";
+import type { FileTabChanged } from "@/bindings/FileTabChanged";
 
 /** Payload of each event, by name. */
 export interface EventPayloads {
@@ -48,6 +74,8 @@ export interface EventPayloads {
   "settings-changed": SettingsSnapshot;
   /** omp's readiness changed: the whole status of the Machine `omp-setup`, with its revision. */
   "omp-changed": OmpStatus;
+  /** The usage limits, or their reading, changed: the whole status, with its revision. */
+  "usage-changed": UsageStatus;
   /** This window came forward because of a notification or a second launch: what to show. */
   "show-requested": ShowRequest;
   /** Something to read at the top of the Board: a refused decision, a Proposal sent back to Draft. */
@@ -56,18 +84,42 @@ export interface EventPayloads {
   "jobs-changed": JobsSnapshot;
   /** The conversation of a job changed: the entries that changed, in batches counted by `seq`. */
   "job-entries": EntriesEvent;
+  /** The list of the sub-agents of a job or of General changed: the whole list. */
+  "sub-agents-changed": SubAgentsEvent;
+  /** The conversation of the sub-agent on screen changed: the entries that changed, in batches counted by `seq`. */
+  "sub-agent-entries": SubAgentEntries;
   /** The state of the General of a project changed: its whole state. */
   "general-changed": GeneralState;
   /** The conversation of a General changed: the entries that changed, in batches counted by `seq`. */
   "general-entries": GeneralEntries;
+  /** An Ask more conversation opened or changed: its row. */
+  "ask-changed": AskRow;
+  /** The conversation of an Ask more conversation changed: the entries that changed. */
+  "ask-entries": AskEntries;
+  /** An Ask more conversation closed. */
+  "ask-closed": AskClosed;
   /** The open design requests of a project changed (a decision, or a file changed on disk). */
   "requests-changed": RequestsEvent;
   /** The window is closing: the request editor saves what is pending and answers with `requests_flushed`. */
   "requests-flush": RequestsEvent;
+  /** The window is closing and the File view has unsaved changes: it answers with `files_flushed`. */
+  "files-flush": FilesFlush;
+  /** `Save all` could not save these files: the File view shows the first one's tab, with the reason. */
+  "files-save-failed": FilesSaveFailed;
+  /** `Cmd+W` / `Ctrl+W` while the File view has a tab: the menu's Close Window closes the active tab instead. */
+  "files-close-tab": FilesCloseTab;
+  /** The file of a tab changed, disappeared or reappeared on disk, by anything but the tab's own save. */
+  "file-tab-changed": FileTabChanged;
+  /** The agent's lock of a file open in a tab was taken or released. */
+  "file-lock-changed": FileLockChanged;
+  /** Listed folders of the File view's tree changed on disk or by an action of the tree: the folders read again and the ones gone, at a generation. */
+  "files-tree-changed": TreeChanged;
   /** The round on screen in a project changed (one opened, ended, or queued behind it). */
   "question-round-changed": QuestionRoundChanged;
   /** The state of a project, the files it installs and the opening check changed: the whole status. */
   "project-state": ProjectStatus;
+  /** The status of System Certificates changed: the whole status, with its revision. */
+  "system-certificates-changed": SystemCertificatesStatus;
 }
 
 /** Arguments and result of each command, by name. */
@@ -134,6 +186,8 @@ export interface Commands {
   omp_log_in: { args: { provider: string }; result: null };
   /** **Log out**: `omp auth-broker logout <provider>`; the outcome arrives with `omp-changed`. */
   omp_log_out: { args: { provider: string }; result: null };
+  /** `omp usage --json` for the connected providers (only while omp is Ready); answers the status when the reading ends. */
+  omp_usage: { args: Record<string, never>; result: UsageStatus };
   /** The name, version and recent projects of the welcome window. */
   welcome_state: { args: Record<string, never>; result: WelcomeState };
   /** `developer.OPEN_PROJECT` for a folder: opens its window or brings it forward. */
@@ -144,6 +198,8 @@ export interface Commands {
   remove_recent: { args: { path: string }; result: WelcomeState };
   /** `Open in editor`: `file` (absolute, or relative to the project) at `line`; a failure carries the reason. */
   open_in_editor: { args: { file: string; line?: number | null; projectId?: string | null }; result: null };
+  /** `developer.SEND_TO_BACKGROUND`: the backend hides the project's window; nothing is suspended and the webview stays alive. */
+  send_to_background: { args: { projectId: string }; result: null };
   /** The Jobs list of an open project. */
   jobs_snapshot: { args: { projectId: string }; result: JobsSnapshot };
   /** The conversation of a job, with the count of change batches it holds. */
@@ -156,6 +212,12 @@ export interface Commands {
   job_answer_permission: { args: { projectId: string; jobId: string; request: number; option: string }; result: null };
   /** The `X` of a finished job's row. */
   job_remove: { args: { projectId: string; jobId: string }; result: null };
+  /** The list of the sub-agents of a job, each with the ones it started. */
+  job_sub_agents: { args: { projectId: string; jobId: string }; result: SubAgentsEvent };
+  /** The read-only conversation of the sub-agent at `path` of a job. */
+  job_sub_agent_conversation: { args: { projectId: string; jobId: string; path: Step[] }; result: SubAgentConversation };
+  /** What the Jobs view shows of a job's sub-agents: whether their list is on screen, and the conversation of which one. */
+  job_sub_agents_view: { args: { projectId: string; jobId: string; listShown: boolean; path: Step[] | null }; result: null };
   /** `Run` on a Task; a refusal (`refused`) carries the notice. */
   run_task: { args: { projectId: string; taskId: string }; result: null };
   /** `Run all`; a refusal carries the notice. */
@@ -172,6 +234,32 @@ export interface Commands {
   general_answer_permission: { args: { projectId: string; request: number; option: string }; result: null };
   /** `Clear General?`, once confirmed: the conversation and its record are deleted. */
   general_clear: { args: { projectId: string }; result: null };
+  /** The list of the sub-agents of the General of an open project. */
+  general_sub_agents: { args: { projectId: string }; result: SubAgentsEvent };
+  /** The read-only conversation of the sub-agent at `path` of the General of an open project. */
+  general_sub_agent_conversation: { args: { projectId: string; path: Step[] }; result: SubAgentConversation };
+  /** What the Chat view shows of the sub-agents: the conversation of which one (`null`: none). */
+  general_sub_agents_view: { args: { projectId: string; path: Step[] | null }; result: null };
+  /** `Ask more`: reads the chosen thing and opens a new conversation; its identity. Refused when the thing is gone. */
+  ask_open: { args: { projectId: string; target: AskTarget }; result: string };
+  /** The Ask more conversations of a project, the most recent first. */
+  ask_list: { args: { projectId: string }; result: AsksSnapshot };
+  /** One Ask more conversation as it is now. */
+  ask_snapshot: { args: { askId: string }; result: AskSnapshot };
+  /** A message to an Ask more conversation; the first one starts omp and carries the instruction. */
+  ask_send_message: { args: { askId: string; text: string }; result: null };
+  /** `Stop` during a turn of an Ask more conversation. */
+  ask_stop: { args: { askId: string }; result: null };
+  /** The developer's choice on a permission card of an Ask more conversation. */
+  ask_answer_permission: { args: { askId: string; request: number; option: string }; result: null };
+  /** Closes an Ask more conversation (confirmed when its agent works). */
+  ask_close: { args: { askId: string }; result: null };
+  /** The list of the sub-agents of an Ask more conversation. */
+  ask_sub_agents: { args: { askId: string }; result: SubAgentsEvent };
+  /** The read-only conversation of the sub-agent at `path` of an Ask more conversation. */
+  ask_sub_agent_conversation: { args: { askId: string; path: Step[] }; result: SubAgentConversation };
+  /** What the Jobs view shows of the sub-agents of an Ask more conversation. */
+  ask_sub_agents_view: { args: { askId: string; listShown: boolean; path: Step[] | null }; result: null };
   /** The open design requests of a project (writing or sent), newest first. */
   requests_list: { args: { projectId: string }; result: RequestsSnapshot };
   /** The text and standing of one request. */
@@ -192,10 +280,50 @@ export interface Commands {
   request_image: { args: { projectId: string; requestId: string; link: string }; result: string };
   /** The editor saved what was pending (the answer to `requests-flush`). */
   requests_flushed: { args: { projectId: string }; result: null };
+  /** The File view says in which files it has unsaved changes (every path, each time; none when it has none). */
+  files_unsaved: { args: { projectId: string; paths: string[] }; result: null };
+  /** The answer to `files-flush`: the texts of the tabs with unsaved changes. */
+  files_flushed: { args: { projectId: string; tabs: TabText[] }; result: null };
+  /** The File view has a tab, so `Cmd+W` / `Ctrl+W` closes it instead of the window (`files-close-tab`). */
+  files_close_key: { args: { projectId: string; claimed: boolean }; result: null };
+  /** `developer.OPEN_FILE`: opens a file in a tab. `tabs` are the open ones, least recently shown first, for the limit of 10. */
+  file_open: { args: { projectId: string; path: string; tabs: { path: string; unsaved: boolean }[] }; result: FileOpenResult };
+  /** Reads the file of a tab again (`developer.RELOAD_FILE`, a change on disk, a release of the lock). */
+  file_reload: { args: { projectId: string; path: string }; result: FileReloadResult };
+  /** `developer.SAVE_FILE` (`check`), `developer.OVERWRITE_FILE` (`overwrite`) and `Save again` (`again`); `hash` is the one the tab read, the one `check` compares with the file on disk. */
+  file_save: { args: { projectId: string; path: string; text: string; hash: string; mode: "check" | "overwrite" | "again" }; result: FileSaveResult };
+  /** `file-tab.CLOSED`: frees the tab's state, its watch and its lock tracking. */
+  file_close: { args: { projectId: string; path: string }; result: null };
+  /** `developer.OPEN_FILE_VIEW`: the root's entries, or the tree as it was within 10 s of leaving. */
+  files_open_view: { args: { projectId: string }; result: TreeSnapshot };
+  /** `developer.EXPAND_FOLDER`: reads that folder only. */
+  files_expand: { args: { projectId: string; path: string }; result: TreeUpdate };
+  /** `developer.COLLAPSE_FOLDER`: the backend forgets the folder and those inside it. */
+  files_collapse: { args: { projectId: string; path: string }; result: null };
+  /** The folders of `path` for the tree of `Move to…`; nothing is kept or watched. */
+  files_folders: { args: { projectId: string; path: string }; result: FileEntry[] };
+  /** `developer.LEAVE_FILE_VIEW`, once the tabs closed: the backend keeps the tree 10 s, then drops it. */
+  files_leave: { args: { projectId: string }; result: null };
+  /** `developer.CREATE_ENTRY`: an empty file, or with `folder` a folder; a refusal (`refused`) carries the reason. */
+  files_create: { args: { projectId: string; parent: string; name: string; folder: boolean }; result: EntryChange };
+  /** `developer.RENAME_ENTRY`. */
+  files_rename: { args: { projectId: string; path: string; name: string }; result: EntryChange };
+  /** `developer.MOVE_ENTRY` into the folder `target` (empty: the project root). */
+  files_move: { args: { projectId: string; path: string; target: string }; result: EntryChange };
+  /** `developer.DELETE_ENTRY`: to the system's trash. */
+  files_delete: { args: { projectId: string; path: string }; result: TreeUpdate };
   /** The round presented in the window of a project, when there is one. */
   question_round_get: { args: { projectId: string }; result: QuestionRoundView | null };
   /** What the developer does in the presented round; the round on screen afterwards. `refused` carries why not. */
   question_round_act: { args: { projectId: string; roundId: number; action: ActionInput }; result: QuestionRoundView | null };
+  /** The status of System Certificates now (the Machine `system-certificates`). */
+  system_certificates_status: { args: Record<string, never>; result: SystemCertificatesStatus };
+  /** **Refresh**: exports the certificates again; refused (`invalid-input`) while the setting is off. */
+  system_certificates_refresh: { args: Record<string, never>; result: SystemCertificatesStatus };
+  /** Closes the notice that Weaver turned System Certificates on, in every window. */
+  system_certificates_dismiss_notice: { args: Record<string, never>; result: SystemCertificatesStatus };
+  /** Closes the banner of a failed automatic export, in every window. */
+  system_certificates_dismiss_failure: { args: Record<string, never>; result: SystemCertificatesStatus };
 }
 
 // Compile-time proof that the maps above cover exactly the generated names.

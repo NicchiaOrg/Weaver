@@ -3,4 +3,4 @@
 /**
  * How the view edits a setting.
  */
-export type FieldKind = "text" | "model" | "integer" | "choice";
+export type FieldKind = "text" | "model" | "integer" | "choice" | "boolean";

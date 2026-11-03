@@ -1,10 +1,14 @@
-//! General chat (task "Chat General"): the free conversation with omp of a project, always in its
-//! window.
+//! General chat (task "Chat General") and Ask more conversations: the free conversations with omp.
 //!
 //! General is not a job: it holds no Task, announces no card, asks no question round, notifies
 //! nothing and shows nothing on the Board. It has no instruction, skill or written request; the
 //! developer writes what he wants, and on his explicit request the agent starts a job of Weaver
 //! with `weaver job new`, which is a normal job with a conversation of its own.
+//!
+//! An Ask more conversation (`requirements/tech#ask-conversation`) is the same kind of
+//! conversation about one thing the developer is reading. It runs on the service and the actor of
+//! General, generalised to several conversations, and is not a job either: it lives in memory and
+//! ends with its window. [`crate::ask`] reads the chosen thing and opens it.
 //!
 //! | Module | Responsibility |
 //! |--------|----------------|
@@ -45,7 +49,7 @@ use crate::log_info;
 use crate::windows::jobs::{BoxFuture, CloseReason, WindowJobs, WindowOpened};
 
 pub use service::General;
-use wire::{GeneralEntries, GeneralEvents, GeneralState};
+use wire::{AskClosed, AskEntries, AskRow, GeneralEntries, GeneralEvents, GeneralState};
 
 /// The events of General, to every window (the UI keeps what concerns its project).
 struct TauriEvents {
@@ -59,6 +63,18 @@ impl GeneralEvents for TauriEvents {
 
     fn entries(&self, entries: &GeneralEntries) {
         let _ = self.app.emit(EventName::GeneralEntries.as_str(), entries);
+    }
+
+    fn ask_changed(&self, row: &AskRow) {
+        let _ = self.app.emit(EventName::AskChanged.as_str(), row);
+    }
+
+    fn ask_entries(&self, entries: &AskEntries) {
+        let _ = self.app.emit(EventName::AskEntries.as_str(), entries);
+    }
+
+    fn ask_closed(&self, closed: &AskClosed) {
+        let _ = self.app.emit(EventName::AskClosed.as_str(), closed);
     }
 }
 

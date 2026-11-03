@@ -1,24 +1,41 @@
-import { Bot, History, ListChecks, MessageSquare, Package, Settings, SquareKanban, type LucideIcon } from "lucide-react";
+import { Bot, EyeOff, FolderTree, Gauge, History, ListChecks, MessageSquare, Package, Settings, SquareKanban, type LucideIcon } from "lucide-react";
 
-export type ViewId = "board" | "requirements" | "specs" | "history" | "jobs" | "general" | "settings";
+export type ViewId = "board" | "requirements" | "specs" | "history" | "jobs" | "files" | "general" | "settings";
 
 export interface ViewEntry {
   id: ViewId;
   /** The name in the sidebar and the heading of the view. */
   label: string;
   icon: LucideIcon;
+  /** Where the sidebar puts the entry: the top group, or the bottom group apart from it. */
+  group: "top" | "bottom";
 }
 
-/** The views of a project window, in the order of the sidebar. */
+/** The views of a project window, in the order of the sidebar (top group first, then bottom group). */
 export const VIEWS: readonly ViewEntry[] = [
-  { id: "board", label: "Board", icon: SquareKanban },
-  { id: "general", label: "Chat", icon: MessageSquare },
-  { id: "jobs", label: "Jobs", icon: Bot },
-  { id: "requirements", label: "Requirements", icon: ListChecks },
-  { id: "specs", label: "Specs", icon: Package },
-  { id: "history", label: "History", icon: History },
-  { id: "settings", label: "Settings", icon: Settings },
+  { id: "board", label: "Board", icon: SquareKanban, group: "top" },
+  { id: "general", label: "Chat", icon: MessageSquare, group: "top" },
+  { id: "jobs", label: "Jobs", icon: Bot, group: "top" },
+  { id: "files", label: "Files", icon: FolderTree, group: "top" },
+  { id: "requirements", label: "Requirements", icon: ListChecks, group: "top" },
+  { id: "specs", label: "Specs", icon: Package, group: "top" },
+  { id: "history", label: "History", icon: History, group: "top" },
+  { id: "settings", label: "Settings", icon: Settings, group: "bottom" },
 ];
+
+/**
+ * The entry `Usage` of the bottom group, above Settings. It is not a view: it opens a dialog over
+ * the view shown, so it is never in `ViewId` or `VIEWS`, never the selected entry and never has
+ * `aria-current`.
+ */
+export const USAGE_ENTRY = { id: "usage", label: "Usage", icon: Gauge } as const;
+
+/**
+ * The entry `Hide` of the bottom group, above Usage. It is not a view: a click sends the
+ * window to the background at once (`developer.SEND_TO_BACKGROUND`), so it is never in `ViewId` or
+ * `VIEWS`, never the selected entry and never has `aria-current`.
+ */
+export const BACKGROUND_ENTRY = { id: "background", label: "Hide", icon: EyeOff } as const;
 
 /** The numbers the sidebar shows next to Board and Jobs; the backend holds them. */
 export interface ShellCounts {

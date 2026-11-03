@@ -25,7 +25,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
@@ -38,6 +38,13 @@ tokio = { version = "1", features = ["rt", "signal", "sync", "time"] }
 weaver-cli = { path = "../crates/cli" }
 weaver-core.workspace = true
 ts-rs = { version = "11", features = ["serde-compat"] }
+
+# Hiding a fullscreen window waits for AppKit to end the exit transition (`windows::fullscreen`).
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWindow"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSNotification", "NSOperation", "NSString"] }
 
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }

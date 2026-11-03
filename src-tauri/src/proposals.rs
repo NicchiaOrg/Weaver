@@ -1100,6 +1100,7 @@ mod tests {
             state: None,
             input: Map::new(),
             general: None,
+            ask: None,
         };
         let reply = |sent: bool| CommandReply {
             markdown: String::new(),

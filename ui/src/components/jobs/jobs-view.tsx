@@ -21,21 +21,43 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
+import type { AgentNode } from "@/bindings/AgentNode";
+import type { AskRow } from "@/bindings/AskRow";
 import type { Entry } from "@/bindings/Entry";
 import type { JobRow } from "@/bindings/JobRow";
 import type { JobState } from "@/bindings/JobState";
+import type { Step } from "@/bindings/Step";
 import type { Tool } from "@/bindings/Tool";
 import { ConfirmDialog } from "@/components/dialogs";
 import { runningText, startedText } from "@/components/jobs/format";
 import { useConversation, useJobs } from "@/components/jobs/use-jobs";
+import { mergeRows, type ListRow } from "@/components/ask/ask-model";
+import { AskConversation } from "@/components/ask/ask-conversation";
+import { useOptionalAsks } from "@/components/ask/use-asks";
 import { Markdown } from "@/components/markdown";
 import { useProject } from "@/components/project-context";
+import {
+  jobSubAgentsApi,
+  askSubAgentsApi,
+  namesAlong,
+  nodeAt,
+  useSubAgentConversation,
+  useSubAgentList,
+  useSubAgentsView,
+  type SubAgentsApi,
+} from "@/components/sub-agents/api";
+import { AgentState, SubAgentLine, SubAgentList, SubAgentNavProvider, type SubAgentNav } from "@/components/sub-agents/sub-agent-ui";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { VIEW_HEADER_CLASS, ViewHeader, viewTitleId } from "@/components/view-header";
+import { useFollowScroll } from "@/hooks/use-follow-scroll";
 import { call, isAppError } from "@/lib/backend";
+import { cn } from "@/lib/utils";
+import type { ViewId } from "@/views";
 
 const BADGES: Record<JobState, { label: string; icon: LucideIcon | null; className: string }> = {
   queued: { label: "queued", icon: null, className: "border-border text-foreground" },
@@ -71,33 +93,50 @@ function useRunning(job: JobRow): string | null {
   return runningText(end - new Date(job.started).getTime());
 }
 
-function Row({ job, selected, onSelect }: { job: JobRow; selected: boolean; onSelect: () => void }) {
+function Row({
+  job,
+  selected,
+  current,
+  onSelect,
+  children,
+}: {
+  job: JobRow;
+  selected: boolean;
+  /** The job's own conversation is shown (not one of its sub-agents'). */
+  current: boolean;
+  onSelect: () => void;
+  /** The list of the job's sub-agents, when it is the selected one. */
+  children?: ReactNode;
+}) {
   const { remove } = useJobs();
   const running = useRunning(job);
   const finished = job.state === "done" || job.state === "failed" || job.state === "stopped";
   return (
-    <li className={`flex items-start gap-1 border-b ${selected ? "bg-accent" : ""}`}>
-      <button type="button" aria-current={selected} className="min-w-0 flex-1 px-3 py-2 text-left" onClick={onSelect}>
-        <div className="flex items-center gap-2">
-          <span className="truncate font-semibold">{job.name}</span>
-          <span className="text-xs text-muted-foreground">{job.kind}</span>
-          <StateBadge state={job.state} />
-        </div>
-        <div className="text-xs text-muted-foreground">
-          {startedText(job.created)}
-          {running ? ` · ${running}` : ""}
-        </div>
-        {job.note && (
-          <div className="truncate text-xs text-muted-foreground" title={job.note}>
-            {job.note}
+    <li className={`border-b ${selected ? "bg-accent" : ""}`}>
+      <div className="flex items-start gap-1">
+        <button type="button" aria-current={current} className="min-w-0 flex-1 px-3 py-2 text-left" onClick={onSelect}>
+          <div className="flex items-center gap-2">
+            <span className="truncate font-semibold">{job.name}</span>
+            <span className="text-xs text-muted-foreground">{job.kind}</span>
+            <StateBadge state={job.state} />
           </div>
+          <div className="text-xs text-muted-foreground">
+            {startedText(job.created)}
+            {running ? ` · ${running}` : ""}
+          </div>
+          {job.note && (
+            <div className="truncate text-xs text-muted-foreground" title={job.note}>
+              {job.note}
+            </div>
+          )}
+        </button>
+        {finished && (
+          <Button variant="ghost" size="icon" aria-label={`Remove ${job.name}`} title="Remove from the list" onClick={() => remove(job.id)}>
+            <X aria-hidden />
+          </Button>
         )}
-      </button>
-      {finished && (
-        <Button variant="ghost" size="icon" aria-label={`Remove ${job.name}`} title="Remove from the list" onClick={() => remove(job.id)}>
-          <X aria-hidden />
-        </Button>
-      )}
+      </div>
+      {children}
     </li>
   );
 }
@@ -132,11 +171,7 @@ function ToolRow({ tool }: { tool: Tool }) {
       </button>
       {open && <pre className="mt-1 max-h-48 overflow-auto rounded bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{text}</pre>}
       {tool.subAgents.map((agent) => (
-        <div key={agent.id} className="ml-8 flex items-center gap-2 text-xs">
-          <Bot aria-hidden className="size-3" />
-          <span>{agent.name}</span>
-          <span className="text-muted-foreground">{agent.state}</span>
-        </div>
+        <SubAgentLine key={agent.id} call={tool.id} agent={agent} />
       ))}
     </div>
   );
@@ -150,6 +185,13 @@ export function EntryView({ entry, answer }: { entry: Entry; answer: (request: n
         <div className="rounded border p-2 text-sm">
           <div className="text-xs font-semibold text-muted-foreground">Weaver</div>
           {entry.text}
+        </div>
+      );
+    case "assignment":
+      return (
+        <div className="rounded border p-2 text-sm">
+          <div className="text-xs font-semibold text-muted-foreground">{entry.from}</div>
+          <div className="whitespace-pre-wrap">{entry.text}</div>
         </div>
       );
     case "developer":
@@ -346,24 +388,41 @@ function MessageBox({ projectId, job }: { projectId: string; job: JobRow }) {
   );
 }
 
+/** The box of a sub-agent conversation: the layout of the job's message box, with nothing to send. */
+function DisabledMessageBox() {
+  return (
+    <div className="flex items-end gap-2 border-t p-3">
+      <Textarea aria-label="Message the agent" placeholder="Sub-agents take no messages." rows={1} className="max-h-60 min-h-9 flex-1" value="" readOnly disabled />
+      <Button size="icon" aria-label="Send" disabled>
+        <ArrowUp aria-hidden />
+      </Button>
+    </div>
+  );
+}
+
+/** Follows new text unless the developer scrolled up; then `Jump to latest` shows. `version` changes with the content. */
+export function FollowScroller({ version, children }: { version: unknown; children: ReactNode }) {
+  const { scrollerRef, contentRef, following, follow, onScroll } = useFollowScroll(version);
+  return (
+    <div ref={scrollerRef} className="relative min-h-0 flex-1 overflow-y-auto p-4" onScroll={onScroll}>
+      <div ref={contentRef} className="space-y-3">
+        {children}
+      </div>
+      {!following && (
+        <Button className="sticky bottom-2 ml-auto mt-3 flex" size="sm" variant="secondary" onClick={follow}>
+          <ArrowDown aria-hidden />
+          Jump to latest
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function Conversation({ projectId, job, ompReady }: { projectId: string; job: JobRow; ompReady: boolean }) {
   const entries = useConversation(projectId, job.id);
-  const scroller = useRef<HTMLDivElement>(null);
-  const [following, setFollowing] = useState(true);
-  useEffect(() => {
-    const element = scroller.current;
-    if (following && element) element.scrollTop = element.scrollHeight;
-  }, [entries, following]);
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div
-        ref={scroller}
-        className="relative min-h-0 flex-1 space-y-3 overflow-y-auto p-3"
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          setFollowing(element.scrollHeight - element.scrollTop - element.clientHeight < 24);
-        }}
-      >
+      <FollowScroller version={entries}>
         {job.state === "queued" && (
           <p className="py-8 text-center text-sm text-muted-foreground">{ompReady ? "Starting omp…" : "Waiting for omp to be ready."}</p>
         )}
@@ -377,43 +436,229 @@ function Conversation({ projectId, job, ompReady }: { projectId: string; job: Jo
         {job.state === "suspended" && (
           <p className="text-sm text-muted-foreground">Weaver stopped; the job continues when its session is reloaded.</p>
         )}
-        {!following && (
-          <Button className="sticky bottom-2 ml-auto flex" size="sm" variant="secondary" onClick={() => setFollowing(true)}>
-            <ArrowDown aria-hidden />
-            Jump to latest
-          </Button>
-        )}
-      </div>
+      </FollowScroller>
       <MessageBox projectId={projectId} job={job} />
     </div>
   );
 }
 
-/** The Jobs view: the project's jobs on the left, the selected job's conversation on the right. */
+const NOT_ASKED = () => {};
+
+/**
+ * The read-only conversation of the sub-agent at `path` (of a job, or of General): the path from
+ * the owner with the state, then what it received and did, and a disabled message box at the
+ * bottom. No `Stop`, no permission card, no notes, no end line.
+ */
+export function SubAgentConversationView({
+  api,
+  ownerName,
+  nodes,
+  path,
+  back,
+  actions,
+  headerOf,
+}: {
+  api: SubAgentsApi;
+  ownerName: string;
+  nodes: readonly AgentNode[];
+  path: readonly Step[];
+  /** What leads the header, such as the `Back to Chat` button of the Chat view. */
+  back?: ReactNode;
+  /** What ends the header, such as the `Clear` button of the Chat view. */
+  actions?: ReactNode;
+  /**
+   * The view whose header this one replaces (Chat): the header then has the view header's height
+   * and its title is the heading the view's region is labelled by.
+   */
+  headerOf?: ViewId;
+}) {
+  const { entries, unavailable } = useSubAgentConversation(api, path);
+  const node = nodeAt(nodes, path);
+  const Title = headerOf ? "h1" : "h2";
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <header className={cn(headerOf ? VIEW_HEADER_CLASS : "flex items-center gap-3 border-b px-4 py-3", "text-sm")}>
+        {back}
+        <Title id={headerOf && viewTitleId(headerOf)} className="min-w-0 truncate font-semibold">
+          {[ownerName, ...namesAlong(nodes, path)].join(" › ")}
+        </Title>
+        {node && <AgentState state={node.state} />}
+        {actions && <div className="ml-auto">{actions}</div>}
+      </header>
+      <FollowScroller version={entries}>
+        {unavailable !== null ? (
+          <p className="text-sm text-muted-foreground">Conversation not available: {unavailable.replace(/\.$/, "")}.</p>
+        ) : (
+          entries.map((entry, index) => <EntryView key={index} entry={entry} answer={NOT_ASKED} />)
+        )}
+      </FollowScroller>
+      <DisabledMessageBox />
+    </div>
+  );
+}
+
+const NO_ASKS: readonly AskRow[] = [];
+
+/** A row of the list that is an Ask more conversation: name, kind `ask`, badge, opening time and `X`. */
+function AskListRow({
+  ask,
+  selected,
+  current,
+  onSelect,
+  children,
+}: {
+  ask: AskRow;
+  selected: boolean;
+  /** The conversation itself is shown (not one of its sub-agents'). */
+  current: boolean;
+  onSelect: () => void;
+  children?: ReactNode;
+}) {
+  const asks = useOptionalAsks();
+  const [confirming, setConfirming] = useState(false);
+  const working = ask.status !== "idle";
+  return (
+    <li className={`border-b ${selected ? "bg-accent" : ""}`}>
+      <div className="flex items-start gap-1">
+        <button type="button" aria-current={current} className="min-w-0 flex-1 px-3 py-2 text-left" onClick={onSelect}>
+          <div className="flex items-center gap-2">
+            <span className="truncate font-semibold">{ask.name}</span>
+            <span className="text-xs text-muted-foreground">ask</span>
+            {ask.status === "idle" ? <Badge variant="outline">idle</Badge> : <StateBadge state={ask.status} />}
+          </div>
+          <div className="text-xs text-muted-foreground">{startedText(ask.opened)}</div>
+        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="icon" aria-label={`Close ${ask.name}`} onClick={() => (working ? setConfirming(true) : asks?.close(ask.id))}>
+              <X aria-hidden />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Close</TooltipContent>
+        </Tooltip>
+      </div>
+      {children}
+      <ConfirmDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        title={`Close ${ask.name}?`}
+        description="The agent's turn stops and the conversation ends."
+        confirmLabel="Close"
+        destructive
+        onConfirm={() => asks?.close(ask.id)}
+      />
+    </li>
+  );
+}
+
+/** Which row of the list is chosen: a job or a conversation. */
+interface Chosen {
+  type: "job" | "ask";
+  id: string;
+}
+
+/**
+ * The Jobs view: the project's jobs and Ask more conversations on the left, the selected one's
+ * conversation, or its selected sub-agent's, on the right.
+ */
 export function JobsView() {
   const { projectId, openedJob } = useProject();
   const { jobs, ompReady } = useJobs();
-  const [chosen, setChosen] = useState<string | null>(null);
+  const asksState = useOptionalAsks();
+  const asks = asksState?.asks ?? NO_ASKS;
+  const opened = asksState?.opened ?? null;
+  const [chosen, setChosen] = useState<Chosen | null>(null);
+  const [agent, setAgent] = useState<{ owner: string; path: Step[] } | null>(null);
+  const [focus, setFocus] = useState({ id: "", nonce: 0 });
   useEffect(() => {
-    if (openedJob) setChosen(openedJob);
+    if (openedJob) {
+      setChosen({ type: "job", id: openedJob });
+      setAgent(null);
+    }
   }, [openedJob]);
-  const selected = jobs.find((job) => job.id === chosen) ?? jobs[0] ?? null;
-  return (
-    <div className="flex h-full min-h-0">
+  // A conversation just opened: it is the one shown, and its message box takes the focus.
+  useEffect(() => {
+    if (opened) {
+      setChosen({ type: "ask", id: opened.id });
+      setAgent(null);
+      setFocus({ id: opened.id, nonce: opened.nonce });
+    }
+  }, [opened]);
+  const rows = useMemo(() => mergeRows(jobs, asks), [jobs, asks]);
+  const identity = (row: ListRow) => (row.type === "job" ? { type: row.type, id: row.job.id } : { type: row.type, id: row.ask.id });
+  const selected = rows.find((row) => chosen && identity(row).type === chosen.type && identity(row).id === chosen.id) ?? rows[0] ?? null;
+  const selectedKey = selected ? `${identity(selected).type}:${identity(selected).id}` : null;
+  const agentPath = agent && agent.owner === selectedKey ? agent.path : null;
+  const api = useMemo(() => {
+    if (!selected) return null;
+    return selected.type === "job" ? jobSubAgentsApi(projectId, selected.job.id) : askSubAgentsApi(projectId, selected.ask.id);
+    // The API follows the identity of the selected row, not its changing fields.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, selectedKey]);
+  const nodes = useSubAgentList(api);
+  useSubAgentsView(api, agentPath);
+  const nav = useMemo<SubAgentNav>(
+    () => ({
+      base: agentPath ?? [],
+      open: (path) => {
+        if (selectedKey) setAgent({ owner: selectedKey, path });
+      },
+    }),
+    [agentPath, selectedKey],
+  );
+  const select = (row: ListRow) => {
+    setChosen(identity(row));
+    setAgent(null);
+  };
+  const panels = (
+    <div className="flex min-h-0 flex-1">
       <nav aria-label="Jobs" className="w-[300px] shrink-0 overflow-y-auto border-r">
-        {jobs.length === 0 ? (
+        {rows.length === 0 ? (
           <p className="p-4 text-sm text-muted-foreground">No jobs yet</p>
         ) : (
-          <ul>
-            {jobs.map((job) => (
-              <Row key={job.id} job={job} selected={job.id === selected?.id} onSelect={() => setChosen(job.id)} />
-            ))}
+          <ul className="pt-3">
+            {rows.map((row) => {
+              const key = `${identity(row).type}:${identity(row).id}`;
+              const here = key === selectedKey;
+              const list = here && nodes.length > 0 && (
+                <SubAgentList nodes={nodes} selected={agentPath} onSelect={(path) => setAgent({ owner: key, path })} />
+              );
+              return row.type === "job" ? (
+                <Row key={key} job={row.job} selected={here} current={here && !agentPath} onSelect={() => select(row)}>
+                  {list}
+                </Row>
+              ) : (
+                <AskListRow key={key} ask={row.ask} selected={here} current={here && !agentPath} onSelect={() => select(row)}>
+                  {list}
+                </AskListRow>
+              );
+            })}
           </ul>
         )}
       </nav>
       <section aria-label="Conversation" className="min-w-0 flex-1">
-        {selected && <Conversation key={selected.id} projectId={projectId} job={selected} ompReady={ompReady} />}
+        <SubAgentNavProvider value={nav}>
+          {selected &&
+            (agentPath && api ? (
+              <SubAgentConversationView
+                api={api}
+                ownerName={selected.type === "job" ? selected.job.name : selected.ask.name}
+                nodes={nodes}
+                path={agentPath}
+              />
+            ) : selected.type === "job" ? (
+              <Conversation key={selected.job.id} projectId={projectId} job={selected.job} ompReady={ompReady} />
+            ) : (
+              <AskConversation key={selected.ask.id} ask={selected.ask} focus={focus.id === selected.ask.id ? focus.nonce : 0} />
+            ))}
+        </SubAgentNavProvider>
       </section>
+    </div>
+  );
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <ViewHeader view="jobs" />
+      {panels}
     </div>
   );
 }

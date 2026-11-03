@@ -514,14 +514,19 @@ pub fn instruction_file(dirs: &AppDirs) -> PathBuf {
     dirs.local_data_dir().join("general.md")
 }
 
+/// The language the developer set, trimmed; none when it is empty or holds a control character
+/// (so that the sentence it ends can never grow a line break).
+pub fn clean_language(language: Option<&str>) -> Option<&str> {
+    language
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.chars().any(char::is_control))
+}
+
 /// The instruction of General's agent, appended to omp's system prompt. Fixed text, and the
 /// language sentence only when a language is set. It never names the first person.
 pub fn instruction(language: Option<&str>) -> String {
     let mut text = String::from(INSTRUCTION);
-    if let Some(language) = language
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.chars().any(char::is_control))
-    {
+    if let Some(language) = clean_language(language) {
         text.push_str(&format!(
             "\nWrite the texts for the developer in {language}.\n"
         ));

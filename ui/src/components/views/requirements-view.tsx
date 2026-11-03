@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { AreaView } from "@/bindings/AreaView";
 import type { SectionView } from "@/bindings/SectionView";
+import { AskRequirementsButton } from "@/components/ask/ask-button";
 import { Markdown } from "@/components/markdown";
 import { OpenInEditor } from "@/components/open-in-editor";
 import { Badge } from "@/components/ui/badge";
@@ -119,11 +120,12 @@ function RequirementsPage() {
 
 /**
  * The Requirements: Areas in folder order, fragments in file order, sections with `General` first,
- * each section with its reference chip and `Open in editor`, and the labels of an overlay.
+ * each section with its title and `Open in editor`, and the labels of an overlay. The only
+ * `Ask more` is the one in the header, about the Requirements as a whole.
  */
 export function RequirementsView() {
   return (
-    <ViewFrame view="requirements">
+    <ViewFrame view="requirements" toolbar={<AskRequirementsButton />}>
       <RequirementsPage />
     </ViewFrame>
   );

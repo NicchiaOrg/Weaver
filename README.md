@@ -1,6 +1,6 @@
 # Weaver
 
-Weaver is a desktop app for macOS, Windows and Linux that works on top of Weaver projects (the `.weaver/` folder of a repository). It shows a project's Model, Requirements and Tasks on a Board, and it drives [omp](https://omp.sh) over the Agent Client Protocol to design, scan and implement them. The same Rust core powers the app and the `weaver` command line.
+Weaver is a desktop app for macOS, Windows and Linux that works on top of Weaver projects (the `.weaver/` folder of a repository). It shows a project's Model, Requirements and Tasks on a Board, and it drives [omp](https://omp.sh) over the Agent Client Protocol to design, scan and implement them. The same Rust core powers the app and the `weaver` command line. A project window also has a File view, with a tree of the project's files and a tabbed editor with syntax colours, for small changes to the project's files next to your own editor; Weaver never analyses your code (the agent does) and reads or writes a file of it only when you open or change it there.
 
 ## Install
 
@@ -11,6 +11,18 @@ Download the build for your system from the [Releases](https://github.com/nicchi
 > * **macOS** (`Weaver_<version>_universal.dmg`): drag Weaver to Applications, right-click it and choose **Open**, then **Open** again. If macOS still refuses, open System Settings → Privacy & Security and choose **Open Anyway** next to Weaver.
 > * **Windows** (`Weaver_<version>_x64-setup.exe`): when SmartScreen shows "Windows protected your PC", choose **More info** and then **Run anyway**.
 > * **Linux** (`Weaver_<version>_amd64.AppImage`, or `Weaver_<version>_amd64.deb`): make the AppImage executable with `chmod +x Weaver_<version>_amd64.AppImage` and run it; install the deb with `sudo apt install ./Weaver_<version>_amd64.deb`.
+
+## Behind a corporate proxy
+
+A corporate proxy that inspects HTTPS traffic (Zscaler, for example) re-signs the connections with its own certificate authority. omp does not trust that authority, so it fails to install or to reach its model provider.
+
+**System Certificates** fixes this: every omp process Weaver starts trusts the authorities the system trusts. It is off by default and it is in Settings → omp, under the omp box of Get Started and in the welcome window.
+
+* **Which certificates.** Those the system trusts (on macOS the user, admin and system trust settings; on Windows the user's and the machine's root stores; on Linux the system bundle), plus Mozilla's public roots. Weaver exports them to one PEM bundle, refreshes it at start when it is older than a day, every day while Weaver is open, and when you choose **Refresh**.
+* **Which variables.** `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `PIP_CERT`, `CARGO_HTTP_CAINFO`, `AWS_CA_BUNDLE` and `DENO_CERT` point to the bundle, and `PI_REQUEST_COMPRESSION=0` is set too. They overwrite the values Weaver inherits. They reach every omp process Weaver starts and its terminals for the installer and the login, so the commands the agent runs inherit them.
+* **Turned on for Zscaler.** When Zscaler is installed, Weaver turns System Certificates on by itself, once. This happens on macOS and Windows only, and it is never repeated after you turn the setting off.
+* **Explained errors.** Where Weaver shows why omp failed (a certificate error, an HTTP error, a failed installer), it explains in plain words when a corporate proxy is the likely cause, and suggests turning on System Certificates while it is off.
+* **Not covered.** Java's tools and every program that reads a truststore instead of a PEM bundle.
 
 ## Branches
 
@@ -45,6 +57,9 @@ Download the build for your system from the [Releases](https://github.com/nicchi
 | `project::{browse, init, resolve}` | Requirement sections that apply to an element and Model search; what `weaver project new` writes; naming a card by identity, prefix or short number |
 | `project::requests` | The Machine `design-request` (pure) and the files of design requests: `.weaver/requests/<id>.md`, `<id>.images/`, `.state.json`, title and emptiness rules, images |
 | `omp::*` | omp: the Machine `omp-setup` (pure, events and clock injected), the lookup of the executable, the login PATH, `omp --version` / `models --json` / `update` probes with their limits, failure reasons, the fixed provider list, the quoting of the system terminal commands and `MIN_OMP_VERSION` |
+| `file_tab::{path, read, save, limit}` | The files open in tabs of the File view: paths relative to the project root checked before any file is touched (no absolute path, no `..`, nothing in `.git`, nothing whose canonical form leaves the root); what a tab keeps of a file (SHA-256 of the raw bytes, byte order mark, line ending, binary and size rules); saving only when the file on disk is still the one the tab read, through the atomic write that keeps permissions and writes the target of a symbolic link; the limit of 10 tabs and what an event of a tab's file means |
+| `file_view::{listing, names, ops, rename, machine}` | The tree of the File view: one folder at a time (names and kinds, `.git` and what git ignores left out), valid names, create, rename, move and delete with every refusal checked when they run, and the Machine `file-view` (Closed, Open, Releasing) |
+| `file_lock` | The Machine `file-lock`: which files open in a tab an agent is changing, from its running tools that change files |
 
 ### `weaver` (app) modules
 
@@ -63,6 +78,9 @@ Download the build for your system from the [Releases](https://github.com/nicchi
 | `omp` | The app side of `omp-setup`: runs the probes, the installer, the login and the log out off the UI thread, schedules the re-checks, emits `omp-changed`, and tells the jobs when omp is ready (`OmpSetup::wait_ready`) |
 | `windows` | The Machine `window`: one window per project (`p-<hash>`) and the `welcome` window, `state.json` (recent projects, last session), restore at start, close and quit confirmations, the file watcher of each project, the menu, `Open in editor`; the jobs plug in through `WindowJobs` |
 | `requests` | The design request: the editor's commands (save, Send, Discard, images), the setup or design job `Send` starts, consumption at the Proposal hand-over, return to writing when the job ends, and the flush before a window closes |
+| `file_view` | The tree of the File view of each window, in memory only: its listings and its watches (one non-recursive watch per expanded folder, separate from the project's), the actions of the tree, the release 10 s after the view stops being shown, and `files-tree-changed` |
+| `file_tabs` | The tabs of the File view: reading a file when it opens in a tab, its watch (only the files open in tabs), saving with the check against the file on disk, and `file-tab-changed` |
+| `file_lock` | The agent lock of the File view: the live `session/update` notifications of every job, of General and of every Ask more conversation tell which files an agent is changing; `file-lock-changed`. Replayed updates, sub-agents and commands never count |
 
 The bundled `weaver-cli` is a Tauri `externalBin` sidecar. `src-tauri/build.rs` builds it with the app's profile and target into `target/sidecar` and stores it as `src-tauri/binaries/weaver-cli-<target triple>`.
 
@@ -88,7 +106,7 @@ pnpm --dir ui gen:types        # cargo test -p weaver --lib regenerate_bindings 
 
 ### The command reference of the skills
 
-`crates/core/assets/skills/trama-design/COMMANDS.md` is generated from the command registry of `crates/cli` (`weaver_cli::registry::command_reference()`); never edit it by hand. `cargo test -p weaver-cli` fails when it differs from the registry. After changing a command, regenerate it and build again (the file is embedded in `weaver-core`):
+`crates/core/assets/skills/weaver-design/COMMANDS.md` is generated from the command registry of `crates/cli` (`weaver_cli::registry::command_reference()`); never edit it by hand. `cargo test -p weaver-cli` fails when it differs from the registry. After changing a command, regenerate it and build again (the file is embedded in `weaver-core`):
 
 ```sh
 cargo run -p weaver-cli --example write_command_reference
@@ -97,6 +115,10 @@ cargo run -p weaver-cli --example write_command_reference
 ### Where Weaver keeps files
 
 Only in the project's `.weaver/` folder and in the system folders of the identifier `dev.nicchia.weaver` (`<config>/dev.nicchia.weaver`, `<local data>/dev.nicchia.weaver`). No database; secrets would go to the system keychain (none are kept yet).
+
+In the local data folder, System Certificates keeps the exported bundle `system-certificates.pem` and the markers of the omp installer in `omp-install/`.
+
+The File view keeps nothing on disk and writes nothing outside the files you change in its tabs, or create, rename, move and delete from its tree (a deletion goes to the system's trash).
 
 ## Releases and updates
 

@@ -1,6 +1,6 @@
 # General chat
 
-The free conversation with omp of a project, always there in its window: no instruction, no skill, no written request. The developer writes what he wants, and the agent runs Weaver's commands only when he asks. It is not a job: it holds no Task, announces no card, asks no question round and shows nothing on the Board. Its conversation is kept across closing the window and quitting Weaver, and comes back as it was. When the window opens, a kept conversation comes back at once, before the developer writes anything and without sending anything to the agent; with no kept conversation, omp starts only with the first message.
+The free conversation with omp of a project, always there in its window: no instruction, no skill, no written request. The developer writes what he wants, and the agent runs Weaver's commands only when he asks. It is not a job: it holds no Task, announces no card, asks no question round and shows nothing on the Board. Its conversation is kept across closing the window and quitting Weaver, and comes back as it was. When the window opens, a kept conversation comes back at once, before the developer writes anything and without sending anything to the agent; with no kept conversation, omp starts only with the first message. As in a job, the developer can open and read the conversation of each of its sub-agents, read-only.
 
 ## States
 

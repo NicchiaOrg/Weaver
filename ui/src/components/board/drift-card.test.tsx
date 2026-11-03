@@ -6,7 +6,7 @@ import type { BoardCard } from "@/bindings/BoardCard";
 import type { BoardSnapshot } from "@/bindings/BoardSnapshot";
 import type { DriftView } from "@/bindings/DriftView";
 import { BoardProvider } from "@/components/board/board-state";
-import { BoardActionsContext } from "@/components/board/board-ui";
+import { BoardActionsContext, type BoardActions } from "@/components/board/board-ui";
 import { BoardView } from "@/components/board/board-view";
 import { driftView } from "@/components/board/drift-fixtures";
 import { proposalView } from "@/components/board/proposal-fixtures";
@@ -45,7 +45,7 @@ function drift(view: Partial<DriftView> = {}, agentFinishing = false): BoardCard
 let snapshot: BoardSnapshot;
 const decisions: { name: string; args: unknown }[] = [];
 
-async function show(cards: BoardCard[], patch: Partial<BoardSnapshot> = {}) {
+async function show(cards: BoardCard[], patch: Partial<BoardSnapshot> = {}, actions: BoardActions = {}) {
   decisions.length = 0;
   snapshot = { projectId: PROJECT, revision: 1, backlog: cards, active: [], ghosts: [], gathered: [], runAllReasons: [], doneSinceLastScan: 0, warnings: [], ...patch };
   vi.mocked(on).mockImplementation((() => Promise.resolve(() => {})) as unknown as typeof on);
@@ -58,7 +58,7 @@ async function show(cards: BoardCard[], patch: Partial<BoardSnapshot> = {}) {
   render(
     <TooltipProvider>
       <ProjectContext.Provider value={{ projectId: PROJECT, showView: vi.fn(), openJob: vi.fn(), openedJob: null }}>
-        <BoardActionsContext.Provider value={{ focusSteps: () => 1, viewOn: vi.fn() }}>
+        <BoardActionsContext.Provider value={{ focusSteps: () => 1, viewOn: vi.fn(), ...actions }}>
           <BoardProvider projectId={PROJECT}>
             <BoardView />
           </BoardProvider>
@@ -143,12 +143,27 @@ describe("the card of a Drift", () => {
 });
 
 describe("the details of a Drift", () => {
-  async function open(card: BoardCard, patch: Partial<BoardSnapshot> = {}) {
+  async function open(card: BoardCard, patch: Partial<BoardSnapshot> = {}, actions: BoardActions = {}) {
     const user = userEvent.setup();
-    await show([card], patch);
+    await show([card], patch, actions);
     await user.click(within(screen.getByRole("region", { name: "Backlog" })).getByRole("button", { name: "The code ships twice" }));
     return { user, dialog: await screen.findByRole("dialog") };
   }
+
+  it("has `Ask more` after Resolve and Dismiss Drift, never on the card, and sends the Drift identity", async () => {
+    const askMore = vi.fn().mockResolvedValue("askaskas");
+    const { user, dialog } = await open(drift(), {}, { askMore });
+    const names = within(dialog)
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("aria-label") ?? b.textContent);
+    expect(names.indexOf("Dismiss Drift")).toBeGreaterThan(names.indexOf("Resolve"));
+    expect(names.indexOf("Ask more about D3")).toBeGreaterThan(names.indexOf("Dismiss Drift"));
+    const button = within(dialog).getByRole("button", { name: "Ask more about D3" });
+    expect(button).toBeEnabled();
+    expect(within(screen.getByRole("region", { name: "Backlog", hidden: true })).queryByRole("button", { name: /Ask more/, hidden: true })).toBeNull();
+    await user.click(button);
+    expect(askMore).toHaveBeenCalledWith({ kind: "drift", id: "dddddddd" });
+  });
 
   it("shows chips, the two sides, numbered options with the first recommended, and where in the code", async () => {
     const { user, dialog } = await open(drift());

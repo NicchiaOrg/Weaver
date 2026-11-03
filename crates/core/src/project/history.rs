@@ -237,6 +237,16 @@ pub fn copy_of(image: &ProjectImage, task: &Card) -> Result<TaskCopy, String> {
     })
 }
 
+/// The Task `id` cited by `entry` as the History shows it: from the copy the entry keeps, else from
+/// the Task file that is still there (its copy could not be made yet), else `None`.
+pub fn shown_copy(image: &ProjectImage, entry: &Entry, id: &str) -> Option<TaskCopy> {
+    entry
+        .cleared
+        .get(id)
+        .cloned()
+        .or_else(|| copy_of(image, image.card(CardKind::Task, id)?).ok())
+}
+
 /// A cited Task that is still a file, and why.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stuck {

@@ -278,9 +278,13 @@ impl Drifts {
                 let request = RoundRequest {
                     questions: vec![prepared.question.clone()],
                 };
-                let outcome =
-                    self.rounds
-                        .present_prepared(project_id, &label, &drift.title, request);
+                let outcome = self.rounds.present_prepared(
+                    project_id,
+                    drift_id,
+                    &label,
+                    &drift.title,
+                    request,
+                );
                 Ok(Pressed::Asked(Asked {
                     outcome,
                     prepared: *prepared,

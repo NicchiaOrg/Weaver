@@ -5,7 +5,7 @@ import type { LogoutNote } from "@/bindings/LogoutNote";
 import type { OmpStatus } from "@/bindings/OmpStatus";
 import type { ProviderRow } from "@/bindings/ProviderRow";
 import { ConfirmDialog } from "@/components/dialogs";
-import { SettingsView, type ModelCatalog, type SettingsViewProps } from "@/components/settings-view";
+import { SettingsView, SystemCertificatesSetting, type ModelCatalog, type SettingsViewProps } from "@/components/settings-view";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -32,6 +32,15 @@ interface BoxFace {
 }
 
 const FINISH_IN_TERMINAL = "Finish it in the terminal window. Weaver checks again every few seconds.";
+const EXPORTING_FIRST = "Exporting system certificates first…";
+
+/** The explanations of a certificate or HTTP error (`requirements/ui#system-certificates`) have no final full stop. */
+const PROXY_EXPLANATION = /^omp (could not verify a server's certificate|received an HTTP \d{3} error;)/;
+
+/** The Missing text of a proxy explanation ends with a full stop; the other reasons are shown as they are. */
+function withFinalStop(reason: string): string {
+  return PROXY_EXPLANATION.test(reason) && !reason.endsWith(".") ? `${reason}.` : reason;
+}
 
 function providerName(status: OmpStatus, id: string | null): string {
   return status.providers.find((p) => p.id === id)?.name ?? id ?? "the provider";
@@ -44,16 +53,22 @@ export function boxFace(status: OmpStatus | null): BoxFace {
   const omp = status.version ? `omp ${status.version}` : "omp";
   switch (status.state) {
     case "checking":
-      return checking;
-    case "missing":
+      // At the app's start, while System Certificates exports its bundle: the first check waits.
+      return status.waitingForExport ? { ...checking, hint: EXPORTING_FIRST } : checking;
+    case "missing": {
+      const reason = status.reason ? withFinalStop(status.reason) : null;
+      // After a failed installer its text, with the exit code; the reason of the last check, if
+      // any, stays under it.
+      const text = status.installerFailure ?? reason ?? "omp is not installed.";
       return {
         icon: TriangleAlert,
         spins: false,
         appearance: "warning",
-        text: status.reason ?? "omp is not installed.",
+        text,
         action: { label: "Install omp", variant: "default" },
-        hint: null,
+        hint: status.installerFailure ? reason : null,
       };
+    }
     case "installing":
       return {
         icon: Loader,
@@ -289,11 +304,12 @@ export function Providers({ status }: { status: OmpStatus }) {
 }
 
 /**
- * The status box and, where the developer needs them, the `Providers` below it. `providers` is
- * `always` in Settings (so a provider can be logged out) and `when-needed` where room is short:
+ * The status box and, where the developer needs them, the `Providers` below it, then the
+ * `System Certificates` switch (outside Settings, where it is not the last of the group). `providers`
+ * is `always` in Settings (so a provider can be logged out) and `when-needed` where room is short:
  * only while omp has no provider or a login runs.
  */
-export function OmpSetup({ providers = "always" }: { providers?: "always" | "when-needed" }) {
+export function OmpSetup({ providers = "always", systemCertificates = true }: { providers?: "always" | "when-needed"; systemCertificates?: boolean }) {
   const { status } = useOmp();
   const needed = status?.state === "notConnected" || status?.state === "loggingIn";
   const show = providersShown(status) && (providers === "always" || needed);
@@ -301,6 +317,7 @@ export function OmpSetup({ providers = "always" }: { providers?: "always" | "whe
     <div className="flex flex-col gap-4">
       <OmpStatusBox status={status} />
       {show ? <Providers status={status} /> : null}
+      {systemCertificates ? <SystemCertificatesSetting /> : null}
     </div>
   );
 }
@@ -338,5 +355,5 @@ export function modelCatalogOf(status: OmpStatus | null): ModelCatalog {
 export function ConnectedSettingsView({ projectSlot }: Pick<SettingsViewProps, "projectSlot">) {
   const { status } = useOmp();
   const modelCatalog = useMemo(() => modelCatalogOf(status), [status]);
-  return <SettingsView ompSlot={<OmpSetup />} projectSlot={projectSlot} modelCatalog={modelCatalog} />;
+  return <SettingsView ompSlot={<OmpSetup systemCertificates={false} />} projectSlot={projectSlot} modelCatalog={modelCatalog} />;
 }

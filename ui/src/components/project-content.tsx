@@ -1,5 +1,8 @@
+import { AskViewSwitch } from "@/components/ask/ask-view-switch";
+import { AsksProvider } from "@/components/ask/use-asks";
 import { BoardProvider, useBoard } from "@/components/board/board-state";
 import { BoardView } from "@/components/board/board-view";
+import { FilesView } from "@/components/files/files-view";
 import { GeneralView } from "@/components/general/general-view";
 import { HistoryView } from "@/components/history/history-view";
 import { JobsBoardActions } from "@/components/jobs/board-actions";
@@ -26,7 +29,7 @@ function ProjectShell({ projectId }: { projectId: string }) {
       projectId={projectId}
       views={{
         board: (
-          <ProjectGate>
+          <ProjectGate view="board">
             <RequestsLayer projectId={projectId}>
               <SetupLayer>
                 <BoardView />
@@ -35,27 +38,32 @@ function ProjectShell({ projectId }: { projectId: string }) {
           </ProjectGate>
         ),
         requirements: (
-          <ProjectGate>
+          <ProjectGate view="requirements">
             <RequirementsView />
           </ProjectGate>
         ),
         specs: (
-          <ProjectGate>
+          <ProjectGate view="specs">
             <SpecsView />
           </ProjectGate>
         ),
         history: (
-          <ProjectGate>
+          <ProjectGate view="history">
             <HistoryView />
           </ProjectGate>
         ),
         jobs: (
-          <ProjectGate>
+          <ProjectGate view="jobs">
             <JobsView />
           </ProjectGate>
         ),
+        files: (
+          <ProjectGate view="files">
+            <FilesView />
+          </ProjectGate>
+        ),
         general: (
-          <ProjectGate>
+          <ProjectGate view="general">
             <GeneralView />
           </ProjectGate>
         ),
@@ -77,6 +85,7 @@ function ProjectShell({ projectId }: { projectId: string }) {
       around={(children) => (
         <ViewsProvider projectId={projectId}>
           <JobsBoardActions>
+            <AskViewSwitch />
             <RequestsBoardActions>{children}</RequestsBoardActions>
           </JobsBoardActions>
         </ViewsProvider>
@@ -93,9 +102,11 @@ export function ProjectContent({ projectId }: { projectId: string }) {
         <JobsProvider projectId={projectId}>
           <RequestsProvider projectId={projectId}>
             {/* The round the agent (or Weaver, for a Drift) asks: a modal overlay over every view. */}
-            <QuestionRoundLayer projectId={projectId}>
-              <ProjectShell projectId={projectId} />
-            </QuestionRoundLayer>
+            <AsksProvider projectId={projectId}>
+              <QuestionRoundLayer projectId={projectId}>
+                <ProjectShell projectId={projectId} />
+              </QuestionRoundLayer>
+            </AsksProvider>
           </RequestsProvider>
         </JobsProvider>
       </BoardProvider>

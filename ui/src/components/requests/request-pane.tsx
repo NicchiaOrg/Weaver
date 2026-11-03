@@ -362,7 +362,7 @@ export function RequestPane({ projectId, requestId, modelEmpty, wide, onGone, on
   const sideBySide = preview && wide;
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col">
-      <header className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
+      <header className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
         <h2 className="text-sm font-semibold">{heading}</h2>
         {writable ? <SaveStatus save={saveState} /> : null}
         <div className="ml-auto flex items-center gap-2">

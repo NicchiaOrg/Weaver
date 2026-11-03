@@ -1,6 +1,7 @@
 import { Ban, CheckCheck, WandSparkles, Wrench } from "lucide-react";
 import { useState } from "react";
 
+import { AskMoreButton } from "@/components/ask/ask-button";
 import { useBoard } from "@/components/board/board-state";
 import { registerCardRenderer, type BoardCardOf } from "@/components/board/card-registry";
 import { CardShell } from "@/components/board/card-shell";
@@ -226,9 +227,15 @@ function DriftDetails({ card }: { card: DriftCardData }) {
   );
 }
 
-/** `Resolve` and `Dismiss Drift` repeat in the footer. */
+/** `Resolve` and `Dismiss Drift` repeat in the footer, then `Ask more`. */
 function DriftFooter({ card }: { card: DriftCardData }) {
-  return <DriftControls card={card} />;
+  const { head } = card;
+  return (
+    <>
+      <DriftControls card={card} />
+      <AskMoreButton target={{ kind: "drift", id: head.id }} noun="Drift" name={head.shortNumber ?? head.id} />
+    </>
+  );
 }
 
 registerCardRenderer("drift", { Card: DriftCard, Details: DriftDetails, Footer: DriftFooter, description: () => "Open" });

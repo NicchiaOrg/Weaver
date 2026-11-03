@@ -53,7 +53,6 @@ export interface ViewsState {
   reload: () => void;
   /** The Proposal drawn over the Model, or `null` for `Current Model`. */
   overlay: string | null;
-  setOverlay: (id: string | null) => void;
   notices: readonly Notice[];
   closeNotice: (id: string) => void;
   focus: Record<ViewName, ActiveFocus | null>;
@@ -93,6 +92,8 @@ export function ViewsProvider({ projectId, children }: { projectId: string; chil
   const [focusState, setFocusState] = useState(NO_FOCUS);
   const [attempt, setAttempt] = useState(0);
   const overlayRef = useRef<string | null>(null);
+  // The view whose focus drew the overlay: ending that focus ends the overlay.
+  const overlayOwner = useRef<ViewName | null>(null);
   const snapshotRef = useRef<ViewSnapshot | null>(null);
   const sequence = useRef(0);
   const shown = useRef(-1);
@@ -120,6 +121,7 @@ export function ViewsProvider({ projectId, children }: { projectId: string; chil
           const was = snapshotRef.current?.overlays.find((o) => o.id === asked);
           const name = was ? `Proposal ${was.shortNumber ?? was.id}` : "The Proposal";
           overlayRef.current = null;
+          overlayOwner.current = null;
           setOverlayState(null);
           setNotices((previous) => [
             ...previous,
@@ -151,6 +153,7 @@ export function ViewsProvider({ projectId, children }: { projectId: string; chil
 
   const setOverlay = useCallback(
     (id: string | null) => {
+      if (overlayRef.current === id) return;
       overlayRef.current = id;
       setOverlayState(id);
       fetchViews();
@@ -201,15 +204,27 @@ export function ViewsProvider({ projectId, children }: { projectId: string; chil
         ...previous,
         [view]: { subject, refs, key: null, index: 0, only: false, nonce: mine, fresh: true },
       }));
-      if (subject.kind === "proposal" && snapshotRef.current?.overlays.some((o) => o.id === subject.id) && overlayRef.current !== subject.id) {
-        setOverlay(subject.id);
-      }
+      // The overlay is the Proposal of the last focus opened: a focus on anything else, or on a
+      // Proposal that cannot be overlaid, sends both views back to the Current Model.
+      const drawn = subject.kind === "proposal" && snapshotRef.current?.overlays.some((o) => o.id === subject.id) ? subject.id : null;
+      overlayOwner.current = drawn === null ? null : view;
+      setOverlay(drawn);
       showView(view);
     },
     [setOverlay, showView],
   );
 
-  const clearFocus = useCallback((view: ViewName) => setFocusState((previous) => ({ ...previous, [view]: null })), []);
+  const clearFocus = useCallback(
+    (view: ViewName) => {
+      // Ending the focus that drew the Proposal ends the overlay too.
+      if (overlayOwner.current === view) {
+        overlayOwner.current = null;
+        setOverlay(null);
+      }
+      setFocusState((previous) => ({ ...previous, [view]: null }));
+    },
+    [setOverlay],
+  );
   const setOnly = useCallback(
     (only: boolean) =>
       setFocusState((previous) =>
@@ -237,7 +252,6 @@ export function ViewsProvider({ projectId, children }: { projectId: string; chil
       loadError,
       reload,
       overlay,
-      setOverlay,
       notices,
       closeNotice,
       focus,
@@ -246,7 +260,7 @@ export function ViewsProvider({ projectId, children }: { projectId: string; chil
       setOnly,
       focusOn,
     }),
-    [snapshot, loadError, reload, overlay, setOverlay, notices, closeNotice, focus, goStep, clearFocus, setOnly, focusOn],
+    [snapshot, loadError, reload, overlay, notices, closeNotice, focus, goStep, clearFocus, setOnly, focusOn],
   );
 
   const actions = useMemo(

@@ -60,7 +60,7 @@ Every text of the interface is in English, whatever the language setting says; t
 
 ## developer.CHANGE_SETTINGS
 
-- **Settings view:** one centred column, ~720 px wide, scrolling; groups in this order, each a heading with its settings below:
+- **Settings view:** the view header (`requirements/ui#General`, title `Settings`, no controls) across the whole view, then one centred column, ~720 px wide, that scrolls under it; groups in this order, each a heading with its settings below. Group headings are 14 px semibold, never larger than the header's title:
   1. `omp`: the status box, `Providers`, `omp path` (text; empty = the official installer's places), `Permissions` (`Run without asking` = yolo, default; `Ask before acting` = ask), `System Certificates` (`requirements/ui#system-certificates`).
   2. `Models`: `Analysis`, `Scan`, `Execution`, with the bold advice `Your most capable model.`, `A fast, light model.`, `A mid-range model.`
   3. `Agents`: `Max parallel sub-agents` (whole number ≥ 1, default 20), `Language of the agent's texts` (empty = English).

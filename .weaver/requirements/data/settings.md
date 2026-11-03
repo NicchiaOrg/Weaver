@@ -1,5 +1,5 @@
 ---
-description: "Use when reading or writing Weaver's settings, recent projects, job registry or General sessions."
+description: "Use when reading or writing Weaver's settings, recent projects, job registry, General sessions or the System Certificates bundle."
 ---
 # Settings and local state
 
@@ -21,6 +21,7 @@ description: "Use when reading or writing Weaver's settings, recent projects, jo
 | `editor.preset` | string | `"vscode"` | `vscode`, `cursor`, `zed`, `jetbrains`, `sublime`, `custom` |
 | `editor.command` | string | `""` | used only with `custom`; must contain `{file}` |
 | `permissions` | string | `"yolo"` | `yolo` (omp runs everything without asking), `ask` |
+| `systemCertificates.enabled` | boolean | `false` | `true` turns System Certificates on (`requirements/tech#system-certificates`) |
 
 - The model values and the thinking suffix are passed to omp whole and never checked against a list; a wrong name is reported by omp in the job's conversation.
 - Editor presets open `{file}` at `{line}` with these argument lists: `vscode` `code --goto {file}:{line}`, `cursor` `cursor --goto {file}:{line}`, `zed` `zed {file}:{line}`, `jetbrains` `idea --line {line} {file}`, `sublime` `subl {file}:{line}`. The program is looked up with the same PATH rules as omp.
@@ -45,7 +46,7 @@ description: "Use when reading or writing Weaver's settings, recent projects, jo
 - Each job has a registry record `jobs/<job id>.json` in the local data folder, written when the job is created and at each change of its state. It holds what Weaver needs to show the Jobs list and resume a Suspended job:
   - `id`, `kind` (`setup`, `design`, `import`, `scan`, `run`, `resolve`, `rework`, `refinement`), `name`, `project` (canonical root path), `target` (the request id, Task, Drift or Proposal identity it works on, when any);
   - `state`, `reason` (for Failed), `created`, `ended`;
-  - `sessionId` (omp's ACP session), `omp` (program path), `args` and `env` (the arguments and the Weaver-set environment variables it was started with; never inherited variables);
+  - `sessionId` (omp's ACP session), `omp` (program path), `args` and `env` (the arguments and the Weaver-set environment variables it was started with; never inherited variables, and never the System Certificates variables, which are computed again at every start and resume);
   - `announcements`: `{id, kind, title}` of each card it announced and still waiting;
   - `notes`: its last notes with their instants.
 - No conversation text is stored by Weaver: omp keeps it in its own session files, and Weaver reloads it from there.
@@ -56,3 +57,11 @@ description: "Use when reading or writing Weaver's settings, recent projects, jo
 
 - General keeps `general/<project hash>.json` in the local data folder: `{project, sessionId, updated}`. It is written when omp opens or reloads the session and removed by Clear; with no record, General starts empty.
 - Like jobs, no text of the conversation is stored by Weaver.
+
+## system-certificates
+
+- The bundle is one file, `system-certificates.pem`, in the local data folder, shared by every window and project; never in a project. It holds PEM `CERTIFICATE` blocks only, LF line endings, no keys. Its modification time is when it was written; its certificate count is read back from the file at start.
+- Writing it is atomic: `system-certificates.pem.<pid>.tmp` in the same folder, then a rename over the bundle. A failed write or rename leaves the earlier bundle whole and removes the temp file.
+- Turning the setting off keeps the file on disk, unused.
+- `state.json` also holds `systemCertificates`: `{autoEnabledAt}`, the UTC instant (ISO 8601) when Weaver turned the setting on by itself because Zscaler is installed. Present means Weaver never does it again; it is never removed by Weaver. A `state.json` that cannot be read counts as without it.
+- The marker files of omp's installer live in `omp-install/` in the local data folder: `<nonce>.code`, decimal exit code as text (`requirements/tech#omp-setup`). Starting the installer deletes every earlier marker; omp being found deletes them too.

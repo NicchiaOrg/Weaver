@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use weaver_core::jobs::machine::SteeringOutcome;
+use weaver_core::omp::failure;
 
 use super::rpc::{Rpc, RpcError};
 
@@ -120,6 +121,43 @@ pub fn steering_outcome(reply: Result<Value, RpcError>) -> SteeringOutcome {
             }
         },
         Err(error) => SteeringOutcome::Failed(error.text()),
+    }
+}
+
+/// The reason a failure shows (`requirements/ui#system-certificates`, "Where they replace the
+/// reason"): the proxy explanation when any of `texts` (the whole ACP error message, the stderr
+/// tail, the reason itself) is a certificate or an HTTP error, else `plain`. `system_certificates_on`
+/// is the setting at the moment of the failure. The result is stored as written: a later change of
+/// the setting rewrites nothing.
+pub fn explained(plain: &str, texts: &[&str], system_certificates_on: bool) -> String {
+    failure::explain(&texts.join("\n"), system_certificates_on).unwrap_or_else(|| plain.to_owned())
+}
+
+impl TurnEnd {
+    /// A failed turn with its reason [`explained`] by the error and the stderr tail.
+    pub fn explained(self, stderr: &str, system_certificates_on: bool) -> TurnEnd {
+        match self {
+            TurnEnd::Failed(reason) => {
+                let shown = explained(&reason, &[&reason, stderr], system_certificates_on);
+                TurnEnd::Failed(shown)
+            }
+            other => other,
+        }
+    }
+}
+
+/// A refused message with its reason [`explained`]; the other outcomes stay.
+pub fn explained_outcome(
+    outcome: SteeringOutcome,
+    stderr: &str,
+    system_certificates_on: bool,
+) -> SteeringOutcome {
+    match outcome {
+        SteeringOutcome::Failed(reason) => {
+            let shown = explained(&reason, &[&reason, stderr], system_certificates_on);
+            SteeringOutcome::Failed(shown)
+        }
+        other => other,
     }
 }
 
@@ -266,7 +304,8 @@ mod tests {
         assert_eq!(
             turn_end(Err(RpcError::Remote {
                 code: -1,
-                message: "quota exceeded".into()
+                message: "quota exceeded".into(),
+                data: None
             })),
             TurnEnd::Failed("quota exceeded".into())
         );
@@ -294,10 +333,60 @@ mod tests {
         assert_eq!(
             steering_outcome(Err(RpcError::Remote {
                 code: -32602,
-                message: "prompt is empty".into()
+                message: "prompt is empty".into(),
+                data: None
             })),
             SteeringOutcome::Failed("prompt is empty".into())
         );
+    }
+
+    fn remote(message: &str, data: Option<&str>) -> RpcError {
+        RpcError::Remote {
+            code: -32603,
+            message: message.into(),
+            data: data.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_proxy_error_carried_only_in_the_data_of_the_acp_error_is_explained() {
+        let cause = r#"{"cause":"fetch failed: UNABLE_TO_GET_ISSUER_CERT_LOCALLY"}"#;
+        for on in [false, true] {
+            let expected = failure::explain(cause, on).unwrap();
+            let turn = turn_end(Err(remote("Internal error", Some(cause)))).explained("", on);
+            assert_eq!(turn, TurnEnd::Failed(expected.clone()), "{on}");
+            let steer = explained_outcome(
+                steering_outcome(Err(remote("Internal error", Some(cause)))),
+                "",
+                on,
+            );
+            assert_eq!(steer, SteeringOutcome::Failed(expected.clone()), "{on}");
+            let open = OpenError::from(remote("Internal error", Some(cause)));
+            assert_eq!(explained(&open.reason(), &[&open.reason()], on), expected);
+        }
+        let http = turn_end(Err(remote("Internal error", Some("HTTP 407")))).explained("", false);
+        assert!(
+            matches!(http, TurnEnd::Failed(text) if text.starts_with("omp received an HTTP 407 error"))
+        );
+        // A certificate error in the data wins over an HTTP one in the message.
+        let both = remote("HTTP 502", Some("SELF_SIGNED_CERT_IN_CHAIN")).text();
+        assert!(failure::explain(&both, false)
+            .unwrap()
+            .contains("verify a server's certificate"));
+    }
+
+    #[test]
+    fn the_data_of_an_error_that_is_not_a_proxy_problem_stays_out_of_its_text() {
+        assert_eq!(
+            remote("quota exceeded", Some(r#"{"code":429}"#)).text(),
+            "quota exceeded"
+        );
+        assert_eq!(
+            remote("quota exceeded", Some("HTTP 429")).text(),
+            "quota exceeded"
+        );
+        assert_eq!(remote("HTTP 503", Some("HTTP 407")).text(), "HTTP 503");
+        assert_eq!(remote("quota exceeded", None).text(), "quota exceeded");
     }
 
     #[test]

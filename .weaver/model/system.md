@@ -1,6 +1,6 @@
 # Weaver
 
-Weaver is a desktop app for programming from a visual and textual Model of every state a software system can be in, plus the Requirements that say how it must be built. The developer reviews and decides on changes to the Model; a coding agent, omp, explores the Model, proposes changes as Proposals, compares the Model with the code and files the differences as Drifts, and carries out the work as Tasks. Weaver never calls a language model and never reads the developer's code: the agent does.
+Weaver is a desktop app for programming from a visual and textual Model of every state a software system can be in, plus the Requirements that say how it must be built. The developer reviews and decides on changes to the Model; a coding agent, omp, explores the Model, proposes changes as Proposals, compares the Model with the code and files the differences as Drifts, and carries out the work as Tasks. Weaver never calls a language model and never analyses the developer's code: the agent does. Weaver reads and writes a file of the code only when the developer opens or changes it in the File view, and reads nothing of the code while that view is closed.
 
 The Model, the Requirements, the Specs and the cards (Proposals, Tasks, Drifts, History entries) are files of the developer's project, kept in its repository with no database. Nothing changes in the Model until the developer approves a Proposal as a whole; every other decision on the work is the developer's too, and the agent takes one only when the developer explicitly asks for it.
 

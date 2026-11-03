@@ -15,8 +15,11 @@ use weaver_core::settings::{Permissions, Settings};
 
 use super::host::{Host, MutationResult};
 use super::wire::{EntriesEvent, JobRow, JobsSnapshot};
+use crate::file_lock::FileLockService;
+use crate::file_tabs::events::testing::{recording, Recorder as FileEventsRecorder};
 use crate::mutations::MutationQueues;
 use crate::pictures::Pictures;
+use crate::subagents::wire::{SubAgentEntries, SubAgentsEvent};
 use crate::windows::jobs::BoxFuture;
 
 /// The binary of the fake agent, built once by a nested `cargo build` into its own target folder
@@ -59,9 +62,15 @@ pub struct TestHost {
     queues: Arc<MutationQueues>,
     pub snapshots: Mutex<Vec<JobsSnapshot>>,
     pub entries: Mutex<Vec<EntriesEvent>>,
+    pub lists: Mutex<Vec<SubAgentsEvent>>,
+    pub agent_entries: Mutex<Vec<SubAgentEntries>>,
     pub missing: Mutex<Vec<Option<String>>>,
     pub board_changes: Mutex<usize>,
     pub ready: Mutex<bool>,
+    /// The agent lock of the File view, fed by the actors of the jobs and of General.
+    pub file_locks: Arc<FileLockService>,
+    /// What the agent lock told the UI.
+    pub lock_events: Arc<FileEventsRecorder>,
     _base: tempfile::TempDir,
 }
 
@@ -71,7 +80,10 @@ impl TestHost {
         let dirs =
             AppDirs::from_bases(&base.path().join("config"), &base.path().join("data"), None);
         std::fs::create_dir_all(dirs.local_data_dir()).unwrap();
+        let (file_events, lock_events) = recording();
         Arc::new(TestHost {
+            file_locks: FileLockService::new(file_events),
+            lock_events,
             queues: Arc::new(MutationQueues::new(dirs.clone())),
             dirs,
             settings: Mutex::new(Settings::default()),
@@ -79,6 +91,8 @@ impl TestHost {
             pictures: Arc::new(Pictures::new()),
             snapshots: Mutex::default(),
             entries: Mutex::default(),
+            lists: Mutex::default(),
+            agent_entries: Mutex::default(),
             missing: Mutex::default(),
             board_changes: Mutex::new(0),
             ready: Mutex::new(true),
@@ -172,6 +186,10 @@ impl Host for TestHost {
         self.missing.lock().unwrap().push(reason);
     }
 
+    fn file_locks(&self) -> Option<Arc<FileLockService>> {
+        Some(self.file_locks.clone())
+    }
+
     fn inherited_env(&self) -> Vec<(OsString, OsString)> {
         let script = self.script.lock().unwrap().clone();
         vec![
@@ -191,6 +209,14 @@ impl Host for TestHost {
 
     fn emit_entries(&self, event: &EntriesEvent) {
         self.entries.lock().unwrap().push(event.clone());
+    }
+
+    fn emit_sub_agents(&self, event: &SubAgentsEvent) {
+        self.lists.lock().unwrap().push(event.clone());
+    }
+
+    fn emit_sub_agent_entries(&self, event: &SubAgentEntries) {
+        self.agent_entries.lock().unwrap().push(event.clone());
     }
 
     fn board_changed(&self, _project_id: &str) {

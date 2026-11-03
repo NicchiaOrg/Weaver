@@ -14,6 +14,7 @@ use std::collections::{BTreeSet, HashMap};
 use serde::Serialize;
 use serde_json::Value;
 use ts_rs::TS;
+use weaver_core::jobs::ask;
 use weaver_core::jobs::machine::{MessageId, RequestId, RESUME_PROMPT};
 use weaver_core::jobs::subagents::{self, SubAgent, SubAgentState};
 
@@ -116,6 +117,12 @@ pub enum Entry {
     Instruction {
         text: String,
     },
+    /// A sub-agent: the assignment it received, shown as a message labelled with the name of who
+    /// started it (the job, or the sub-agent that launched it).
+    Assignment {
+        from: String,
+        text: String,
+    },
     Developer {
         #[ts(type = "number")]
         message: MessageId,
@@ -191,8 +198,26 @@ pub struct Conversation {
     open_thinking: Option<usize>,
     permissions: HashMap<RequestId, usize>,
     messages: HashMap<MessageId, usize>,
-    /// A General conversation: no instruction.
+    /// A General or an Ask more conversation: no instruction entry.
     general: bool,
+    /// An Ask more conversation: the first prompt of its history holds Weaver's instruction, of
+    /// which only the developer's message is shown.
+    ask: bool,
+    /// Counts the changes of the sub-agents the rows list.
+    agents_rev: u64,
+}
+
+/// An update never takes a sub-agent that ended back to working: `new` keeps the state of the
+/// same sub-agent in `old` when it ended and `new` says it works.
+fn keep_ended(old: &[SubAgent], new: &mut [SubAgent]) {
+    for agent in new.iter_mut().filter(|a| a.state.is_working()) {
+        if let Some(ended) = old
+            .iter()
+            .find(|o| o.id == agent.id && !o.state.is_working())
+        {
+            agent.state = ended.state;
+        }
+    }
 }
 
 fn text_of(content: &Value) -> &str {
@@ -231,7 +256,7 @@ fn command_of(update: &Value) -> Option<String> {
     }
 }
 
-fn looks_like_task_call(update: &Value) -> bool {
+pub(crate) fn looks_like_task_call(update: &Value) -> bool {
     let title = update
         .get("title")
         .and_then(Value::as_str)
@@ -296,6 +321,17 @@ impl Conversation {
     pub fn general() -> Self {
         Self {
             general: true,
+            ..Self::default()
+        }
+    }
+
+    /// The conversation of an Ask more conversation: like General's, it has no instruction entry,
+    /// and the first user message of a replayed history shows only the text after
+    /// `Developer's message:`.
+    pub fn ask() -> Self {
+        Self {
+            general: true,
+            ask: true,
             ..Self::default()
         }
     }
@@ -571,6 +607,11 @@ impl Conversation {
         {
             self.instruction(text);
         } else {
+            let text = if self.ask {
+                ask::shown_message(text)
+            } else {
+                text
+            };
             self.developer_message(0, text, Delivery::Delivered);
         }
     }
@@ -579,16 +620,26 @@ impl Conversation {
         let Some(tool) = tool_of(update) else { return };
         if let Some(&index) = self.tools.get(&tool.id) {
             self.replace_tool(index, tool);
-            return;
+        } else {
+            let id = tool.id.clone();
+            if !tool.sub_agents.is_empty() {
+                self.agents_rev += 1;
+            }
+            let index = self.push(Entry::Tool(tool));
+            self.tools.insert(id, index);
         }
-        let id = tool.id.clone();
-        let index = self.push(Entry::Tool(tool));
-        self.tools.insert(id, index);
+        self.waited(update);
     }
 
-    fn replace_tool(&mut self, index: usize, tool: Tool) {
+    /// Replaces the row at `index`; a sub-agent that ended stays ended whatever the new row says
+    /// of it (an update never takes a sub-agent back to working).
+    fn replace_tool(&mut self, index: usize, mut tool: Tool) {
         if let Some(Entry::Tool(existing)) = self.entries.get_mut(index) {
+            keep_ended(&existing.sub_agents, &mut tool.sub_agents);
             if *existing != tool {
+                if existing.sub_agents != tool.sub_agents {
+                    self.agents_rev += 1;
+                }
                 *existing = tool;
                 self.dirty.insert(index);
             }
@@ -633,10 +684,38 @@ impl Conversation {
             tool.icon = ToolKind::SubAgent;
         }
         self.replace_tool(index, tool);
+        self.waited(update);
     }
 
-    /// The sub-agents that run in the background: a `task` call that completed while some of its
-    /// sub-agents still work. Pairs of `(tool call id, sub-agent id)`.
+    /// The statuses a `wait` call reports (`rawOutput.details.jobs[]`) reach the sub-agents it
+    /// names, wherever their `task` call is.
+    fn waited(&mut self, update: &Value) {
+        let Some(raw_output) = update.get("rawOutput") else {
+            return;
+        };
+        for (agent, state) in subagents::wait_states(raw_output) {
+            self.report_state(&agent, state);
+        }
+    }
+
+    /// omp reports `state` for the sub-agent `agent` (a `wait` call): every row that lists it
+    /// follows, unless the report would take an ended sub-agent back to working.
+    pub fn report_state(&mut self, agent: &str, state: SubAgentState) {
+        for (index, entry) in self.entries.iter_mut().enumerate() {
+            let Entry::Tool(tool) = entry else { continue };
+            for found in tool.sub_agents.iter_mut().filter(|a| a.id == agent) {
+                if found.state == state || (state.is_working() && !found.state.is_working()) {
+                    continue;
+                }
+                found.state = state;
+                self.dirty.insert(index);
+                self.agents_rev += 1;
+            }
+        }
+    }
+
+    /// The sub-agents whose `task` call completed while they still work: the ones whose end only
+    /// their session file can tell. Pairs of `(tool call id, sub-agent id)`.
     pub fn background_agents(&self) -> Vec<(String, String)> {
         self.entries
             .iter()
@@ -657,24 +736,44 @@ impl Conversation {
             .collect()
     }
 
-    /// A background sub-agent ended as `state` says.
+    /// The `session_exit` record of a sub-agent says how it ended: the fallback of the other
+    /// sources, so it only settles a sub-agent still working.
     pub fn set_sub_agent(&mut self, tool: &str, agent: &str, state: SubAgentState) {
         let Some(&index) = self.tools.get(tool) else {
             return;
         };
         if let Some(Entry::Tool(row)) = self.entries.get_mut(index) {
-            if let Some(found) = row.sub_agents.iter_mut().find(|a| a.id == agent) {
+            if let Some(found) = row
+                .sub_agents
+                .iter_mut()
+                .find(|a| a.id == agent && a.state.is_working())
+            {
                 if found.state != state {
                     found.state = state;
                     self.dirty.insert(index);
+                    self.agents_rev += 1;
                 }
             }
         }
     }
 
-    /// The job ended: the agent message is complete, every sub-agent still working is interrupted,
-    /// every tool call still working stops spinning, and the end line closes the conversation.
-    pub fn finish(&mut self, end: EndLine) {
+    /// Counts the changes of the sub-agents of the rows (new ones, new states): what the list of
+    /// sub-agents is built from.
+    pub fn agents_rev(&self) -> u64 {
+        self.agents_rev
+    }
+
+    /// The rows that list sub-agents, in the order of the conversation.
+    pub fn agent_rows(&self) -> impl Iterator<Item = &Tool> {
+        self.entries.iter().filter_map(|entry| match entry {
+            Entry::Tool(tool) if !tool.sub_agents.is_empty() => Some(tool),
+            _ => None,
+        })
+    }
+
+    /// Every sub-agent still working is interrupted, every tool call still working stops
+    /// spinning, and the agent message being written is complete.
+    pub fn interrupt_working(&mut self) {
         self.close_open();
         for (index, entry) in self.entries.iter_mut().enumerate() {
             if let Entry::Tool(tool) = entry {
@@ -682,6 +781,7 @@ impl Conversation {
                 for agent in tool.sub_agents.iter_mut().filter(|a| a.state.is_working()) {
                     agent.state = SubAgentState::Interrupted;
                     changed = true;
+                    self.agents_rev += 1;
                 }
                 if tool.status == ToolStatus::Working {
                     tool.status = ToolStatus::Failed;
@@ -692,7 +792,98 @@ impl Conversation {
                 }
             }
         }
+    }
+
+    /// The job ended: the agent message is complete, every sub-agent still working is interrupted,
+    /// every tool call still working stops spinning, and the end line closes the conversation.
+    pub fn finish(&mut self, end: EndLine) {
+        self.interrupt_working();
         self.push(Entry::End(end));
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // The transcript of a sub-agent: whole messages, not chunks
+    // -----------------------------------------------------------------------------------------
+
+    /// Whether the assignment of a sub-agent is already the first entry.
+    pub fn has_assignment(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| matches!(entry, Entry::Assignment { .. }))
+    }
+
+    /// The assignment a sub-agent received, labelled with the name of who started it.
+    pub fn assignment(&mut self, from: &str, text: &str) {
+        self.push(Entry::Assignment {
+            from: from.to_owned(),
+            text: text.to_owned(),
+        });
+    }
+
+    /// A complete message of the agent.
+    pub fn agent_message(&mut self, text: &str) {
+        if !text.trim().is_empty() {
+            self.push(Entry::Agent {
+                text: text.to_owned(),
+                complete: true,
+            });
+        }
+    }
+
+    /// A complete block of reasoning.
+    pub fn thinking_block(&mut self, text: &str) {
+        if !text.trim().is_empty() {
+            self.push(Entry::Thinking {
+                text: text.to_owned(),
+            });
+        }
+    }
+
+    /// The row of a tool call the transcript says was made; a call seen already is not added again.
+    pub fn tool_started(&mut self, tool: Tool) {
+        if self.tools.contains_key(&tool.id) {
+            return;
+        }
+        let id = tool.id.clone();
+        let index = self.push(Entry::Tool(tool));
+        self.tools.insert(id, index);
+    }
+
+    /// The result of a tool call ends its row; the `details` of a `task` call list its
+    /// sub-agents, and the ones of a `wait` call report how they stand.
+    pub fn tool_finished(&mut self, id: &str, is_error: bool, details: Option<&Value>) {
+        let Some(&index) = self.tools.get(id) else {
+            return;
+        };
+        if let Some(Entry::Tool(tool)) = self.entries.get_mut(index) {
+            let status = if is_error {
+                ToolStatus::Failed
+            } else {
+                ToolStatus::Done
+            };
+            let mut changed = tool.status != status;
+            tool.status = status;
+            if let Some(mut agents) = details.and_then(subagents::from_details) {
+                if !agents.is_empty() {
+                    keep_ended(&tool.sub_agents, &mut agents);
+                    if tool.sub_agents != agents {
+                        tool.sub_agents = agents;
+                        tool.icon = ToolKind::SubAgent;
+                        self.agents_rev += 1;
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                self.dirty.insert(index);
+            }
+        }
+        for (agent, state) in details
+            .map(subagents::wait_states_of_details)
+            .unwrap_or_default()
+        {
+            self.report_state(&agent, state);
+        }
     }
 
     /// The entries that changed since the last call, in index order; empty when none did.
@@ -731,7 +922,7 @@ mod tests {
     #[test]
     fn agent_chunks_join_into_one_message_until_another_entry_starts() {
         let mut c = Conversation::new();
-        c.instruction("Use the trama-scan skill on the whole System.");
+        c.instruction("Use the weaver-scan skill on the whole System.");
         c.apply_update(&chunk("agent_message_chunk", "Reading "));
         c.apply_update(&chunk("agent_message_chunk", "the code."));
         assert_eq!(c.entries().len(), 2);
@@ -1003,18 +1194,43 @@ mod tests {
         let mut c = Conversation::new();
         c.apply_update(&chunk(
             "user_message_chunk",
-            "Use the trama-scan skill on the whole System.",
+            "Use the weaver-scan skill on the whole System.",
         ));
         c.apply_update(&chunk("agent_message_chunk", "On it."));
         c.apply_update(&chunk("user_message_chunk", "Skip the tests"));
         c.apply_update(&chunk("user_message_chunk", RESUME_PROMPT));
         assert!(
-            matches!(&c.entries()[0], Entry::Instruction { text } if text.starts_with("Use the trama-scan"))
+            matches!(&c.entries()[0], Entry::Instruction { text } if text.starts_with("Use the weaver-scan"))
         );
         assert!(
             matches!(&c.entries()[2], Entry::Developer { text, delivery: Delivery::Delivered, .. } if text == "Skip the tests")
         );
         assert_eq!(c.entries()[3], Entry::Reloaded);
+    }
+
+    #[test]
+    fn the_replayed_history_of_an_ask_conversation_shows_only_the_developers_message() {
+        let mut c = Conversation::ask();
+        c.apply_update(&chunk(
+            "user_message_chunk",
+            &ask::first_prompt("Weaver: Ask more\n\nrules\n", "Why is it like this?"),
+        ));
+        c.apply_update(&chunk("agent_message_chunk", "Because."));
+        c.apply_update(&chunk("user_message_chunk", "And then?"));
+        assert!(matches!(
+            &c.entries()[0],
+            Entry::Developer { text, delivery: Delivery::Delivered, .. } if text == "Why is it like this?"
+        ));
+        assert!(matches!(
+            &c.entries()[2],
+            Entry::Developer { text, .. } if text == "And then?"
+        ));
+        assert!(
+            !c.entries()
+                .iter()
+                .any(|e| matches!(e, Entry::Instruction { .. })),
+            "the instruction is never an entry"
+        );
     }
 
     #[test]
@@ -1088,5 +1304,83 @@ mod tests {
         assert_eq!(json["kind"], "tool");
         assert_eq!(json["subAgents"], json!([]));
         assert_eq!(json["status"], "done");
+    }
+
+    fn task_rows(c: &Conversation) -> Vec<(String, SubAgentState)> {
+        c.agent_rows()
+            .flat_map(|row| row.sub_agents.iter().map(|a| (a.id.clone(), a.state)))
+            .collect()
+    }
+
+    #[test]
+    fn a_wait_call_settles_the_background_sub_agents_and_nothing_takes_an_ended_one_back_to_working(
+    ) {
+        let mut c = Conversation::new();
+        c.apply_update(&json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Task", "status": "in_progress" }));
+        c.apply_update(&json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed", "rawOutput": { "details": { "progress": [
+            { "id": "0-A", "name": "A", "status": "pending" },
+            { "id": "1-B", "name": "B", "status": "pending" },
+            { "id": "__advisor.turn", "status": "running" },
+        ] } } }));
+        assert_eq!(
+            task_rows(&c),
+            [
+                ("0-A".to_owned(), SubAgentState::Working),
+                ("1-B".to_owned(), SubAgentState::Working)
+            ]
+        );
+        assert_eq!(c.background_agents().len(), 2);
+        let revision = c.agents_rev();
+
+        // The wait names one of them, and a background command that is no sub-agent.
+        c.apply_update(&json!({ "sessionUpdate": "tool_call", "toolCallId": "w1", "title": "Wait", "status": "completed", "rawOutput": { "details": { "jobs": [
+            { "id": "0-A", "status": "completed" },
+            { "id": "bg_1", "status": "failed" },
+        ] } } }));
+        assert_eq!(
+            task_rows(&c),
+            [
+                ("0-A".to_owned(), SubAgentState::Succeeded),
+                ("1-B".to_owned(), SubAgentState::Working)
+            ]
+        );
+        assert!(c.agents_rev() > revision);
+
+        // A later update of the task call says it still works: it stays ended. A later wait that
+        // says working changes nothing either; one that says failed does.
+        c.apply_update(&json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "rawOutput": { "details": { "progress": [
+            { "id": "0-A", "name": "A", "status": "running" },
+            { "id": "1-B", "name": "B", "status": "running" },
+        ] } } }));
+        c.apply_update(&json!({ "sessionUpdate": "tool_call_update", "toolCallId": "w1", "rawOutput": { "details": { "jobs": [
+            { "id": "0-A", "status": "running" },
+            { "id": "1-B", "status": "failed" },
+        ] } } }));
+        assert_eq!(
+            task_rows(&c),
+            [
+                ("0-A".to_owned(), SubAgentState::Succeeded),
+                ("1-B".to_owned(), SubAgentState::Failed)
+            ]
+        );
+        assert!(c.background_agents().is_empty());
+    }
+
+    #[test]
+    fn the_exit_record_only_settles_a_sub_agent_still_working() {
+        let mut c = Conversation::new();
+        c.apply_update(&json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Task", "status": "completed", "rawOutput": { "details": { "progress": [
+            { "id": "0-A", "status": "pending" },
+            { "id": "1-B", "status": "completed" },
+        ] } } }));
+        c.set_sub_agent("t1", "0-A", SubAgentState::Failed);
+        c.set_sub_agent("t1", "1-B", SubAgentState::Interrupted);
+        assert_eq!(
+            task_rows(&c),
+            [
+                ("0-A".to_owned(), SubAgentState::Failed),
+                ("1-B".to_owned(), SubAgentState::Succeeded)
+            ]
+        );
     }
 }

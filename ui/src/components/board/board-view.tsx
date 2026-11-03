@@ -13,6 +13,7 @@ import { CardId } from "@/components/card-id";
 import { ConfirmDialog, FormDialog } from "@/components/dialogs";
 import { GuardedButton } from "@/components/guarded-button";
 import { NoticeStack } from "@/components/notices";
+import { ViewHeader } from "@/components/view-header";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
@@ -157,19 +158,24 @@ export function BoardView() {
   const ui = useMemo<BoardUi>(() => ({ openDetails }), [openDetails]);
 
   if (!snapshot) {
-    return loadError ? (
-      <div className="flex flex-col items-start gap-3 p-4">
-        <Alert variant="error" role="alert">
-          <p className="min-w-0 flex-1">{loadError}</p>
-        </Alert>
-        <Button variant="outline" onClick={reload}>
-          Try again
-        </Button>
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <ViewHeader view="board" />
+        {loadError ? (
+          <div className="flex flex-col items-start gap-3 p-4">
+            <Alert variant="error" role="alert">
+              <p className="min-w-0 flex-1">{loadError}</p>
+            </Alert>
+            <Button variant="outline" onClick={reload}>
+              Try again
+            </Button>
+          </div>
+        ) : (
+          <p role="status" className="p-4 text-muted-foreground">
+            Loading the Board…
+          </p>
+        )}
       </div>
-    ) : (
-      <p role="status" className="p-4 text-muted-foreground">
-        Loading the Board…
-      </p>
     );
   }
 
@@ -178,7 +184,7 @@ export function BoardView() {
   return (
     <BoardUiContext.Provider value={ui}>
       <div className="flex h-full min-h-0 flex-col">
-        <header className="flex items-center gap-3 border-b px-4 py-2">
+        <ViewHeader view="board">
           <GuardedButton variant="outline" size="sm" onClick={() => setScanning(true)}>
             <ScanSearch aria-hidden />
             Scan System
@@ -186,10 +192,10 @@ export function BoardView() {
           {snapshot.doneSinceLastScan > 0 ? (
             <span className="text-muted-foreground">· {snapshot.doneSinceLastScan} done since last scan</span>
           ) : null}
-        </header>
+        </ViewHeader>
         <NoticeStack notices={notices} onClose={closeNotice} />
         {visibleWarnings.length > 0 ? (
-          <div className="flex flex-col gap-2 px-3 pt-3">
+          <div className="flex flex-col gap-2 px-4 pt-4">
             {visibleWarnings.map((text) => (
               <Alert key={text} variant="warning">
                 <TriangleAlert aria-hidden />
@@ -207,7 +213,7 @@ export function BoardView() {
             ))}
           </div>
         ) : null}
-        <div className="grid min-h-0 flex-1 grid-cols-2 gap-3 p-3">
+        <div className="grid min-h-0 flex-1 grid-cols-2 gap-4 p-4">
           <Column
             ref={backlogRef}
             title="Backlog"

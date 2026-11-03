@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use serde_json::json;
 use tokio::sync::{mpsc, watch};
-use weaver_core::omp::Failure;
+use weaver_core::omp::failure;
 use weaver_core::process_group::ProcessGroup;
 
 use super::rpc::{Incoming, Rpc};
@@ -213,18 +213,16 @@ impl OmpProcess {
         }
     }
 
-    /// The reason and the details of an exit Weaver did not ask for: `omp exited with code N` or
-    /// omp's last error line (with the hint for a certificate or a proxy), and the last lines.
-    pub fn exit_reason(&self, exit: &ExitInfo) -> (String, Option<String>) {
-        let stderr = self.stderr_text();
-        let failure = Failure::Exit {
-            code: exit.code,
-            stderr: stderr.clone(),
-        };
-        (
-            failure.status_text(),
-            (!stderr.is_empty()).then_some(stderr),
-        )
+    /// The reason and the details of an exit Weaver did not ask for: the proxy explanation when
+    /// the stderr tail is a certificate or an HTTP error, else omp's last error line, else
+    /// `omp exited with code N`; the details are the last lines. `system_certificates_on` is the
+    /// setting at this moment.
+    pub fn exit_reason(
+        &self,
+        exit: &ExitInfo,
+        system_certificates_on: bool,
+    ) -> (String, Option<String>) {
+        exit_reason_of(&self.stderr_text(), exit.code, system_certificates_on)
     }
 
     /// Ends the process in order: `session/cancel` when a turn runs, `session/close` (2 s),
@@ -269,6 +267,23 @@ impl OmpProcess {
     pub fn group_pid(&self) -> u32 {
         self.group.pid()
     }
+}
+
+/// The reason and the details of an exit, from the stderr tail and the exit code.
+fn exit_reason_of(
+    stderr: &str,
+    code: Option<i32>,
+    system_certificates_on: bool,
+) -> (String, Option<String>) {
+    let plain = match (failure::last_line(stderr), code) {
+        (Some(line), _) => line.to_owned(),
+        (None, Some(code)) => format!("omp exited with code {code}"),
+        (None, None) => "omp was stopped".to_owned(),
+    };
+    (
+        super::session::explained(&plain, &[stderr], system_certificates_on),
+        (!stderr.is_empty()).then(|| stderr.to_owned()),
+    )
 }
 
 #[cfg(test)]
@@ -333,7 +348,7 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        let (reason, details) = process.exit_reason(&exit);
+        let (reason, details) = process.exit_reason(&exit, false);
         assert_eq!(reason, "error: no provider");
         assert_eq!(details.as_deref(), Some("first\nerror: no provider"));
     }
@@ -344,9 +359,57 @@ mod tests {
         let (process, _incoming) = OmpProcess::spawn(spec("exit 7")).unwrap();
         let exit = process.wait_exit().await;
         assert_eq!(
-            process.exit_reason(&exit),
+            process.exit_reason(&exit, true),
             ("omp exited with code 7".to_owned(), None)
         );
+    }
+
+    #[test]
+    fn a_certificate_or_http_error_in_the_stderr_tail_replaces_the_reason_of_an_exit() {
+        // Not on the last line: the whole tail is tested.
+        let tail =
+            "fetch failed: UNABLE_TO_GET_ISSUER_CERT_LOCALLY\nat node:internal\nerror: giving up";
+        let (reason, details) = exit_reason_of(tail, Some(1), false);
+        assert_eq!(reason, failure::explain(tail, false).unwrap());
+        assert!(
+            reason.contains("turning on System Certificates"),
+            "{reason}"
+        );
+        assert_eq!(
+            details.as_deref(),
+            Some(tail),
+            "Show details keeps omp's lines"
+        );
+        let (on, _) = exit_reason_of(tail, Some(1), true);
+        assert!(on.contains("even with System Certificates on"), "{on}");
+
+        let http = "request failed: HTTP 407\nerror: giving up";
+        let (reason, details) = exit_reason_of(http, None, false);
+        assert!(
+            reason.starts_with("omp received an HTTP 407 error"),
+            "{reason}"
+        );
+        assert!(
+            reason.contains("turning on System Certificates"),
+            "{reason}"
+        );
+        assert_eq!(details.as_deref(), Some(http));
+        let (on, _) = exit_reason_of(http, None, true);
+        assert!(!on.contains("turning on"), "{on}");
+    }
+
+    #[test]
+    fn an_exit_that_is_not_a_proxy_problem_keeps_its_reason() {
+        assert_eq!(
+            exit_reason_of("first\nerror: no provider", Some(3), true).0,
+            "error: no provider"
+        );
+        assert_eq!(exit_reason_of("status 404", Some(3), false).0, "status 404");
+        assert_eq!(
+            exit_reason_of("", Some(7), false),
+            ("omp exited with code 7".to_owned(), None)
+        );
+        assert_eq!(exit_reason_of("", None, false).0, "omp was stopped");
     }
 
     #[cfg(unix)]

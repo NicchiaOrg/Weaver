@@ -1,11 +1,13 @@
 ---
 created: 2026-11-02T14:15:43.492Z
-updated: 2026-11-02T14:15:43.492Z
+updated: 2026-11-03T09:18:59.041Z
 summary: Il progetto vive in .weaver al posto di .trama e l'agente raggiunge Weaver con il comando weaver. Skill, sotto-agenti, istruzioni dei job, preambolo di General e regole dei Requirement usano i nuovi nomi. La cartella .trama è ignorata.
 tasks:
 - 4x2qfao1
 - 9vrusxd6
 - gv29qggl
+- eqyo1s7m
+- 3hv6kx17
 cleared:
   4x2qfao1:
     title: Cartella .weaver
@@ -108,6 +110,80 @@ cleared:
     label: .weaver e weaver
     finished: 2026-11-02T14:13:01.603Z
     body: "La cartella del progetto diventa `.weaver` al posto di `.trama` e il comando diventa `weaver` al posto di `trama`. Questo Task porta il cambio nei testi che Weaver manda agli agenti o installa nei progetti: le istruzioni dei job, il preambolo di General, i testi delle skill e dei sub-agent installati e i testi delle regole dei Requirement.\n\n## Cosa deve essere vero alla fine\n\n**Istruzioni dei job.** In `job/Queued`, Weaver avvia omp nel progetto con la command line `weaver` sul path e il job già noto, poi manda l'istruzione. Le transizioni da Not started verso Queued (SEND_REQUEST, IMPORT_CODE, SCAN_SYSTEM, RUN_TASK, RUN_ALL, proposal.APPROVED, RESOLVE_DRIFT, question-round.ANSWERED, REWORK_PROPOSAL, APPROVE_PROPOSAL, agent.START_JOB) non cambiano, ma i job ricevono i nuovi testi. La tabella delle istruzioni in rules#job diventa:\n\n- Setup: ``Use the trama-setup skill on the setup request in `.weaver/requests/<request>.md`.``\n- Design: ``Use the trama-design skill on the design request in `.weaver/requests/<request>.md`.``\n- Run all: ``Use the trama-implement skill on the runnable Tasks: take them from `weaver task list --input '{\"runnable\":true,\"max\":<N>,\"groups\":true}'`, one batch at a time, until it says there is none.``\n- frase aggiunta 1: `Run at most <N> sub-agents at once.`, dove N è anche il `max` di `weaver task list`;\n- frase aggiunta 3: ``Ask the developer only with `weaver question new`, as the skill says, never with your own question tool; run it with no time limit and wait until it ends.``\n- Le altre righe della tabella non cambiano.\n\n**Preambolo di General.** Nomina `.weaver` e il comando `weaver` invece di `.trama` e `trama`.\n\n**Skill e sub-agent installati.** Nessun testo installato menziona `.trama` o il comando `trama`. Restano solo i nomi delle skill e dei sub-agent `trama-*`. In dettaglio:\n\n- Ogni comando `trama <verb>` diventa `weaver <verb>`.\n- Ogni percorso `.trama/...` diventa `.weaver/...`.\n- La parola «Trama» diventa «Weaver» dove indica il prodotto.\n- Le description delle skill che dicono \"a project with a `.trama/` folder\" passano a `.weaver/`. Gli agenti scelgono la skill da questa frase, quindi va cambiata ovunque.\n- La regola greenfield di `trama-scan` (\"only `.trama/`\") diventa \"only `.weaver/`\".\n- I nomi restano invariati: `trama-setup`, `trama-design` (con `FORMAT.md` e `COMMANDS.md`), `trama-import`, `trama-scan`, `trama-compare`, `trama-implement`, `trama-resolve-drifts`, i sub-agent `.omp/agents/trama-analysis.md` e `.omp/agents/trama-implementer.md`, `.omp/WATCHDOG.yml` e le skill generate `trama-req-*`.\n\n**Testi delle regole (requirements/rules).** Rispecchiano la versione del Model:\n\n- La prosa dell'area dice: \"Every rule here is computed in the Rust core, the same for the app and the `weaver` command line, never in the interface.\"\n- rules#General: le identità sono uniche tra `.weaver/tasks/` e i `tasks/` di ogni Proposal; la cache dei numeri brevi sta \"under `.weaver/`\".\n- rules#task: \"Slots: `weaver task list` with `runnable` and `max` N…\".\n- rules#drift: il fingerprint usa il testo che stampa `weaver model show <ref>`; \"`weaver drift list` with `refs` marks Dismissed Drifts…\".\n- rules#project: i file installati sono incorporati \"in the binary that the app and the `weaver` command line share\". La rigenerazione avviene \"1 s after the last change under `.weaver/requirements/`\". \"`weaver model check` warns … each fragment over 12,288 bytes…\".\n\nOvunque nel codice ci siano testi derivati da queste regole (messaggi, avvisi, commenti), vanno allineati.\n\n## Indizi nel codice (da ricontrollare)\n\n- `crates/core/src/job_instruction.rs`: intorno a :194 e :199 le istruzioni Setup e Design scrivono `.trama/requests/{request}.md`. I test intorno a :309 e :313 vanno aggiornati. Nello stesso file ci sono anche la stringa di Run all (`trama task list ...`) e \"Ask the developer only with `trama question new`\", da verificare.\n- `src-tauri/src/jobs/general.rs` intorno a :480: il preambolo di General nomina `.trama`/`trama`.\n- Asset installati, incorporati con `include_dir` da `crates/core/assets` (`crates/core/src/agent_files.rs:40`). Menzioni di `.trama` contate durante l'esplorazione:\n  - `skills/trama-design/SKILL.md`: 9\n  - `skills/trama-design/FORMAT.md`: 3\n  - `skills/trama-setup/SKILL.md`: 5\n  - `skills/trama-scan/SKILL.md`: 4, inclusa la regola greenfield\n  - `skills/trama-import/SKILL.md`: 3\n  - `skills/trama-implement/SKILL.md`: 3\n  - `skills/trama-resolve-drifts/SKILL.md`: 3\n  - `skills/trama-compare/SKILL.md`: 1\n  - `omp/agents/trama-implementer.md`: 2\n  \n  Vanno cercati anche i comandi `trama <verb>` e la parola «Trama».\n- `crates/core/src/project_files/requirement_skills.rs`: le skill generate non contengono `.trama`. `SKILL_PREFIX` `trama-req-` (circa :26) resta.\n\n## Fuori dallo scope di questo Task\n\n- `crates/core/assets/skills/trama-design/COMMANDS.md`: è generato dal registry della CLI e lo rigenera un altro Task della Proposal. Non va modificato a mano.\n- La costante della cartella, i percorsi `.trama` in codice, test e UI, il fatto che `.trama` venga ignorata, il testo di Get Started e la macchina del progetto: li gestisce un altro Task della Proposal.\n- Altre parti che gestisce un altro Task della Proposal:\n  - rinomina dei crate (`weaver-core`, `weaver-cli`);\n  - binario `weaver-cli`, sidecar e copia `weaver` in `<app local data>/bin/` con rimozione della vecchia copia `trama`;\n  - variabili d'ambiente `WEAVER_ENDPOINT`, `WEAVER_JOB`, `WEAVER_GENERAL`, `WEAVER_RUN`, `WEAVER_TASK`;\n  - help e usage della CLI;\n  - testo fisso di rifiuto dei form di omp;\n  - messaggi di log del watcher;\n  - README, descrizioni Cargo e doc comment;\n  - workflow CI.\n- Le copie installate nella repository di Weaver (`.agents/skills/*`, `.omp/agents/*`) e la cartella `.trama` della repository non vanno toccate né spostate. Lo sviluppatore le sposta a mano in seguito.\n\n## Fatto quando\n\n- Ogni istruzione che Weaver manda nomina `.weaver/requests/<request>.md` e comandi `weaver`.\n- Nessun testo degli asset installati menziona `.trama` o il comando `trama`, tranne i nomi `trama-*` delle skill e dei sub-agent.\n- I test delle istruzioni dei job sono aggiornati.\n- Quando anche il Task che mette `weaver` sul PATH e imposta le variabili `WEAVER_*` è completato, il controllo finale è che l'agente di un job riesca a eseguire `weaver job show`."
+  3hv6kx17:
+    title: Prefisso weaver nel codice
+    refs:
+    - requirements/rules#project
+    - requirements/rules#job
+    - requirements/rules#ask-conversation
+    - requirements/tech#job
+    - requirements/tech#project
+    - requirements/tech#ask-conversation
+    - requirements/data#General
+    - requirements/docs#General
+    technical: true
+    proposal: 8fa90kbx
+    label: Prefisso weaver
+    finished: 2026-11-03T08:56:02.174Z
+    body: |-
+      Le skill, i sub-agent e le skill dei Requirement che Weaver installa o genera passano dal prefisso `trama` al prefisso `weaver`. A Task finito valgono tutte queste condizioni.
+
+      ## Nomi nuovi
+
+      - Skill installate in `.agents/skills/`: `weaver-setup`, `weaver-design` (con `FORMAT.md` e `COMMANDS.md`), `weaver-import`, `weaver-scan`, `weaver-compare`, `weaver-implement`, `weaver-resolve-drifts`, al posto di `trama-setup`, `trama-design`, `trama-import`, `trama-scan`, `trama-compare`, `trama-implement`, `trama-resolve-drifts`. Il `name:` di ogni `SKILL.md` è il nome nuovo.
+      - Sub-agent omp: `.omp/agents/weaver-analysis.md` e `.omp/agents/weaver-implementer.md` al posto di `trama-analysis.md` e `trama-implementer.md`, con `name: weaver-analysis` e `name: weaver-implementer` (il `name:` è il nome del file senza `.md`). Nell'overlay delle Run, `task.agentAdvisor` abilita `weaver-implementer`.
+      - Skill dei Requirement generate: `weaver-req-<area>-<fragment>` (fragment mode) e `weaver-req-<area>` (index mode). Il budget di 4.000 caratteri conta il nome nuovo, un carattere più lungo per fragment. La rimozione delle skill che il modo corrente non produce e la lettura del modo precedente (per riportare un cambio di modo) guardano solo le cartelle `weaver-req-*`.
+      - Istruzioni dei lavori, prima frase: `Use the weaver-setup skill …`, `Use the weaver-design skill …` (Design e Refinement), `Use the weaver-import skill …`, `Use the weaver-scan skill …`, `Use the weaver-implement skill …` (Run di un Task e Run all), `Use the weaver-resolve-drifts skill …`; nel Rework la skill segue il tipo: `weaver-design`, `weaver-setup` (setup con Model vuoto), `weaver-import`, `weaver-resolve-drifts`. Il resto delle frasi non cambia.
+      - Istruzione dell'Ask more sui Requirements: dice che i Requirements stanno nelle skill dei Requirement `weaver-req-*` installate nel progetto; il resto del testo non cambia.
+      - Ogni riferimento a questi nomi nei testi installati (le skill, compresi i link relativi `../weaver-design/COMMANDS.md` e `../weaver-design/FORMAT.md` e il testo sul budget in `FORMAT.md`, i sub-agent, `WATCHDOG.yml`), nel codice e nei suoi commenti, nei test (Rust, contratto della riga di comando, interfaccia) e nel `README.md` segue i nomi nuovi. `COMMANDS.md` si rigenera nel percorso nuovo e il test che lo confronta con il registro dei comandi passa.
+      - `--slow` resta passato solo per i lavori di tipo Scan con il modello di scansione impostato: decide il tipo di lavoro, non il testo dell'istruzione; il commento che spiega il motivo nomina `weaver-analysis`.
+
+      ## Niente migrazione nel codice
+
+      - Weaver non conosce i vecchi nomi: non riconosce, non rinomina, non rimuove e non conta `.agents/skills/trama-*` e `.omp/agents/trama-*` nei progetti già inizializzati, nemmeno all'aggiornamento delle skill; restano finché lo sviluppatore non li toglie. Il test della rimozione delle skill dei Requirement verifica che una skill installata (`weaver-design`), una skill dello sviluppatore e una vecchia cartella `trama-req-*` sopravvivano.
+      - Restano come sono: la cartella `.trama` che Weaver ignora, l'eseguibile `trama` / `trama.exe` che Weaver cancella da `bin/`, il test che vieta la parola "Trama" nei testi installati e la frase vietata `trama-merge`.
+      - I file installati di questo repository (`.agents/skills/`, `.omp/`) non si toccano in questo Task: li migra il Task "Migrazione del repository".
+
+      ## Documentazione
+
+      - Una riga sotto `## [Unreleased]` → `### Changed` del `CHANGELOG.md`: le skill e i sub-agent che Weaver installa si chiamano `weaver-…`, e i vecchi `trama-*` di Weaver nei progetti già inizializzati si possono eliminare a mano. Nessuna sezione nuova nel `README.md`.
+
+      ## Dove nel codice
+
+      - Sorgenti installati: `crates/core/assets/skills/trama-*/` e `crates/core/assets/omp/agents/trama-*.md` (anche i `name:` e i riferimenti interni), `crates/core/assets/omp/WATCHDOG.yml:23`, `crates/core/assets/skills/trama-design/FORMAT.md:129`; i percorsi installati seguono i nomi delle cartelle (`crates/core/src/agent_files.rs:86-95`).
+      - `agent_files.rs`: commento del modulo `:13,30`; `SKILL_NAMES` `:51-59`, `COMMAND_REFERENCE_ASSET` `:65`, `COMMAND_REFERENCE_PATH` `:68`; test `:222-225,451,464-469,485-488` (restano `:175` `trama-merge` e `:305` il test sulla parola "Trama").
+      - Frasi delle istruzioni — `crates/core/src/job_instruction.rs:17-25` (costanti prese da `SKILL_NAMES`), commenti `ReworkKind` `:78-84`; test `:311-373,553-565`.
+      - Ask more — testo `crates/core/src/jobs/ask.rs:494`, commento `:13`, test `:1031,1093,1099`; commento `src-tauri/src/ask/build.rs:9`; test `src-tauri/src/ask/tests.rs:320`.
+      - `agentAdvisor` — `crates/core/src/jobs/launch.rs:94`, commento `:85`, test `:318,322`; commento su `--slow` — `crates/core/src/jobs/kinds.rs:68-69`; fixture — `crates/core/src/jobs/subagents.rs:211,226`.
+      - `SKILL_PREFIX` e budget — `crates/core/src/project_files/requirement_skills.rs:1-9,26,70,75`, test `:346-514`; rimozione per prefisso — `crates/core/src/project_files/plan.rs:17,136,147`, test `:392-433`; modo precedente — `crates/core/src/project_files/sync.rs:151,160,166,202`, test `:324-474`; `crates/core/src/project_files/initialise.rs:40`, test `:172-187,227-231`; `crates/core/src/project_files/mod.rs:5`; `crates/core/src/project/proposal/tests.rs:970,974`; `crates/core/src/project/model.rs:1`; `crates/core/tests/format_md.rs:1,12`.
+      - Riga di comando — `crates/cli/src/help.rs:234`, `crates/cli/src/registry.rs:35`, `crates/cli/examples/write_command_reference.rs:1`, test `crates/cli/src/commands/project.rs:352,383,392,398` (il file del conflitto resta un file installato da Weaver: `weaver-design/SKILL.md`).
+      - App — test `src-tauri/src/project_setup.rs:814,1010`, `src-tauri/src/jobs/conversation.rs:925,1197,1203`, `src-tauri/src/jobs/tests.rs:90,147,761,776,1700`.
+      - Interfaccia e contratto — `ui/src/components/jobs/jobs-view.test.tsx:82,92`, `ui/src/components/project/get-started.test.tsx:18,81,88`, `ui/src/components/project/update-skills.test.tsx:39,75`, `tests/cli-contract/contract.test.mjs:716,724,731`.
+      - `README.md:103` (percorso di `COMMANDS.md`); `CHANGELOG.md:19` (`### Changed` sotto `## [Unreleased]`).
+      - Restano come sono: `src-tauri/src/sidecar.rs` (`trama` / `trama.exe`), i test e il watcher sulla cartella `.trama` (`src-tauri/src/project_setup.rs:821-856`, `src-tauri/src/windows/watch.rs:167,395-398`, `tests/cli-contract/contract.test.mjs:248-256,694-701`, `crates/cli/src/exec.rs:349-373`, `crates/cli/src/commands/project.rs:370-372`, `crates/core/src/project_files/initialise.rs:236-268`).
+  eqyo1s7m:
+    title: Migrazione del repository
+    refs:
+    - requirements/rules#project
+    technical: true
+    proposal: 8fa90kbx
+    label: Prefisso weaver
+    finished: 2026-11-03T08:56:02.049Z
+    body: |-
+      Migrazione una tantum di questo repository, e di nessun altro, ai nomi `weaver-*` delle skill e dei sub-agent. Non diventa codice di Weaver.
+
+      Prerequisito: il Task `3hv6kx17` (Prefisso weaver nel codice) è Done, cioè nel codice i sorgenti installati sono in `crates/core/assets/skills/weaver-*/` e `crates/core/assets/omp/agents/weaver-*.md` e le skill dei Requirement si chiamano `weaver-req-*`. Se non lo è, rilasciare questo Task senza cambiamenti.
+
+      A Task finito valgono tutte queste condizioni:
+
+      - Sono eliminati ogni `.agents/skills/trama-*` e ogni `.omp/agents/trama-*` di questo repository:
+        - le skill di Weaver `trama-setup`, `trama-design`, `trama-import`, `trama-scan`, `trama-compare`, `trama-implement`, `trama-resolve-drifts`;
+        - ogni skill dei Requirement `trama-req-*` (oggi 27, tutte in fragment mode);
+        - `.omp/agents/trama-analysis.md` e `.omp/agents/trama-implementer.md`;
+        - anche `trama-handoff` e `trama-merge`, skill del vecchio prodotto per i progetti `.trama/` (Team, handoff, merge in modalità Solo), fuori ambito per Weaver e non nominate da nessun file, e `trama-specs`, scritta dal vecchio prodotto e mai aggiornata da Weaver: le tecnologie stanno nelle Specs in `.weaver/specs.yaml`, che gli agenti leggono con `weaver model show specs`. Nessuna di queste tre viene rinominata.
+      - L'aggiornamento delle skill è eseguito con la riga di comando compilata da questo repository, non con quella installata con l'app: `cargo build -p weaver-cli`, poi `WEAVER_ENDPOINT=none target/debug/weaver-cli project edit --root .`. `project edit` è un comando che scrive: con l'app aperta la riga di comando lo passerebbe all'app, che installerebbe i testi vecchi; `WEAVER_ENDPOINT` con un valore che non corrisponde all'app la fa considerare assente, e il comando scrive da solo sotto il lock del progetto. Il risultato installa le skill `weaver-*`, i sub-agent `.omp/agents/weaver-analysis.md` e `.omp/agents/weaver-implementer.md`, il `WATCHDOG.yml` aggiornato, e rigenera le skill `weaver-req-*`: una per ognuno dei 28 fragment con contenuto, compresi `weaver-req-rules-skills` e `weaver-req-rules-instructions` nati dalla divisione del fragment `rules/skills` (budget atteso circa 3.771 su 4.000: fragment mode).
+      - In `.agents/skills/` e in `.omp/agents/` non resta alcun nome che inizia con `trama-`; ci sono le sette skill `weaver-*`, le skill `weaver-req-*` di ogni fragment con contenuto e i due sub-agent `weaver-*`.
+      - La History e le Proposal già chiuse in `.weaver/`, la cartella `.trama.old/` e ogni altro file restano come sono.
 ---
 # Rinomina da Trama a Weaver: cartella .weaver, comando weaver e testi installati
 

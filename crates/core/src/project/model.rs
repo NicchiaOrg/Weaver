@@ -1,4 +1,4 @@
-//! The Model: System, Actors, Features and Machines, parsed exactly as the `trama-design`
+//! The Model: System, Actors, Features and Machines, parsed exactly as the `weaver-design`
 //! skill's `FORMAT.md` describes them.
 //!
 //! The per-file parsers ([`parse_actor`], [`parse_machine`], [`parse_titled`]) check every

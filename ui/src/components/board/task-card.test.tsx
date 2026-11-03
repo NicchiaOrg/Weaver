@@ -239,6 +239,23 @@ describe("the details of a Task", () => {
     return { user, dialog: await screen.findByRole("dialog") };
   };
 
+  it("has `Ask more` after Run and before Delete, never on the card itself, always enabled, and sends the Task identity", async () => {
+    const askMore = vi.fn().mockResolvedValue("askaskas");
+    const { user, dialog } = await details(task("aaaaaaaa", "T1", "First", { runReasons: ["The agent is still finishing"] }), { askMore });
+    const names = within(dialog)
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("aria-label") ?? b.textContent);
+    expect(names.indexOf("Run")).toBeGreaterThanOrEqual(0);
+    expect(names.indexOf("Ask more about T1")).toBe(names.indexOf("Run") + 1);
+    expect(names.indexOf("Delete")).toBe(names.indexOf("Ask more about T1") + 1);
+    const button = within(dialog).getByRole("button", { name: "Ask more about T1" });
+    expect(button).toBeEnabled();
+    expect(button).toHaveTextContent("Ask more");
+    expect(within(screen.getByRole("region", { name: "Active", hidden: true })).queryByRole("button", { name: /Ask more/, hidden: true })).toBeNull();
+    await user.click(button);
+    expect(askMore).toHaveBeenCalledWith({ kind: "task", id: "aaaaaaaa" });
+  });
+
   it("shows the status, the references as chips and the text", async () => {
     const card = task("aaaaaaaa", "T1", "First", { refs: ["order/Paid", "user"], label: "Checkout" });
     const withBody = { ...card, head: { ...card.head, body: "Carry out the **cart**." } } as BoardCard;

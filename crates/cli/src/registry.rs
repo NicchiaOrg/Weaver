@@ -32,7 +32,7 @@ pub fn objects() -> Vec<(&'static str, Vec<&'static Command>)> {
     grouped
 }
 
-/// The Markdown command reference installed with the `trama-design` skill (`COMMANDS.md`).
+/// The Markdown command reference installed with the `weaver-design` skill (`COMMANDS.md`).
 pub fn command_reference() -> String {
     crate::help::command_reference()
 }

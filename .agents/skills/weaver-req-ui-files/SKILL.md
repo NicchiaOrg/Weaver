@@ -10,7 +10,7 @@ Every text of the interface is in English, whatever the language setting says; t
 ## file-view
 
 - **Entry:** `Files` in the sidebar, after Jobs, icon `FolderTree`. Like the other views but Settings, it shows Get Started until the project has `.weaver/`.
-- **Layout:** the tree on the left, the tabs and the editor on the right. With no tab open the right side says `Open a file from the tree.` in muted text.
+- **Layout:** under the view header (`requirements/ui#General`, title `Files`, no controls), which spans both sides, the tree on the left, the tabs and the editor on the right; the tab bar stays below the view header. With no tab open the right side says `Open a file from the tree.` in muted text.
 - **Tree:**
   - Rows show the icon (`Folder`, `FolderOpen` or `File`) and the name, about 16 px of indent per level, as the Import from Code tree; folders first, then files, each in name order. The root's entries show at once; every folder starts collapsed.
   - It is an ARIA `tree`: Up and Down move between rows, Right expands a folder or goes to its first child, Left collapses it or goes to its parent, Enter opens a file in a tab or toggles a folder; a click does the same.

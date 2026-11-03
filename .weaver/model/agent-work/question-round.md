@@ -25,6 +25,7 @@ The developer answers. Confirmed answers and answers not yet confirmed are kept 
 - `agent.STOP_WAITING` → Abandoned
 - `job.ENDED` → Interrupted
 - `window.CLOSED` → Interrupted
+- `developer.ASK_MORE` → Presented: on the question in view; the round is reduced and nothing else in it changes, neither the question in view nor any answer, confirmed or not. Only the questions, never the answers, reach the agent of the new Ask more conversation.
 
 ### Answered (final)
 The agent receives every answer, with the skipped questions marked as skipped: for each one it uses its recommendation and lists it as a decision to verify. A skipped prepared Drift question leaves the Drift open.

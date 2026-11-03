@@ -194,7 +194,7 @@ pub fn view_of(
         Origin::Agent { job } => OriginView::Agent {
             job_name: job_name.unwrap_or_else(|| job.clone()),
         },
-        Origin::Drift { drift, title } => OriginView::Drift {
+        Origin::Drift { drift, title, .. } => OriginView::Drift {
             drift: drift.clone(),
             title: title.clone(),
         },

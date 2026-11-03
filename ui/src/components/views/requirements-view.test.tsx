@@ -60,6 +60,51 @@ describe("the Requirements page", () => {
     expect(screen.queryByRole("button", { name: /View on diagram/ })).not.toBeInTheDocument();
   });
 
+  it("has `Ask more` for the Requirements as the only control in its header, and none on any section, fragment or Area heading", async () => {
+    await show();
+    const buttons = screen.getAllByRole("button", { name: /Ask more/ });
+    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["Ask more about the Requirements"]);
+    const button = buttons[0]!;
+    expect(button).toHaveTextContent("Ask more");
+    expect(button).toBeEnabled();
+    const header = screen.getByRole("heading", { level: 1, name: "Requirements" }).closest("header")!;
+    expect(within(header).getAllByRole("button")).toEqual([button]);
+    expect(within(header).queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Overlay" })).not.toBeInTheDocument();
+    for (const heading of screen.getAllByRole("heading", { level: 2 })) {
+      expect(within(heading.parentElement!).queryByRole("button", { name: /Ask more/ })).toBeNull();
+    }
+  });
+
+  it("tells what it is about with its tooltip", async () => {
+    const user = userEvent.setup();
+    await show();
+    await user.hover(screen.getByRole("button", { name: "Ask more about the Requirements" }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Ask an agent about the Requirements");
+  });
+
+  it("sends only a null overlay when none is drawn, and Ask more never changes the view", async () => {
+    const user = userEvent.setup();
+    const askMore = vi.fn().mockResolvedValue("aaaaaaaa");
+    renderViews(<RequirementsView />, showView, { askMore });
+    await screen.findByRole("heading", { name: "Orders" });
+    await user.click(screen.getByRole("button", { name: "Ask more about the Requirements" }));
+    expect(askMore).toHaveBeenCalledTimes(1);
+    expect(askMore).toHaveBeenCalledWith({ kind: "requirements", overlay: null });
+    expect(showView).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Ask more about the Requirements" })).toBeEnabled();
+  });
+
+  it("sends the Proposal drawn over the Requirements and nothing else", async () => {
+    const user = userEvent.setup();
+    current = snapshot({ overlays: [{ id: "pppppppp", shortNumber: "P3", title: "Pay" }], overlay: "pppppppp" });
+    const askMore = vi.fn().mockResolvedValue("aaaaaaaa");
+    renderViews(<RequirementsView />, showView, { askMore });
+    await screen.findByRole("heading", { name: "Orders" });
+    await user.click(screen.getByRole("button", { name: "Ask more about the Requirements" }));
+    expect(askMore).toHaveBeenCalledWith({ kind: "requirements", overlay: "pppppppp" });
+  });
+
   it("opens the file at the line of a section's heading", async () => {
     const user = userEvent.setup();
     await show();
@@ -159,6 +204,31 @@ describe("the focus of the Requirements", () => {
     await user.click(within(screen.getByRole("region", { name: "Focus" })).getByRole("button", { name: "Next" }));
     await waitFor(() => expect(scrolled[scrolled.length - 1]?.dataset.stepKey).toBe("ui"));
     expect(within(screen.getByRole("region", { name: "Focus" })).getByText("2 of 2")).toBeInTheDocument();
+  });
+
+  it("keeps `Ask more` in the header with a focus and with `Only these` on, and sends nothing of them", async () => {
+    const askMore = vi.fn().mockResolvedValue("aaaaaaaa");
+    const user = userEvent.setup();
+    renderViews(
+      <>
+        <FocusOpener refs={["order"]} subject={subject} />
+        <RequirementsView />
+      </>,
+      showView,
+      { askMore },
+    );
+    await screen.findByRole("heading", { name: "Orders" });
+    await user.click(screen.getByRole("button", { name: "open focus" }));
+    await screen.findByRole("region", { name: "Focus" });
+    await user.click(screen.getByRole("checkbox", { name: "Only these" }));
+    expect(screen.queryByRole("region", { name: "Orders, General" })).not.toBeInTheDocument();
+    const button = screen.getByRole("button", { name: "Ask more about the Requirements" });
+    expect(button).toBeEnabled();
+    await user.click(button);
+    expect(askMore).toHaveBeenCalledWith({ kind: "requirements", overlay: null });
+    // The focus and `Only these` stay as they were.
+    expect(screen.getByRole("region", { name: "Focus" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Only these" })).toBeChecked();
   });
 
   it("hides what is not focused with `Only these`, off at the start", async () => {

@@ -28,9 +28,9 @@ function PathList({ paths, label }: { paths: readonly string[]; label: string })
 /**
  * `Not initialised`: what every view of the window except Settings shows. `Initialise` creates the
  * `.weaver` folder and the agent files; when agent files exist with other content nothing is created
- * until the developer confirms overwriting them.
+ * until the developer confirms overwriting them. `headingId` is the id the view's region is labelled by.
  */
-export function GetStarted() {
+export function GetStarted({ headingId }: { headingId?: string }) {
   const { projectId, status, refresh } = useProjectStatus();
   const [running, setRunning] = useState(false);
   const [conflicts, setConflicts] = useState<string[] | null>(null);
@@ -50,9 +50,11 @@ export function GetStarted() {
   };
 
   return (
-    <div className="flex h-full items-start justify-center overflow-auto p-6">
+    <div className="flex h-full items-start justify-center overflow-auto px-6 py-10">
       <div className="flex w-full max-w-[560px] flex-col gap-5">
-        <h2 className="text-xl font-semibold">Set up Weaver in this folder</h2>
+        <h2 id={headingId} className="text-xl font-semibold">
+          Set up Weaver in this folder
+        </h2>
         <p className="text-sm">
           Weaver will create a .weaver folder that describes this project. It holds no secrets and is meant to be committed, like the
           agent files it installs.

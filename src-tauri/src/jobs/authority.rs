@@ -20,13 +20,18 @@ use weaver_core::project::board::AgentFacts;
 use super::registry::Jobs;
 use super::starts::{Ctx, StartGate};
 
-/// Who may use the commands only the working General's agent may (`job new`). Installed by the
-/// General (`Jobs::set_general`).
+/// Who may use the commands only the working General's agent or a working Ask more conversation's
+/// agent may (`job new`). Installed by the General (`Jobs::set_general`).
 pub trait GeneralAuthority: Send + Sync {
     /// Whether `token` is the identity of the working General of the project at `root`.
     fn accepts(&self, root: &Path, token: &str) -> bool;
 
-    /// `agent.START_JOB`: the agent of the General `token` asked for a job of `kind` (the app
+    /// Whether `token` is the identity of a working Ask more conversation of the project at
+    /// `root`.
+    fn accepts_ask(&self, root: &Path, token: &str) -> bool;
+
+    /// `agent.START_JOB`: the agent of the General or of the Ask more conversation `token` asked
+    /// for a job of `kind` (the app
     /// already accepted `token`). `outcome` is the jobs that started, as `(identity, name)`, or the
     /// reason none did. Called right after the start, on the thread of the command.
     fn job_requested(
@@ -101,6 +106,16 @@ impl Authority for AppAuthority {
             .expect("hooks poisoned")
             .as_ref()
             .is_some_and(|general| general.accepts(root, token))
+    }
+
+    fn accepts_ask(&self, root: &Path, token: &str) -> bool {
+        self.jobs
+            .hooks
+            .general
+            .read()
+            .expect("hooks poisoned")
+            .as_ref()
+            .is_some_and(|general| general.accepts_ask(root, token))
     }
 
     fn facts(&self, root: &Path) -> AgentFacts {
@@ -247,13 +262,19 @@ fn job_show(jobs: &Jobs, call: &Call) -> Result<CommandReply, Failure> {
     ))
 }
 
-/// `job new`: only from the working General, with the developer's refusals. The General that asked
-/// is told what happened (`agent.START_JOB`), a refusal included.
+/// `job new`: only from the working General or a working Ask more conversation, with the
+/// developer's refusals. The conversation that asked is told what happened (`agent.START_JOB`), a
+/// refusal included.
 fn job_new(jobs: &Jobs, call: &Call) -> Result<CommandReply, Failure> {
     let kind = text(call, "kind");
     let result = start_jobs(jobs, call, kind);
     let general = jobs.hooks.general.read().expect("hooks poisoned").clone();
-    if let (Some(general), Some(token)) = (general, call.caller.general.as_deref()) {
+    let token = call
+        .caller
+        .general
+        .as_deref()
+        .or(call.caller.ask.as_deref());
+    if let (Some(general), Some(token)) = (general, token) {
         match &result {
             Ok(started) => {
                 let named: Vec<(String, String)> = started

@@ -1,9 +1,16 @@
 //! The sub-agents of a job, as omp reports them (`requirements/tech#job`, "Sub-agents").
 //!
-//! They are read from the `task` tool call: `rawOutput.details.progress[]`. A background
-//! sub-agent (omp's `async.enabled`) ends at the `session_exit` record of
-//! `<main session file minus .jsonl>/<id>.jsonl`, under omp's sessions folder. These are omp
-//! internals, re-verified at each `MIN_OMP_VERSION` bump.
+//! They are read from the `task` tool call (`rawOutput.details.progress[]`) and, for the ones that
+//! run in the background (omp's `async.enabled`), from every later update that names them: the
+//! `progress` of `task` and `rawOutput.details.jobs[]` of the `wait` tool call. The `session_exit`
+//! record of `<main session file minus .jsonl>/<id>.jsonl`, under omp's sessions folder, is only
+//! the fallback. These are omp internals, re-verified at each `MIN_OMP_VERSION` bump.
+//!
+//! The agent lock of the File view (`requirements/tech#file-lock`) reads other omp internals, to be
+//! re-verified at the same bumps: the `kind` (`edit`, `delete`, `move`) and the `locations[].path` of
+//! `tool_call` and `tool_call_update`, the fact that omp's default `hashline` edit mode sends no
+//! `locations` in the first `tool_call`, and, for a move, `rawOutput.details.sourcePath` with the
+//! destination among the final `locations` (see `src-tauri/src/file_lock/tools.rs`).
 
 use std::path::{Path, PathBuf};
 
@@ -59,6 +66,14 @@ pub struct SubAgent {
     pub state: SubAgentState,
 }
 
+/// The prefix of the session files of omp's advisors: they are never listed nor shown.
+pub const ADVISOR_PREFIX: &str = "__advisor.";
+
+/// Whether `id` names an advisor of omp, not a sub-agent.
+pub fn is_advisor(id: &str) -> bool {
+    id.starts_with(ADVISOR_PREFIX)
+}
+
 fn text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value
         .get(key)
@@ -67,10 +82,15 @@ fn text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
         .filter(|s| !s.is_empty())
 }
 
-/// The sub-agents listed in `rawOutput.details.progress[]` of a `task` tool call, in omp's order;
-/// `None` when the output carries no such list.
+/// The sub-agents listed in `rawOutput.details.progress[]` of a `task` tool call, in omp's order,
+/// advisors left out; `None` when the output carries no such list.
 pub fn from_raw_output(raw_output: &Value) -> Option<Vec<SubAgent>> {
-    let progress = raw_output.get("details")?.get("progress")?.as_array()?;
+    from_details(raw_output.get("details")?)
+}
+
+/// The same list, from the `details` object itself (the one of a `toolResult` record).
+pub fn from_details(details: &Value) -> Option<Vec<SubAgent>> {
+    let progress = details.get("progress")?.as_array()?;
     Some(
         progress
             .iter()
@@ -88,8 +108,33 @@ pub fn from_raw_output(raw_output: &Value) -> Option<Vec<SubAgent>> {
                     .map_or(SubAgentState::Working, SubAgentState::from_progress_status);
                 SubAgent { id, name, state }
             })
+            .filter(|agent| !is_advisor(&agent.id))
             .collect(),
     )
+}
+
+/// The statuses `rawOutput.details.jobs[]` of a `wait` tool call reports, as `(id, state)` pairs in
+/// omp's order, advisors left out; empty when the output carries no such list. The list names
+/// every background job of omp (commands too): the caller keeps the ones it knows as sub-agents.
+pub fn wait_states(raw_output: &Value) -> Vec<(String, SubAgentState)> {
+    raw_output
+        .get("details")
+        .map(wait_states_of_details)
+        .unwrap_or_default()
+}
+
+/// The same statuses, from the `details` object itself (the one of a `toolResult` record).
+pub fn wait_states_of_details(details: &Value) -> Vec<(String, SubAgentState)> {
+    let Some(jobs) = details.get("jobs").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    jobs.iter()
+        .filter_map(|job| {
+            let id = text(job, "id")?;
+            let status = text(job, "status")?;
+            (!is_advisor(id)).then(|| (id.to_owned(), SubAgentState::from_progress_status(status)))
+        })
+        .collect()
 }
 
 /// Whether `id` may name a sub-agent session file: `^[A-Za-z0-9_.-]+$`, no leading `.`.
@@ -144,22 +189,19 @@ pub fn agent_file(main_file: &Path, id: &str) -> Option<PathBuf> {
     file.starts_with(&folder).then_some(file)
 }
 
-/// How the sub-agent whose session file holds `jsonl` ended: the last `session_exit` record, or
-/// `None` when there is none yet.
-pub fn exit_state(jsonl: &str) -> Option<SubAgentState> {
-    jsonl
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .rfind(|record| record.get("customType").and_then(Value::as_str) == Some("session_exit"))
-        .map(|record| {
-            let kind = record
-                .get("data")
-                .and_then(|data| data.get("kind"))
-                .or_else(|| record.get("kind"))
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            SubAgentState::from_exit_kind(kind)
-        })
+/// How the sub-agent ended, when `record` is its `session_exit` record: `kind: normal` succeeded,
+/// an error failed, anything else was interrupted.
+pub fn exit_state_of(record: &Value) -> Option<SubAgentState> {
+    if record.get("customType").and_then(Value::as_str) != Some("session_exit") {
+        return None;
+    }
+    let kind = record
+        .get("data")
+        .and_then(|data| data.get("kind"))
+        .or_else(|| record.get("kind"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    Some(SubAgentState::from_exit_kind(kind))
 }
 
 #[cfg(test)]
@@ -172,7 +214,7 @@ mod tests {
     fn progress_is_read_in_omps_order_with_the_status_mapping() {
         let output = json!({ "details": { "progress": [
             { "id": "0-Reader", "name": "Reader", "status": "running" },
-            { "id": "1-Writer", "agent": "trama-implementer", "status": "pending" },
+            { "id": "1-Writer", "agent": "weaver-implementer", "status": "pending" },
             { "id": "2", "description": "Compare", "status": "completed" },
             { "id": "3", "status": "failed" },
             { "status": "aborted" },
@@ -187,7 +229,7 @@ mod tests {
             view,
             [
                 ("0-Reader", "Reader", SubAgentState::Working),
-                ("1-Writer", "trama-implementer", SubAgentState::Working),
+                ("1-Writer", "weaver-implementer", SubAgentState::Working),
                 ("2", "Compare", SubAgentState::Succeeded),
                 ("3", "3", SubAgentState::Failed),
                 ("#5", "agent", SubAgentState::Interrupted),
@@ -196,6 +238,43 @@ mod tests {
         );
         assert_eq!(from_raw_output(&json!({ "details": {} })), None);
         assert_eq!(from_raw_output(&json!("text")), None);
+    }
+
+    #[test]
+    fn advisors_are_never_listed_and_a_wait_names_the_background_jobs_by_id() {
+        let output = json!({ "details": { "progress": [
+            { "id": "0-Reader", "status": "pending" },
+            { "id": "__advisor.turn", "status": "running" },
+        ] } });
+        let agents = from_raw_output(&output).unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].id, "0-Reader");
+
+        let waited = json!({ "details": { "jobs": [
+            { "id": "0-Reader", "type": "task", "status": "completed" },
+            { "id": "bg_1", "type": "bash", "status": "running" },
+            { "id": "__advisor.final", "status": "failed" },
+            { "id": "2-Other", "status": "aborted" },
+            { "status": "failed" },
+        ] } });
+        assert_eq!(
+            wait_states(&waited),
+            [
+                ("0-Reader".to_owned(), SubAgentState::Succeeded),
+                ("bg_1".to_owned(), SubAgentState::Working),
+                ("2-Other".to_owned(), SubAgentState::Interrupted),
+            ]
+        );
+        assert!(wait_states(&json!({ "details": {} })).is_empty());
+        assert!(is_advisor("__advisor.turn") && !is_advisor("0-Reader"));
+    }
+
+    #[test]
+    fn a_record_says_how_the_session_ended_only_when_it_is_the_exit_record() {
+        let exit =
+            json!({ "type": "custom", "customType": "session_exit", "data": { "kind": "error" } });
+        assert_eq!(exit_state_of(&exit), Some(SubAgentState::Failed));
+        assert_eq!(exit_state_of(&json!({ "type": "message" })), None);
     }
 
     #[test]
@@ -212,12 +291,10 @@ mod tests {
             SubAgentState::from_exit_kind("signal"),
             SubAgentState::Interrupted
         );
-        let file = "{\"type\":\"message\"}\n{\"type\":\"custom\",\"customType\":\"session_exit\",\"data\":{\"kind\":\"normal\"}}\nnot json\n";
-        assert_eq!(exit_state(file), Some(SubAgentState::Succeeded));
-        assert_eq!(exit_state("{\"type\":\"message\"}\n"), None);
         assert_eq!(
-            exit_state("{\"customType\":\"session_exit\",\"kind\":\"error\"}\n"),
-            Some(SubAgentState::Failed)
+            exit_state_of(&json!({ "customType": "session_exit", "kind": "error" })),
+            Some(SubAgentState::Failed),
+            "the kind may sit at the top of the record"
         );
     }
 

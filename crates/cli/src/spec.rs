@@ -169,7 +169,8 @@ pub enum Access {
     Job,
     /// Like [`Access::Job`], but any other caller gets the outcome `unavailable` (exit 0).
     JobOrUnavailable,
-    /// Only the agent of the project's working General (`WEAVER_GENERAL`).
+    /// Only the agent of the project's working General (`WEAVER_GENERAL`) or of a working Ask more
+    /// conversation of the project (`WEAVER_ASK`).
     General,
 }
 
@@ -219,6 +220,8 @@ pub struct Caller {
     pub job: Option<String>,
     /// `WEAVER_GENERAL`.
     pub general: Option<String>,
+    /// `WEAVER_ASK`.
+    pub ask: Option<String>,
     /// `WEAVER_RUN`.
     pub run: Option<String>,
     /// `WEAVER_TASK`.

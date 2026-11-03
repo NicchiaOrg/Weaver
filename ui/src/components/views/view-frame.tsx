@@ -7,13 +7,14 @@ import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/views/error-banner";
 import type { ViewName } from "@/components/views/focus-model";
 import { FocusBar } from "@/components/views/focus-bar";
-import { OverlayPicker } from "@/components/views/overlay-picker";
+import { ViewHeader } from "@/components/view-header";
 import { useViews } from "@/components/views/views-state";
 
 /**
- * What Requirements and Specs have in common: the toolbar with the overlay picker, the notice of an
- * overlay that stopped being open, the error banner, the focus bar, and a message while the
- * snapshot is loading or could not be read. Esc clears the view's focus.
+ * What Requirements and Specs have in common: the view header (with the `toolbar` the view adds:
+ * the Requirements' `Ask more`), the notice of an overlay that stopped being open, the error
+ * banner, the focus bar, and a message while the snapshot is loading or could not be read. Esc
+ * clears the view's focus, and with it the overlay that focus drew.
  */
 export function ViewFrame({ view, toolbar, children }: { view: ViewName; toolbar?: ReactNode; children: ReactNode }) {
   const { snapshot, loadError, reload, notices, closeNotice, focus, clearFocus } = useViews();
@@ -26,10 +27,7 @@ export function ViewFrame({ view, toolbar, children }: { view: ViewName; toolbar
 
   return (
     <div className="flex h-full min-h-0 flex-col" onKeyDown={onKeyDown}>
-      <div className="flex shrink-0 items-center gap-3 border-b px-4 py-2">
-        <OverlayPicker />
-        {toolbar}
-      </div>
+      <ViewHeader view={view}>{toolbar}</ViewHeader>
       <NoticeStack notices={notices} onClose={closeNotice} />
       {snapshot ? <ErrorBanner errors={snapshot.data.errors} /> : null}
       <FocusBar view={view} />

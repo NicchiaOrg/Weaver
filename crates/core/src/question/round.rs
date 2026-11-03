@@ -17,8 +17,13 @@ pub type RoundId = u64;
 pub enum Origin {
     /// The agent of a job, through `weaver question new`.
     Agent { job: String },
-    /// Weaver itself: the prepared question of a Drift, with no agent.
-    Drift { drift: String, title: String },
+    /// Weaver itself: the prepared question of a Drift. `id` is the Drift's permanent identity,
+    /// `drift` how the developer names it (its short number) and `title` its title.
+    Drift {
+        id: String,
+        drift: String,
+        title: String,
+    },
 }
 
 impl Origin {

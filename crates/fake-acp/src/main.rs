@@ -25,7 +25,9 @@
 //! `{"elicit": true}` (waits for the answer, logs it), `{"wait_cancel": true}` (until
 //! `session/cancel`), `{"wait_steer": n}` (until n steering messages came), `{"exit": code}`,
 //! `{"hold": true}` (the turn never ends), `{"end": "refusal"}` (stop reason, default `end_turn`),
-//! `{"error": "text"}` (the prompt fails).
+//! `{"error": "text"}` (the prompt fails), `{"write": {"path": "...", "text": "..."}}` (appends
+//! text to a file, creating its folders: the transcripts omp writes for its sub-agents),
+//! `{"wait_file": "/tmp/gate"}` (until that file exists).
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -262,6 +264,28 @@ fn run_turn(shared: &Shared, session: &str, id: Value, steps: &[Value]) {
         } else if step.get("hold").is_some() {
             loop {
                 std::thread::sleep(Duration::from_secs(3600));
+            }
+        } else if let Some(write) = step.get("write") {
+            // Appends text to a file, creating its folders: the transcripts omp writes for its
+            // sub-agents. The text is written as given, so a line may be left incomplete.
+            if let (Some(path), Some(text)) = (
+                write.get("path").and_then(Value::as_str),
+                write.get("text").and_then(Value::as_str),
+            ) {
+                let path = std::path::Path::new(path);
+                if let Some(folder) = path.parent() {
+                    std::fs::create_dir_all(folder).expect("the folder of the file is created");
+                }
+                let mut file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .expect("the file opens");
+                std::io::Write::write_all(&mut file, text.as_bytes()).expect("the file is written");
+            }
+        } else if let Some(path) = step.get("wait_file").and_then(Value::as_str) {
+            while !std::path::Path::new(path).exists() {
+                std::thread::sleep(Duration::from_millis(10));
             }
         } else if let Some(reason) = step.get("end").and_then(Value::as_str) {
             stop = reason.to_owned();

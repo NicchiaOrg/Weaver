@@ -1,12 +1,12 @@
-//! The Requirement skills `trama-req-*`: generated from the Requirements of a project, in one of
+//! The Requirement skills `weaver-req-*`: generated from the Requirements of a project, in one of
 //! two modes (`requirements/rules#project`). Everything here is a pure function of the Areas.
 //!
 //! * **Budget:** the sum, over every fragment with content, of the characters (Unicode scalar
-//!   values) of its skill name `trama-req-<area>-<fragment>` plus its description. A fragment
+//!   values) of its skill name `weaver-req-<area>-<fragment>` plus its description. A fragment
 //!   has content when at least one of its sections has non-blank text.
 //! * **Mode:** up to [`BUDGET`] characters inclusive, *fragment mode*: one skill
-//!   `trama-req-<area>-<fragment>` per fragment with content. Above, *index mode*: one skill
-//!   `trama-req-<area>` per Area with prose or a fragment with content, and the content of each
+//!   `weaver-req-<area>-<fragment>` per fragment with content. Above, *index mode*: one skill
+//!   `weaver-req-<area>` per Area with prose or a fragment with content, and the content of each
 //!   fragment in a file next to its `SKILL.md`. All the Areas switch together.
 
 use std::collections::BTreeSet;
@@ -23,7 +23,7 @@ use crate::project::requirements::{Area, Fragment, Section};
 pub const BUDGET: usize = 4_000;
 
 /// Every generated skill, and only generated skills, has a name starting with this.
-pub const SKILL_PREFIX: &str = "trama-req-";
+pub const SKILL_PREFIX: &str = "weaver-req-";
 
 /// The file of a skill.
 pub const SKILL_FILE: &str = "SKILL.md";
@@ -67,12 +67,12 @@ pub struct Generation {
     pub areas: Vec<String>,
 }
 
-/// `trama-req-<area>-<fragment>`.
+/// `weaver-req-<area>-<fragment>`.
 pub fn fragment_skill_name(area: &str, fragment: &str) -> String {
     format!("{SKILL_PREFIX}{area}-{fragment}")
 }
 
-/// `trama-req-<area>`.
+/// `weaver-req-<area>`.
 pub fn index_skill_name(area: &str) -> String {
     format!("{SKILL_PREFIX}{area}")
 }
@@ -343,7 +343,7 @@ mod tests {
 
     /// One fragment whose skill name and description use exactly `chars` characters.
     fn sized(chars: usize) -> Vec<Area> {
-        let name_len = "trama-req-ui-main".chars().count();
+        let name_len = "weaver-req-ui-main".chars().count();
         let description = "d".repeat(chars - name_len);
         areas(&[(
             "ui",
@@ -367,7 +367,7 @@ mod tests {
         ]);
         assert_eq!(
             budget_of(&areas),
-            "trama-req-ui-main".chars().count() + "Use for screens.".chars().count()
+            "weaver-req-ui-main".chars().count() + "Use for screens.".chars().count()
         );
     }
 
@@ -380,7 +380,7 @@ mod tests {
         )]);
         assert_eq!(
             budget_of(&areas),
-            "trama-req-ui-main".chars().count() + "Schermate è così".chars().count()
+            "weaver-req-ui-main".chars().count() + "Schermate è così".chars().count()
         );
     }
 
@@ -392,7 +392,7 @@ mod tests {
         assert_eq!((budget_of(&over), mode_of(&over)), (4_001, Mode::Index));
         assert_eq!(
             generate(&at).files[0].path,
-            ".agents/skills/trama-req-ui-main/SKILL.md"
+            ".agents/skills/weaver-req-ui-main/SKILL.md"
         );
         assert_eq!(
             generate(&over)
@@ -401,8 +401,8 @@ mod tests {
                 .map(|f| f.path.as_str())
                 .collect::<Vec<_>>(),
             [
-                ".agents/skills/trama-req-ui/SKILL.md",
-                ".agents/skills/trama-req-ui/main.md",
+                ".agents/skills/weaver-req-ui/SKILL.md",
+                ".agents/skills/weaver-req-ui/main.md",
             ]
         );
     }
@@ -429,7 +429,7 @@ mod tests {
         assert_eq!(made.files.len(), 1);
         assert_eq!(
             made.files[0].content,
-            "---\nname: trama-req-ui-main\ndescription: \"Use when building screens.\"\n---\n\n# ui\n\nApplies to the whole Area.\n\n## General\n\n- Material 3.\n\n## checkout\n\n- Total at the bottom.\n"
+            "---\nname: weaver-req-ui-main\ndescription: \"Use when building screens.\"\n---\n\n# ui\n\nApplies to the whole Area.\n\n## General\n\n- Material 3.\n\n## checkout\n\n- Total at the bottom.\n"
         );
     }
 
@@ -460,9 +460,9 @@ mod tests {
         let skill = made
             .files
             .iter()
-            .find(|f| f.path.ends_with("trama-req-ui/SKILL.md"))
+            .find(|f| f.path.ends_with("weaver-req-ui/SKILL.md"))
             .unwrap();
-        assert!(skill.content.starts_with("---\nname: trama-req-ui\ndescription: \"Use for ui.\"\n---\n\nProse.\n\n## General\n\n- general text\n\n## Fragment\n"), "{}", skill.content);
+        assert!(skill.content.starts_with("---\nname: weaver-req-ui\ndescription: \"Use for ui.\"\n---\n\nProse.\n\n## General\n\n- general text\n\n## Fragment\n"), "{}", skill.content);
         assert!(skill
             .content
             .contains("Sections: `General`, `checkout`\n\nFile: `frag-00.md`"));
@@ -472,7 +472,7 @@ mod tests {
         let file = made
             .files
             .iter()
-            .find(|f| f.path.ends_with("trama-req-ui/frag-00.md"))
+            .find(|f| f.path.ends_with("weaver-req-ui/frag-00.md"))
             .unwrap();
         assert_eq!(
             file.content,
@@ -505,13 +505,13 @@ mod tests {
             skill_names(&areas, Mode::Fragment)
                 .into_iter()
                 .collect::<Vec<_>>(),
-            ["trama-req-ui-main"]
+            ["weaver-req-ui-main"]
         );
         assert_eq!(
             skill_names(&areas, Mode::Index)
                 .into_iter()
                 .collect::<Vec<_>>(),
-            ["trama-req-ui"]
+            ["weaver-req-ui"]
         );
     }
 }

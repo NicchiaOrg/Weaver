@@ -15,16 +15,40 @@ use tokio::sync::{mpsc, oneshot};
 /// Why a request got no result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RpcError {
-    /// omp answered with an error.
-    Remote { code: i64, message: String },
+    /// omp answered with an error: its message and the `data` of the JSON-RPC error (a string as
+    /// it is, any other value serialized), where omp may carry the cause.
+    Remote {
+        code: i64,
+        message: String,
+        data: Option<String>,
+    },
     /// The connection closed (omp exited or closed its output) before the answer.
     Closed,
 }
 
 impl RpcError {
-    /// The text the developer reads.
+    /// The text the developer reads: the message. The `data` follows it only when it changes what
+    /// the rules (`requirements/rules#system-certificates`) find: it is a certificate or an HTTP
+    /// error and the message is not, or it is a certificate error and the message an HTTP one.
+    /// So the whole ACP error is tested wherever the reason is, and other errors keep their text.
     pub fn text(&self) -> String {
+        use weaver_core::omp::failure::{classify, ProxyProblem};
         match self {
+            RpcError::Remote {
+                message,
+                data: Some(data),
+                ..
+            } if matches!(
+                (classify(message), classify(data)),
+                (None, Some(_))
+                    | (
+                        Some(ProxyProblem::Http { .. }),
+                        Some(ProxyProblem::Certificate { .. })
+                    )
+            ) =>
+            {
+                format!("{message}: {data}")
+            }
             RpcError::Remote { message, .. } => message.clone(),
             RpcError::Closed => "omp closed the connection".to_owned(),
         }
@@ -233,6 +257,13 @@ fn route(
                         .and_then(Value::as_str)
                         .unwrap_or("omp answered with an error")
                         .to_owned(),
+                    data: error
+                        .get("data")
+                        .filter(|data| !data.is_null())
+                        .map(|data| {
+                            data.as_str()
+                                .map_or_else(|| data.to_string(), str::to_owned)
+                        }),
                 }),
                 None => Ok(message.get("result").cloned().unwrap_or(Value::Null)),
             };
@@ -348,9 +379,52 @@ mod tests {
             failing.await.unwrap(),
             Err(RpcError::Remote {
                 code: -32000,
-                message: "no model".into()
+                message: "no model".into(),
+                data: None
             })
         );
+
+        // The `data` of the error is kept: a string as it is, anything else serialized.
+        for (id, data, expected) in [
+            (3_u64, json!("HTTP 407"), Some("HTTP 407".to_owned())),
+            (
+                4,
+                json!({ "cause": "x" }),
+                Some(r#"{"cause":"x"}"#.to_owned()),
+            ),
+            (5, Value::Null, None),
+        ] {
+            let waiting = {
+                let rpc = rpc.clone();
+                tokio::spawn(async move { rpc.request("session/new", json!({})).await })
+            };
+            let lines = usize::try_from(id).unwrap();
+            while sink
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|b| **b == b'\n')
+                .count()
+                < lines
+            {
+                tokio::task::yield_now().await;
+            }
+            writeln!(
+                omp_out,
+                "{}",
+                json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32603, "message": "Internal error", "data": data } })
+            )
+            .unwrap();
+            assert_eq!(
+                waiting.await.unwrap(),
+                Err(RpcError::Remote {
+                    code: -32603,
+                    message: "Internal error".into(),
+                    data: expected
+                })
+            );
+        }
     }
 
     #[tokio::test]

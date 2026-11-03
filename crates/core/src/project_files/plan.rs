@@ -133,7 +133,7 @@ impl Plan {
         conflicts
     }
 
-    /// Adds the removal of every file under a `trama-req-*` skill folder whose path is not in
+    /// Adds the removal of every file under a `weaver-req-*` skill folder whose path is not in
     /// `keep`. Nothing else is touched.
     pub fn remove_other_requirement_skills(&mut self, keep: &BTreeSet<String>) {
         let skills = self.root.join(SKILLS_DIR);
@@ -389,48 +389,56 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, "x").unwrap();
         };
+        put(".agents/skills/weaver-req-ui-main/SKILL.md");
+        put(".agents/skills/weaver-req-ui/SKILL.md");
+        put(".agents/skills/weaver-req-ui/old.md");
+        put(".agents/skills/weaver-design/SKILL.md");
         put(".agents/skills/trama-req-ui-main/SKILL.md");
-        put(".agents/skills/trama-req-ui/SKILL.md");
-        put(".agents/skills/trama-req-ui/old.md");
-        put(".agents/skills/trama-design/SKILL.md");
         put(".agents/skills/my-own-skill/SKILL.md");
-        let keep: BTreeSet<String> = [".agents/skills/trama-req-ui/SKILL.md".to_owned()].into();
+        let keep: BTreeSet<String> = [".agents/skills/weaver-req-ui/SKILL.md".to_owned()].into();
         let mut plan = Plan::new(dir.path());
         plan.remove_other_requirement_skills(&keep);
         assert_eq!(
             plan.removed(),
             [
-                ".agents/skills/trama-req-ui/old.md",
-                ".agents/skills/trama-req-ui-main/SKILL.md"
+                ".agents/skills/weaver-req-ui/old.md",
+                ".agents/skills/weaver-req-ui-main/SKILL.md"
             ]
         );
         plan.apply().unwrap();
-        assert!(!dir.path().join(".agents/skills/trama-req-ui-main").exists());
+        assert!(!dir
+            .path()
+            .join(".agents/skills/weaver-req-ui-main")
+            .exists());
         assert!(dir
             .path()
-            .join(".agents/skills/trama-req-ui/SKILL.md")
+            .join(".agents/skills/weaver-req-ui/SKILL.md")
             .exists());
         assert!(!dir
             .path()
-            .join(".agents/skills/trama-req-ui/old.md")
+            .join(".agents/skills/weaver-req-ui/old.md")
             .exists());
         assert!(dir
             .path()
-            .join(".agents/skills/trama-design/SKILL.md")
+            .join(".agents/skills/weaver-design/SKILL.md")
             .exists());
         assert!(dir
             .path()
             .join(".agents/skills/my-own-skill/SKILL.md")
             .exists());
-
-        plan.roll_back();
         assert!(dir
             .path()
             .join(".agents/skills/trama-req-ui-main/SKILL.md")
             .exists());
+
+        plan.roll_back();
         assert!(dir
             .path()
-            .join(".agents/skills/trama-req-ui/old.md")
+            .join(".agents/skills/weaver-req-ui-main/SKILL.md")
+            .exists());
+        assert!(dir
+            .path()
+            .join(".agents/skills/weaver-req-ui/old.md")
             .exists());
     }
 }

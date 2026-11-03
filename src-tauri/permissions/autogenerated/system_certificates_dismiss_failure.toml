@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-system-certificates-dismiss-failure"
+description = "Enables the system_certificates_dismiss_failure command without any pre-configured scope."
+commands.allow = ["system_certificates_dismiss_failure"]
+
+[[permission]]
+identifier = "deny-system-certificates-dismiss-failure"
+description = "Denies the system_certificates_dismiss_failure command without any pre-configured scope."
+commands.deny = ["system_certificates_dismiss_failure"]

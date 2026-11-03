@@ -137,16 +137,36 @@ describe("the card of a Proposal", () => {
 
   it("says `refinement interrupted` and has only Refine and Discard", async () => {
     const user = userEvent.setup();
-    await show(proposal({ standing: "interrupted" }, { approve: { reasons: [], tooltip: "Continue refining, then approve", refines: true } }));
+    await show(proposal({ standing: "interrupted" }, { carriesTasks: true, creates: 1, label: "Orders", approve: { reasons: [], tooltip: "Continue refining, then approve", refines: true } }));
     const shown = within(card());
     expect(shown.getByText("refinement interrupted")).toBeInTheDocument();
     expect(shown.getByRole("button", { name: "Refine" })).not.toHaveAttribute("aria-disabled");
     expect(shown.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(shown.queryByRole("button", { name: "Model" })).not.toBeInTheDocument();
     expect(shown.getByRole("button", { name: "Discard" })).toBeInTheDocument();
     expect(shown.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
     expect(shown.queryByRole("button", { name: "More ways to reject" })).not.toBeInTheDocument();
     await user.hover(shown.getByRole("button", { name: "Refine" }));
     expect((await screen.findAllByText("Continue refining, then approve")).length).toBeGreaterThan(0);
+  });
+
+  it("has the controls in order, the model control last at the right edge, with the Settings icon", async () => {
+    await show(proposal({}, { carriesTasks: true, creates: 1, label: "Orders", scopeRefs: ["order/Paid"] }), { viewOn: vi.fn(), focusSteps: () => 1 });
+    const controls = card().querySelector<HTMLElement>("[data-card-controls]")!;
+    const names = within(controls)
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("aria-label") ?? b.textContent);
+    expect(names).toEqual(["Approve", "Reject", "More ways to reject", "View requirements", "Model"]);
+    const model = within(controls).getByRole("button", { name: "Model" });
+    expect(model).toHaveClass("ml-auto");
+    expect(model.querySelector("svg")).toHaveClass("lucide-settings");
+    expect(within(controls).getByRole("button", { name: "Approve" })).not.toHaveClass("ml-auto");
+  });
+
+  it("keeps the icon `Cpu` on the badge of the chosen model", async () => {
+    await show(proposal({}, { carriesTasks: true, creates: 1, label: "Orders", model: "openai/mini" }));
+    const badge = within(card()).getByText("openai/mini");
+    expect(badge.querySelector("svg")).toHaveClass("lucide-cpu");
   });
 
   it("confirms Discard before it discards, and a cancel changes nothing", async () => {
@@ -370,12 +390,26 @@ describe("View requirements", () => {
 });
 
 describe("the details dialog", () => {
-  async function open(card: BoardCard) {
+  async function open(card: BoardCard, extra: BoardActions = {}) {
     const user = userEvent.setup();
-    await show(card, { focusSteps: () => 1, viewOn: vi.fn() });
+    await show(card, { focusSteps: () => 1, viewOn: vi.fn(), ...extra });
     await user.click(within(backlog().querySelector<HTMLElement>("[data-card-id]")!).getByRole("button", { name: card.head.title }));
     return { user, dialog: await screen.findByRole("dialog", { name: /Cancel an order/ }) };
   }
+
+  it("has `Ask more` after the controls of the card and sends the Proposal identity, never on the card itself", async () => {
+    const askMore = vi.fn().mockResolvedValue("askaskas");
+    const { user, dialog } = await open(proposal({ head: head("pppppppp", "P1", "Cancel an order", "") }, {}), { askMore });
+    const names = within(dialog)
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("aria-label") ?? b.textContent);
+    expect(names.indexOf("Ask more about P1")).toBeGreaterThan(names.indexOf("Reject"));
+    const button = within(dialog).getByRole("button", { name: "Ask more about P1" });
+    expect(button).toBeEnabled();
+    expect(within(screen.getByRole("region", { name: "Backlog", hidden: true })).queryByRole("button", { name: /Ask more/, hidden: true })).toBeNull();
+    await user.click(button);
+    expect(askMore).toHaveBeenCalledWith({ kind: "proposal", id: "pppppppp" });
+  });
 
   it("shows the id, the title, the kind, the badges, the text, what it requires, its files and its Tasks", async () => {
     const { dialog } = await open(
@@ -511,12 +545,17 @@ describe("the details dialog", () => {
     });
   });
 
-  it("ends with the controls of the card", async () => {
-    const { dialog } = await open(proposal({}, { carriesTasks: true, creates: 1, label: "Orders", scopeRefs: ["order/Paid"] }));
-    const shown = within(dialog);
-    for (const name of ["Approve", "Reject", "More ways to reject", "Model", "View requirements"]) {
-      expect(shown.getByRole("button", { name })).toBeInTheDocument();
-    }
+  it("ends with the controls of the card in their order, the model control last, then `Ask more`", async () => {
+    const { dialog } = await open(proposal({}, { carriesTasks: true, creates: 1, label: "Orders", scopeRefs: ["order/Paid"] }), {
+      askMore: vi.fn(),
+      viewOn: vi.fn(),
+      focusSteps: () => 1,
+    });
+    const names = within(dialog)
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("aria-label") ?? b.textContent)
+      .filter((name) => ["Approve", "Reject", "More ways to reject", "View requirements", "Model", "Ask more about P1"].includes(name ?? ""));
+    expect(names).toEqual(["Approve", "Reject", "More ways to reject", "View requirements", "Model", "Ask more about P1"]);
   });
 });
 

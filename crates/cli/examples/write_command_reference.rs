@@ -1,4 +1,4 @@
-//! Regenerates `COMMANDS.md`, the command reference installed with the `trama-design` skill, from
+//! Regenerates `COMMANDS.md`, the command reference installed with the `weaver-design` skill, from
 //! the command registry: `cargo run -p weaver-cli --example write_command_reference`.
 //!
 //! The file is embedded in `weaver-core` at build time, so build again after running this; a test

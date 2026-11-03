@@ -8,10 +8,16 @@ The person who owns the project, looks at it in Weaver and decides. Every decisi
 The developer opens a folder in Weaver, from the welcome window or from a window already open. A folder already open only comes to the front.
 
 ### CLOSE_WINDOW
-The developer closes the window of a project. When agent jobs of that project are working he confirms first.
+The developer closes the window of a project. When agent jobs of that project are working, or files of its File view have unsaved changes, he confirms first; with unsaved changes he chooses to save them all or to discard them all. When only agent jobs are working, he can also choose to keep them working with the window in the background.
+
+### SEND_TO_BACKGROUND
+The developer sends the window of a project to the background, so that Weaver keeps working in it out of sight.
+
+### REOPEN_APP
+The developer brings Weaver back: he clicks its icon in the Dock on macOS, launches it again without naming a folder, or chooses to show it from its icon in the tray on Windows and Linux. Every project window in the background comes back and the one used most recently gets the focus; with no project window in the background, the window used most recently comes to the front, and with no project window open, the welcome window.
 
 ### QUIT_APP
-The developer quits Weaver. When agent jobs are working in any project he confirms first.
+The developer quits Weaver, also from its icon in the tray on Windows and Linux. When agent jobs are working in any project, or files of a File view have unsaved changes, he confirms first; with unsaved changes he chooses, for each window, to save them all or to discard them all.
 
 ### INITIALISE_PROJECT
 The developer turns a folder without a project into a Weaver project, confirming first when agent files Weaver would install already exist with different content.
@@ -33,6 +39,18 @@ The developer asks omp to forget a connected provider, after a confirmation.
 
 ### CHANGE_SETTINGS
 The developer changes one of Weaver's settings.
+
+### REFRESH_SYSTEM_CERTIFICATES
+The developer asks Weaver to export the certificate authorities his system trusts again, while System Certificates is on.
+
+### OPEN_USAGE
+The developer opens Usage from the window of a project, to see how much is left of the usage limits of the connected providers.
+
+### RETRY_USAGE
+The developer asks Weaver to read the usage limits again after reading them failed.
+
+### CLOSE_USAGE
+The developer closes Usage, also by choosing to open Settings from it.
 
 ### NEW_REQUEST
 The developer starts writing a design request: the setup request when the Model is empty and he chose to start from scratch, an ordinary design request otherwise.
@@ -83,10 +101,10 @@ The developer decides that the code is right and accepts the Proposal attached t
 The developer decides that nothing changes, after a confirmation.
 
 ### SEND_MESSAGE
-The developer writes to the agent in the conversation of a working job or in General.
+The developer writes to the agent in the conversation of a working job, in General or in an Ask more conversation.
 
 ### STOP_AGENT
-The developer stops the agent of a job or of General, after a confirmation when it is a job.
+The developer stops the agent of a job, of General or of an Ask more conversation, after a confirmation when it is a job.
 
 ### ANSWER_PERMISSION
 The developer answers a permission omp asks for: allow once, allow always, or refuse.
@@ -94,8 +112,56 @@ The developer answers a permission omp asks for: allow once, allow always, or re
 ### CLEAR_GENERAL
 The developer starts General again from an empty conversation.
 
+### ASK_MORE
+The developer asks an agent about one thing he is reading: a Proposal, a Task or a Drift in its details, a History entry with the Tasks it cites, the question in view of a question round, or the Requirements as a whole, from the Requirements view.
+
+### CLOSE_ASK
+The developer closes an Ask more conversation, after a confirmation when its agent is working.
+
 ### SEND_ANSWERS
 The developer sends the answers of a question round, every question answered or skipped.
 
 ### SKIP_ALL_QUESTIONS
 The developer skips every question of the round still without an answer, after a confirmation, and sends the round.
+
+### OPEN_FILE_VIEW
+The developer shows the File view of a project window.
+
+### LEAVE_FILE_VIEW
+Another view of the window takes the place of the File view, chosen by the developer or by a link or a notification he clicked. When tabs have unsaved changes he chooses first to save them all or to discard them all; cancelling keeps the File view and changes nothing.
+
+### EXPAND_FOLDER
+The developer expands a folder of the File view's tree.
+
+### COLLAPSE_FOLDER
+The developer collapses a folder of the File view's tree.
+
+### CREATE_ENTRY
+The developer creates an empty file or a folder, with its name, in a folder of the File view's tree.
+
+### RENAME_ENTRY
+The developer gives a new name to a file or a folder of the File view's tree.
+
+### MOVE_ENTRY
+The developer moves a file or a folder of the File view's tree into another folder of the project, by dragging it or by choosing the folder.
+
+### DELETE_ENTRY
+The developer deletes a file or a folder of the File view's tree, after a confirmation that says when tabs on it have unsaved changes.
+
+### OPEN_FILE
+The developer opens a file of the File view's tree. A file already open in a tab only shows that tab. When the tabs are at their limit, the tab without unsaved changes shown least recently closes first; when every tab has unsaved changes, nothing opens and a warning says why.
+
+### CLOSE_TAB
+The developer closes a tab of the File view. With unsaved changes he chooses first to save them, to discard them or to cancel; a save that fails or is refused leaves the tab open, as a save from the tab would.
+
+### EDIT_FILE
+The developer changes the text of a file open in a tab of the File view.
+
+### SAVE_FILE
+The developer saves a file open in a tab of the File view, or all of them when he chooses to save all on leaving the File view, closing the window or quitting.
+
+### RELOAD_FILE
+The developer chooses to take the file as it is on disk and lose the unsaved changes of its tab, after a save found the file changed on disk or after the agent changed it.
+
+### OVERWRITE_FILE
+The developer chooses to write the text of a tab over the file on disk, after a save found the file changed on disk or after the agent changed it.

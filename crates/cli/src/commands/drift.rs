@@ -791,6 +791,7 @@ mod tests {
             input: input(value),
             root: root.to_string_lossy().into_owned(),
             general: None,
+            ask: None,
         };
         crate::exec::execute(&request, caller, &crate::exec::NoJobs)
     }

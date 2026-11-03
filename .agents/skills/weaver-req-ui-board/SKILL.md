@@ -18,7 +18,7 @@ Every text of the interface is in English, whatever the language setting says; t
 ### Footers and header
 - Bottom of Backlog, full column width: `+ Work Item`, `outline` Button with a dashed border, always enabled; it opens a new design request (see `design-request`). Tooltip `Write a work item in Markdown and send it to an agent`.
 - Bottom of Active, full column width: `Run all`, primary. Tooltip `Run all the Tasks in To do`. Disabled reasons, in order: `Drifts are being resolved`, `A run is in progress`, `No Task is in To do`, `All the Tasks in To do are blocked`.
-- Board header: `Scan System` (outline), followed by a muted `· <n> done since last scan`: the Tasks finished (not closed unchanged) since the last Scan System job started, deleted and forgotten ones included; hidden when 0. It confirms first (`Compare the whole System with the code?`, `Scan System` / `Cancel`); cancelling leaves the count unchanged.
+- Board header (the view header of `requirements/ui#General`, title `Board`), on its right: `Scan System` (outline), followed by a muted `· <n> done since last scan`: the Tasks finished (not closed unchanged) since the last Scan System job started, deleted and forgotten ones included; hidden when 0. It confirms first (`Compare the whole System with the code?`, `Scan System` / `Cancel`); cancelling leaves the count unchanged.
 
 ### Ghosts
 - A ghost sits at the bottom of its target column (Backlog for a Proposal or Drift, Active for a Task), after the real cards and before the footer, in announcement order.

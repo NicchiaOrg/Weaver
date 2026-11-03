@@ -2,6 +2,7 @@ import { ListChecks, Package, Play, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 
 import type { TitledRef } from "@/bindings/TitledRef";
+import { AskMoreButton } from "@/components/ask/ask-button";
 import { useBoard } from "@/components/board/board-state";
 import { useBoardActions, type FocusView } from "@/components/board/board-ui";
 import { registerCardRenderer, type BoardCardOf } from "@/components/board/card-registry";
@@ -257,7 +258,7 @@ function TaskDetails({ card }: { card: TaskCardData }) {
   );
 }
 
-/** `View requirements`, `Run` and, only in To do, `Delete` (confirmed). */
+/** `View requirements`, `Run`, `Ask more` and, only in To do, `Delete` (confirmed). */
 function TaskFooter({ card }: { card: TaskCardData }) {
   const { deleteTask } = useBoard();
   const [confirming, setConfirming] = useState(false);
@@ -265,6 +266,7 @@ function TaskFooter({ card }: { card: TaskCardData }) {
   return (
     <>
       <TaskControls card={card} />
+      <AskMoreButton target={{ kind: "task", id: card.head.id }} noun="Task" name={card.head.shortNumber ?? card.head.id} />
       {card.doing ? null : (
         <>
           <GuardedButton

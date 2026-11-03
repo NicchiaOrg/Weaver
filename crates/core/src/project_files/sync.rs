@@ -148,7 +148,7 @@ fn requirements_missing(root: &Path) -> bool {
     }
 }
 
-/// The names of the `trama-req-*` folders in the skills folder of the project.
+/// The names of the `weaver-req-*` folders in the skills folder of the project.
 fn existing_skill_names(root: &Path) -> Vec<String> {
     let Ok(listing) = fs::read_dir(root.join(agent_files::SKILLS_DIR)) else {
         return Vec::new();
@@ -163,7 +163,7 @@ fn existing_skill_names(root: &Path) -> Vec<String> {
     names
 }
 
-/// The mode the existing `trama-req-*` skills are in, when their names say one: a skill only one
+/// The mode the existing `weaver-req-*` skills are in, when their names say one: a skill only one
 /// of the two modes would name for these Areas.
 fn previous_mode(existing: &[String], areas: &[Area]) -> Option<Mode> {
     let fragment_names = skills::skill_names(areas, Mode::Fragment);
@@ -199,7 +199,7 @@ pub fn mode_switch_warning(before: &[Area], after: &[Area]) -> Option<String> {
 
 /// Compares the installed files and the Requirement skills of the project at `root` with what
 /// they must be, and writes (atomically, all or nothing) what is missing or differs. Removes the
-/// `trama-req-*` skills the current mode does not produce. Nothing else is written or removed.
+/// `weaver-req-*` skills the current mode does not produce. Nothing else is written or removed.
 pub fn sync(root: &Path, options: SyncOptions) -> Result<SyncReport, SyncError> {
     let mut image = ProjectImage::load(root);
     let mut starting: Vec<Change> = Vec::new();
@@ -321,7 +321,7 @@ mod tests {
         let dir = project();
         sync(dir.path(), SyncOptions::everything()).unwrap();
         let watchdog = dir.path().join(".omp/WATCHDOG.yml");
-        let setup = dir.path().join(".agents/skills/trama-setup/SKILL.md");
+        let setup = dir.path().join(".agents/skills/weaver-setup/SKILL.md");
         fs::write(&watchdog, "edited by hand").unwrap();
         let crlf = fs::read_to_string(&setup).unwrap().replace('\n', "\r\n");
         fs::write(&setup, &crlf).unwrap();
@@ -370,7 +370,7 @@ mod tests {
         assert_eq!(
             made.changes,
             [Change {
-                path: ".agents/skills/trama-req-ui-main/SKILL.md".into(),
+                path: ".agents/skills/weaver-req-ui-main/SKILL.md".into(),
                 action: Action::Created
             }]
         );
@@ -379,7 +379,7 @@ mod tests {
             .unwrap()
             .is_unchanged());
         // A regeneration looks at the Requirement skills only.
-        assert!(!dir.path().join(".agents/skills/trama-setup").exists());
+        assert!(!dir.path().join(".agents/skills/weaver-setup").exists());
 
         put(
             dir.path(),
@@ -394,11 +394,14 @@ mod tests {
         assert_eq!(
             removed.changes,
             [Change {
-                path: ".agents/skills/trama-req-ui-main/SKILL.md".into(),
+                path: ".agents/skills/weaver-req-ui-main/SKILL.md".into(),
                 action: Action::Removed
             }]
         );
-        assert!(!dir.path().join(".agents/skills/trama-req-ui-main").exists());
+        assert!(!dir
+            .path()
+            .join(".agents/skills/weaver-req-ui-main")
+            .exists());
         assert!(removed.areas.is_empty());
     }
 
@@ -434,17 +437,20 @@ mod tests {
         assert!(to_index
             .changes
             .iter()
-            .any(|c| c.path == ".agents/skills/trama-req-ui-main/SKILL.md"
+            .any(|c| c.path == ".agents/skills/weaver-req-ui-main/SKILL.md"
                 && c.action == Action::Removed));
         assert!(dir
             .path()
-            .join(".agents/skills/trama-req-ui/SKILL.md")
+            .join(".agents/skills/weaver-req-ui/SKILL.md")
             .is_file());
         assert!(dir
             .path()
-            .join(".agents/skills/trama-req-tech/frag-07.md")
+            .join(".agents/skills/weaver-req-tech/frag-07.md")
             .is_file());
-        assert!(!dir.path().join(".agents/skills/trama-req-ui-main").exists());
+        assert!(!dir
+            .path()
+            .join(".agents/skills/weaver-req-ui-main")
+            .exists());
         let again = regenerate_requirement_skills(dir.path()).unwrap();
         assert!(again.is_unchanged() && again.generated.switched.is_none());
 
@@ -464,14 +470,14 @@ mod tests {
                 to: Mode::Fragment
             })
         );
-        assert!(!dir.path().join(".agents/skills/trama-req-ui").exists());
+        assert!(!dir.path().join(".agents/skills/weaver-req-ui").exists());
         assert!(dir
             .path()
-            .join(".agents/skills/trama-req-ui-main/SKILL.md")
+            .join(".agents/skills/weaver-req-ui-main/SKILL.md")
             .is_file());
         assert!(dir
             .path()
-            .join(".agents/skills/trama-req-tech-frag-02/SKILL.md")
+            .join(".agents/skills/weaver-req-tech-frag-02/SKILL.md")
             .is_file());
     }
 

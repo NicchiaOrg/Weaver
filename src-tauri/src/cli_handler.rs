@@ -144,6 +144,7 @@ mod tests {
             state: state.map(Into::into),
             input: input.as_object().cloned().unwrap_or_else(Map::new),
             general: None,
+            ask: None,
         };
         let mut request = Request::new("secret", KIND, serde_json::to_value(command).unwrap());
         request.job = job.map(Into::into);

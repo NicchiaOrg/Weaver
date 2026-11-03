@@ -25,6 +25,7 @@ use crate::spec::*;
 pub struct Environment {
     pub job: Option<String>,
     pub general: Option<String>,
+    pub ask: Option<String>,
     pub endpoint: Option<String>,
     pub run: Option<String>,
     pub task: Option<String>,
@@ -37,6 +38,7 @@ impl Environment {
         Self {
             job: get("WEAVER_JOB"),
             general: get("WEAVER_GENERAL"),
+            ask: get("WEAVER_ASK"),
             endpoint: get("WEAVER_ENDPOINT"),
             run: get("WEAVER_RUN"),
             task: get("WEAVER_TASK"),
@@ -55,6 +57,7 @@ impl Environment {
         Caller {
             job: self.job.clone(),
             general: self.general.clone(),
+            ask: self.ask.clone(),
             run: self.run.clone(),
             task: self.task.clone(),
             job_record,
@@ -487,7 +490,8 @@ fn dispatch(
 ) -> Result<CommandReply, Failure> {
     let needs_job =
         matches!(command.access, Access::Job | Access::JobOrUnavailable) && env.job.is_none();
-    let needs_general = command.access == Access::General && env.general.is_none();
+    let needs_general =
+        command.access == Access::General && env.general.is_none() && env.ask.is_none();
     if needs_job || needs_general {
         return Err(access_failure(command));
     }
@@ -504,6 +508,7 @@ fn dispatch(
         state: state.clone(),
         input,
         general: env.general.clone(),
+        ask: env.ask.clone(),
     };
     match place {
         Place::Local => exec::execute(&request, caller, &NoJobs),
@@ -710,6 +715,27 @@ mod tests {
             (exit, out.as_str(), err.as_str()),
             (1, "report\n", "2 errors\n")
         );
+    }
+
+    #[test]
+    fn job_new_goes_to_the_app_with_the_ask_identity_and_needs_a_caller() {
+        let sandbox = sandbox();
+        let server = app(&sandbox, Ok(done("Started.")));
+        let env = Environment {
+            ask: Some("askaskas".into()),
+            ..Environment::default()
+        };
+        let args = ["job", "new", "--input", "{\"kind\":\"scan\"}"];
+        let (exit, out, err) = invoke(&args, &env, &sandbox, "");
+        assert_eq!((exit, out.as_str(), err.as_str()), (0, "Started.\n", ""));
+        let request = server.join().unwrap();
+        let sent: CommandRequest = serde_json::from_value(request.payload).unwrap();
+        assert_eq!(sent.ask.as_deref(), Some("askaskas"));
+        assert_eq!(sent.general, None);
+
+        let (exit, out, err) = invoke(&args, &Environment::default(), &sandbox, "");
+        assert_eq!((exit, out.as_str()), (1, ""));
+        assert!(err.contains("Ask more conversation"), "{err}");
     }
 
     #[test]

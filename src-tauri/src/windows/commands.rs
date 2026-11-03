@@ -3,6 +3,7 @@
 //! * `welcome_state`: the name and version of the app and the recent projects, each with whether
 //!   its folder still exists (the welcome window marks the others `Not found`);
 //! * `open_project`: `developer.OPEN_PROJECT` for a folder (a recent project);
+//! * `send_to_background`: `developer.SEND_TO_BACKGROUND` for a project window;
 //! * `open_folder`: the system folder picker, then `developer.OPEN_PROJECT` for the choice;
 //! * `remove_recent`: removes a recent project (offered for a folder that no longer exists);
 //! * `open_in_editor`: a file at a line in the editor of the settings.
@@ -85,6 +86,23 @@ pub async fn open_project(
         .open_project(PathBuf::from(path), OpenReason::Developer)
         .await
         .map(|_| ())
+}
+
+/// `developer.SEND_TO_BACKGROUND`: the window of the project leaves the screen and, on Windows
+/// and Linux, the taskbar. Nothing is suspended and no confirmation is asked; a window already in
+/// the background stays there.
+#[tauri::command]
+pub async fn send_to_background(
+    manager: State<'_, Arc<WindowManager>>,
+    project_id: String,
+) -> Result<(), AppError> {
+    if manager.send_to_background(&project_id) || manager.is_background(&project_id) {
+        Ok(())
+    } else {
+        Err(AppError::internal(
+            "the window could not be sent to the background",
+        ))
+    }
 }
 
 /// Shows the system folder picker. `false` when the developer chose none.

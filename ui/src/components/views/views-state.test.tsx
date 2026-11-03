@@ -103,6 +103,129 @@ describe("the Board's `View requirements`", () => {
   });
 });
 
+describe("the overlay follows the focus", () => {
+  const P3 = { kind: "proposal", id: "pppppppp", number: "P3", title: "Pay" } as const;
+  const P4 = { kind: "proposal", id: "qqqqqqqq", number: "P4", title: "Refund" } as const;
+  const TASK = { kind: "task", id: "tttttttt", number: "T4", title: "Fix" } as const;
+  const open = [
+    { id: "pppppppp", shortNumber: "P3", title: "Pay" },
+    { id: "qqqqqqqq", shortNumber: "P4", title: "Refund" },
+  ];
+
+  function Controls() {
+    const { focusOn, clearFocus } = useViews();
+    return (
+      <>
+        <button onClick={() => focusOn("requirements", ["fresh"], P3)}>P3 in Requirements</button>
+        <button onClick={() => focusOn("specs", ["specs#languages"], P3)}>P3 in Specs</button>
+        <button onClick={() => focusOn("requirements", ["fresh"], P4)}>P4 in Requirements</button>
+        <button onClick={() => focusOn("specs", ["specs#languages"], TASK)}>Task in Specs</button>
+        <button onClick={() => focusOn("requirements", ["order"], { kind: "proposal", id: "zzzzzzzz", number: "P9", title: "Closed" })}>
+          Closed Proposal
+        </button>
+        <button onClick={() => clearFocus("requirements")}>Clear Requirements</button>
+        <button onClick={() => clearFocus("specs")}>Clear Specs</button>
+      </>
+    );
+  }
+
+  const overlayNow = () => expect(screen.getByTestId("probe"));
+
+  beforeEach(() => {
+    current = snapshot({ overlays: open });
+    // The backend draws the Proposal asked for while it is open, and answers with the Current Model otherwise.
+    backend = fakeBackend((asked) => (asked && current.overlays.some((o) => o.id === asked) ? { ...current, overlay: asked } : current));
+  });
+
+  async function mount() {
+    const user = userEvent.setup();
+    renderViews(
+      <>
+        <Probe />
+        <Controls />
+      </>,
+    );
+    await screen.findByText(/revision 1/);
+    return user;
+  }
+
+  it("draws the Proposal of the last focus opened, in either view", async () => {
+    const user = await mount();
+    await user.click(screen.getByRole("button", { name: "P3 in Specs" }));
+    await waitFor(() => overlayNow().toHaveTextContent("overlay pppppppp"));
+    await user.click(screen.getByRole("button", { name: "P4 in Requirements" }));
+    await waitFor(() => overlayNow().toHaveTextContent("overlay qqqqqqqq"));
+  });
+
+  it("opens the focus of a Proposal that cannot be overlaid on the Current Model", async () => {
+    const user = await mount();
+    await user.click(screen.getByRole("button", { name: "P3 in Requirements" }));
+    await waitFor(() => overlayNow().toHaveTextContent("overlay pppppppp"));
+    await user.click(screen.getByRole("button", { name: "Closed Proposal" }));
+    await waitFor(() => overlayNow().toHaveTextContent("overlay none"));
+    expect(backend.asked.at(-1)).toBeNull();
+  });
+
+  it("returns both views to the Current Model when a focus opens on another subject, in either view", async () => {
+    const user = await mount();
+    await user.click(screen.getByRole("button", { name: "P3 in Requirements" }));
+    await waitFor(() => overlayNow().toHaveTextContent("overlay pppppppp"));
+    await user.click(screen.getByRole("button", { name: "Task in Specs" }));
+    await waitFor(() => overlayNow().toHaveTextContent("overlay none"));
+    expect(backend.asked.at(-1)).toBeNull();
+  });
+
+  it("ends the overlay when the focus that drew it is cleared, and keeps it when another view's focus is", async () => {
+    const user = await mount();
+    await user.click(screen.getByRole("button", { name: "P3 in Requirements" }));
+    await waitFor(() => overlayNow().toHaveTextContent("overlay pppppppp"));
+    await user.click(screen.getByRole("button", { name: "Clear Specs" }));
+    expect(screen.getByTestId("probe")).toHaveTextContent("overlay pppppppp");
+    await user.click(screen.getByRole("button", { name: "Clear Requirements" }));
+    await waitFor(() => overlayNow().toHaveTextContent("overlay none"));
+    expect(backend.asked.at(-1)).toBeNull();
+  });
+
+  it("ends the overlay with Esc on the focus that drew it", async () => {
+    const user = userEvent.setup();
+    renderViews(
+      <>
+        <Probe />
+        <Controls />
+        <RequirementsView />
+      </>,
+    );
+    await screen.findByRole("heading", { name: "Orders" });
+    await user.click(screen.getByRole("button", { name: "P3 in Requirements" }));
+    await waitFor(() => overlayNow().toHaveTextContent("overlay pppppppp"));
+    await screen.findByRole("region", { name: "Focus" });
+    screen.getByRole("checkbox", { name: "Only these" }).focus();
+    await user.keyboard("{Escape}");
+    await waitFor(() => overlayNow().toHaveTextContent("overlay none"));
+    expect(screen.queryByRole("region", { name: "Focus" })).not.toBeInTheDocument();
+  });
+
+  it("goes back to the Current Model with a notice when the Proposal drawn stops being open, and the focus stays", async () => {
+    const user = userEvent.setup();
+    renderViews(
+      <>
+        <Probe />
+        <Controls />
+        <RequirementsView />
+      </>,
+    );
+    await screen.findByRole("heading", { name: "Orders" });
+    await user.click(screen.getByRole("button", { name: "P3 in Requirements" }));
+    await waitFor(() => overlayNow().toHaveTextContent("overlay pppppppp"));
+    // The Proposal is gone: the backend answers the overlay asked with the Current Model.
+    current = snapshot({ revision: 2, overlays: [open[1]!] });
+    await act(async () => backend.emit(["model"], 2));
+    await waitFor(() => overlayNow().toHaveTextContent("overlay none"));
+    expect(await screen.findByText("Proposal P3 is no longer open, so the views show the Current Model.")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Focus" })).toBeInTheDocument();
+  });
+});
+
 describe("what the views ask the backend", () => {
   it("drops an answer that is no longer the latest asked for", async () => {
     const resolvers: ((value: ViewSnapshot) => void)[] = [];

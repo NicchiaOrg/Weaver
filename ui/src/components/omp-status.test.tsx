@@ -1,5 +1,6 @@
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { OmpModel } from "@/bindings/OmpModel";
@@ -7,6 +8,7 @@ import type { OmpPhase } from "@/bindings/OmpPhase";
 import type { OmpStatus } from "@/bindings/OmpStatus";
 import type { SettingField } from "@/bindings/SettingField";
 import type { SettingsSnapshot } from "@/bindings/SettingsSnapshot";
+import type { SystemCertificatesStatus } from "@/bindings/SystemCertificatesStatus";
 import { ConnectedSettingsView, modelCatalogOf, OmpSetup, OmpStatusBox, Providers, providersShown } from "@/components/omp-status";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { OmpProvider } from "@/hooks/use-omp";
@@ -18,6 +20,8 @@ vi.mock("@/lib/backend", () => ({
   on: vi.fn(),
   isAppError: (value: unknown) => typeof value === "object" && value !== null && "code" in value && "message" in value,
 }));
+
+const OFF: SystemCertificatesStatus = { revision: 1, phase: "off", automatic: false, count: null, writtenAt: null, error: null, turnOnNotice: false, failureBanner: false, failureReason: null };
 
 const PROVIDERS = [
   ["openai-codex", "OpenAI Codex", "ChatGPT"],
@@ -52,6 +56,8 @@ function status(state: OmpPhase, patch: Partial<OmpStatus> = {}): OmpStatus {
     loginProvider: null,
     terminalProblem: null,
     logout: null,
+    waitingForExport: false,
+    installerFailure: null,
     ...patch,
   };
 }
@@ -118,6 +124,59 @@ describe("omp status box", () => {
     expect(box).toHaveTextContent(text);
     if (action) expect(within(box).getByRole("button", { name: action })).toBeInTheDocument();
     else expect(within(box).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("says that it exports the certificates first only during that wait", () => {
+    const { rerender } = renderBox(status("checking", { waitingForExport: true }));
+    const box = screen.getByRole("status", { name: "omp status" });
+    expect(box).toHaveTextContent("Checking omp…");
+    expect(box).toHaveTextContent("Exporting system certificates first…");
+    rerender(
+      <TooltipProvider>
+        <OmpStatusBox status={status("checking")} />
+      </TooltipProvider>,
+    );
+    expect(box).toHaveTextContent("Checking omp…");
+    expect(box).not.toHaveTextContent("Exporting system certificates first…");
+  });
+
+  const explanation =
+    "omp could not verify a server's certificate; a corporate proxy that inspects HTTPS traffic is the usual cause, and turning on System Certificates in Weaver's settings may fix it";
+
+  it("ends a proxy explanation with a full stop and leaves the other reasons as they are", () => {
+    const { rerender } = renderBox(status("missing", { reason: explanation }));
+    const box = screen.getByRole("status", { name: "omp status" });
+    expect(box).toHaveTextContent(`${explanation}.`);
+    rerender(
+      <TooltipProvider>
+        <OmpStatusBox status={status("missing", { reason: "omp received an HTTP 407 error; a corporate proxy that inspects HTTPS traffic may be blocking the request" })} />
+      </TooltipProvider>,
+    );
+    expect(box.textContent).toContain("may be blocking the request.");
+    rerender(
+      <TooltipProvider>
+        <OmpStatusBox status={status("missing", { reason: "omp exited with code 3" })} />
+      </TooltipProvider>,
+    );
+    expect(box.textContent).toContain("omp exited with code 3");
+    expect(box.textContent).not.toContain("omp exited with code 3.");
+  });
+
+  it("shows the text of a failed installer with its action, and the last reason under it", () => {
+    const text =
+      "The omp installer failed (exit code 22); see the terminal. A corporate proxy that inspects HTTPS traffic is a common cause. Turning on System Certificates in Weaver's settings may fix it.";
+    const { rerender } = renderBox(status("missing", { installerFailure: text }));
+    const box = screen.getByRole("status", { name: "omp status" });
+    expect(box).toHaveTextContent(text);
+    expect(box).not.toHaveTextContent("omp is not installed.");
+    expect(within(box).getByRole("button", { name: "Install omp" })).toBeInTheDocument();
+    rerender(
+      <TooltipProvider>
+        <OmpStatusBox status={status("missing", { installerFailure: text, reason: "omp not found at /gone/omp" })} />
+      </TooltipProvider>,
+    );
+    expect(box).toHaveTextContent(text);
+    expect(box).toHaveTextContent("omp not found at /gone/omp");
   });
 
   it("is a polite live region", () => {
@@ -380,7 +439,7 @@ describe("OmpProvider", () => {
     render(
       <TooltipProvider>
         <OmpProvider>
-          <OmpSetup providers="when-needed" />
+          <OmpSetup providers="when-needed" systemCertificates={false} />
         </OmpProvider>
       </TooltipProvider>,
     );
@@ -427,6 +486,7 @@ const settings: SettingsSnapshot = {
     theme: "auto",
     editor: { preset: "vscode", command: "" },
     permissions: "yolo",
+    systemCertificates: { enabled: false },
   },
   issues: [],
   fileError: null,
@@ -441,13 +501,16 @@ const settings: SettingsSnapshot = {
     field("editor.preset", "Editor", "choice", "vscode", [{ value: "vscode", label: "VS Code" }]),
     field("editor.command", "Custom command", "text"),
     field("permissions", "Permissions", "choice", "yolo", [{ value: "yolo", label: "Run without asking" }]),
+    field("systemCertificates.enabled", "System Certificates", "boolean", "false"),
   ],
 };
 
 describe("ConnectedSettingsView", () => {
   function mount(value: OmpStatus) {
     vi.mocked(call).mockImplementation(((name: string) =>
-      Promise.resolve(name === "omp_status" ? value : name === "settings_get" ? settings : null)) as never);
+      Promise.resolve(
+        name === "omp_status" ? value : name === "settings_get" ? settings : name === "system_certificates_status" ? OFF : null,
+      )) as never);
     render(
       <TooltipProvider>
         <SettingsProvider>
@@ -471,5 +534,61 @@ describe("ConnectedSettingsView", () => {
     expect(box).toHaveTextContent("omp not found at /gone/omp");
     expect(screen.queryByRole("heading", { name: "Providers" })).not.toBeInTheDocument();
     expect(screen.getAllByText("omp not found at /gone/omp")).toHaveLength(2);
+  });
+});
+
+describe("System Certificates places", () => {
+  let enabled: boolean;
+
+  function mount(children: ReactNode) {
+    enabled = false;
+    vi.mocked(call).mockImplementation(((name: string, args?: { change?: { value: string } }) => {
+      if (name === "omp_status") return Promise.resolve(ready());
+      if (name === "system_certificates_status") return Promise.resolve(OFF);
+      if (name === "settings_set") {
+        enabled = args?.change?.value === "true";
+        return Promise.resolve({ ...settings, revision: 2, settings: { ...settings.settings, systemCertificates: { enabled } } });
+      }
+      return Promise.resolve(settings);
+    }) as never);
+    render(
+      <TooltipProvider>
+        <SettingsProvider>
+          <OmpProvider>{children}</OmpProvider>
+        </SettingsProvider>
+      </TooltipProvider>,
+    );
+  }
+
+  it("shows the switch under the box where the box shows outside Settings (Get Started, welcome window)", async () => {
+    mount(<OmpSetup providers="when-needed" />);
+    const box = await screen.findByRole("status", { name: "omp status" });
+    const toggle = await screen.findByRole("switch", { name: "System Certificates" });
+    expect(box.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("shows it once in Settings, in the omp group and not under the box", async () => {
+    mount(<ConnectedSettingsView />);
+    await screen.findByRole("status", { name: "omp status" });
+    expect(await screen.findAllByRole("switch", { name: "System Certificates" })).toHaveLength(1);
+    expect(within(screen.getByRole("region", { name: "omp" })).getByRole("switch", { name: "System Certificates" })).toBeInTheDocument();
+  });
+
+  it("shows the same value in every place, and a change in one shows in all", async () => {
+    const user = userEvent.setup();
+    mount(
+      <>
+        <OmpSetup providers="when-needed" />
+        <ConnectedSettingsView />
+      </>,
+    );
+    const switches = await screen.findAllByRole("switch", { name: "System Certificates" });
+    expect(switches).toHaveLength(2);
+    for (const toggle of switches) expect(toggle).not.toBeChecked();
+    await user.click(switches[0]!);
+    await vi.waitFor(() => {
+      for (const toggle of screen.getAllByRole("switch", { name: "System Certificates" })) expect(toggle).toBeChecked();
+    });
+    expect(enabled).toBe(true);
   });
 });

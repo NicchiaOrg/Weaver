@@ -194,10 +194,7 @@ fn edit(call: &Call) -> Result<CommandReply, Failure> {
 /// The Task of an entry as shown: from the copy the entry keeps, else from the Task file that is
 /// still there, else only its identity.
 fn task_json(call: &Call, numbers: &ShortNumbers, entry: &Entry, id: &str) -> (Value, String) {
-    let copy: Option<TaskCopy> = entry.cleared.get(id).cloned().or_else(|| {
-        let task = call.image.card(CardKind::Task, id)?;
-        history::copy_of(call.image, task).ok()
-    });
+    let copy: Option<TaskCopy> = history::shown_copy(call.image, entry, id);
     let number = numbers.number_of(CardKind::Task, id);
     match copy {
         Some(copy) => {

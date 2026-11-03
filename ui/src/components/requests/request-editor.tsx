@@ -102,7 +102,7 @@ export function RequestEditor({ projectId }: { projectId: string }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-2 border-b px-3 py-2">
+      <div className="flex items-center gap-2 border-b px-4 py-3">
         <Button type="button" variant="ghost" size="sm" onClick={closeEditor}>
           <ArrowLeft aria-hidden />
           Board

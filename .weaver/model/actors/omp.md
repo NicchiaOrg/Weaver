@@ -1,6 +1,6 @@
 # omp
 
-The omp program on the developer's computer: the only agent Weaver works with and the only source of the models it knows. Weaver asks it about itself (where it is, its version, its usable models, a newer version) and starts it as an ACP server for every job and for General; what omp answers and what its ACP sessions do are the facts below.
+The omp program on the developer's computer: the only agent Weaver works with and the only source of the models it knows. Weaver asks it about itself (where it is, its version, its usable models, a newer version, the usage limits of its connected providers) and starts it as an ACP server for every job and for General; what omp answers and what its ACP sessions do are the facts below.
 
 ## Events
 
@@ -25,6 +25,15 @@ omp's own update finished well.
 ### UPDATE_FAILED
 omp's own update failed or took too long.
 
+### INSTALL_FAILED
+omp's official installer, started by Weaver in the system terminal, ended with an exit code other than 0, and omp is still not found.
+
+### USAGE_READ
+omp returned the usage limits of the connected providers, each with how much is used and when it resets, or the reason a provider has none.
+
+### USAGE_FAILED
+omp could not return the usage limits, or did not return them within the time allowed, with the reason.
+
 ### SESSION_STARTED
 omp started, opened the ACP session and accepted the instruction Weaver sent.
 
@@ -48,3 +57,9 @@ omp ended the prompt abnormally: it refused, ran out of tokens or turns, or refu
 
 ### EXITED
 The omp process ended, or its ACP connection closed, with the last lines it wrote about the error.
+
+### FILE_TOOL_STARTED
+The agent of a conversation omp runs for Weaver started a tool that changes files (an edit, a deletion or a move), naming the files it changes or none.
+
+### FILE_TOOL_ENDED
+A tool that changes files ended, completed or failed, naming the files it changed and, when omp says so, where it moved a file.

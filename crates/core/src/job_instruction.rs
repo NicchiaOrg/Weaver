@@ -75,13 +75,13 @@ pub struct ResolveAnswer {
 /// The kind of the rejected Proposal being reworked; it picks the skill.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReworkKind {
-    /// An ordinary change: `trama-design`.
+    /// An ordinary change: `weaver-design`.
     Change,
-    /// A setup: `trama-setup` while the Model is empty, `trama-design` otherwise.
+    /// A setup: `weaver-setup` while the Model is empty, `weaver-design` otherwise.
     Setup { model_is_empty: bool },
-    /// An import: `trama-import`.
+    /// An import: `weaver-import`.
     Import,
-    /// A resolution: `trama-resolve-drifts`, on its Drifts still open (never none).
+    /// A resolution: `weaver-resolve-drifts`, on its Drifts still open (never none).
     Resolution { open_drifts: Vec<String> },
 }
 
@@ -308,69 +308,69 @@ mod tests {
         vec![
             (
                 Job::Setup { request: request(1) },
-                "Use the trama-setup skill on the setup request in `.weaver/requests/2026-11-02T09-30-01.md`.".into(),
+                "Use the weaver-setup skill on the setup request in `.weaver/requests/2026-11-02T09-30-01.md`.".into(),
             ),
             (
                 Job::Design { request: request(2) },
-                "Use the trama-design skill on the design request in `.weaver/requests/2026-11-02T09-30-02.md`.".into(),
+                "Use the weaver-design skill on the design request in `.weaver/requests/2026-11-02T09-30-02.md`.".into(),
             ),
             (
                 Job::Import { excluded: vec![] },
-                "Use the trama-import skill on this repository. Import every folder and do not ask which folders to import.".into(),
+                "Use the weaver-import skill on this repository. Import every folder and do not ask which folders to import.".into(),
             ),
             (
                 Job::Import { excluded: vec!["node_modules".into(), "docs/old drafts".into()] },
-                "Use the trama-import skill on this repository. Do not import these paths and do not ask which folders to import: `node_modules`, `docs/old drafts`.".into(),
+                "Use the weaver-import skill on this repository. Do not import these paths and do not ask which folders to import: `node_modules`, `docs/old drafts`.".into(),
             ),
-            (Job::Scan, "Use the trama-scan skill on the whole System.".into()),
-            (Job::RunTask { task: id(3) }, "Use the trama-implement skill on Task abcdef03.".into()),
+            (Job::Scan, "Use the weaver-scan skill on the whole System.".into()),
+            (Job::RunTask { task: id(3) }, "Use the weaver-implement skill on Task abcdef03.".into()),
             (
                 Job::RunAll { filter: RunAllFilter::All },
-                "Use the trama-implement skill on the runnable Tasks: take them from `weaver task list --input '{\"runnable\":true,\"max\":4,\"groups\":true}'`, one batch at a time, until it says there is none.".into(),
+                "Use the weaver-implement skill on the runnable Tasks: take them from `weaver task list --input '{\"runnable\":true,\"max\":4,\"groups\":true}'`, one batch at a time, until it says there is none.".into(),
             ),
             (
                 Job::RunAll { filter: RunAllFilter::Proposals(vec![id(4), id(5)]) },
-                "Use the trama-implement skill on the runnable Tasks: take them from `weaver task list --input '{\"runnable\":true,\"max\":4,\"groups\":true,\"proposals\":[\"abcdef04\",\"abcdef05\"]}'`, one batch at a time, until it says there is none.".into(),
+                "Use the weaver-implement skill on the runnable Tasks: take them from `weaver task list --input '{\"runnable\":true,\"max\":4,\"groups\":true,\"proposals\":[\"abcdef04\",\"abcdef05\"]}'`, one batch at a time, until it says there is none.".into(),
             ),
             (
                 Job::RunAll { filter: RunAllFilter::NotProposals(vec![id(4), id(5)]) },
-                "Use the trama-implement skill on the runnable Tasks: take them from `weaver task list --input '{\"runnable\":true,\"max\":4,\"groups\":true,\"notProposals\":[\"abcdef04\",\"abcdef05\"]}'`, one batch at a time, until it says there is none.".into(),
+                "Use the weaver-implement skill on the runnable Tasks: take them from `weaver task list --input '{\"runnable\":true,\"max\":4,\"groups\":true,\"notProposals\":[\"abcdef04\",\"abcdef05\"]}'`, one batch at a time, until it says there is none.".into(),
             ),
-            (Job::Resolve { drift: id(6), answer: None }, "Use the trama-resolve-drifts skill on Drift abcdef06.".into()),
+            (Job::Resolve { drift: id(6), answer: None }, "Use the weaver-resolve-drifts skill on Drift abcdef06.".into()),
             (
                 Job::Resolve {
                     drift: id(6),
                     answer: Some(ResolveAnswer { selected: vec!["Keep the code".into()], text: Some("Only for \"guests\"\nplease".into()) }),
                 },
-                "Use the trama-resolve-drifts skill on Drift abcdef06. The developer already answered its prepared question: {\"selected\":[\"Keep the code\"],\"text\":\"Only for \\\"guests\\\"\\nplease\"}.".into(),
+                "Use the weaver-resolve-drifts skill on Drift abcdef06. The developer already answered its prepared question: {\"selected\":[\"Keep the code\"],\"text\":\"Only for \\\"guests\\\"\\nplease\"}.".into(),
             ),
             (
                 Job::Resolve { drift: id(6), answer: Some(ResolveAnswer { selected: vec![], text: None }) },
-                "Use the trama-resolve-drifts skill on Drift abcdef06. The developer already answered its prepared question: {\"selected\":[]}.".into(),
+                "Use the weaver-resolve-drifts skill on Drift abcdef06. The developer already answered its prepared question: {\"selected\":[]}.".into(),
             ),
             (
                 Job::Rework { proposal: id(7), kind: ReworkKind::Change },
-                "Use the trama-design skill to rework the rejected Proposal abcdef07 with the developer's feedback.".into(),
+                "Use the weaver-design skill to rework the rejected Proposal abcdef07 with the developer's feedback.".into(),
             ),
             (
                 Job::Rework { proposal: id(7), kind: ReworkKind::Setup { model_is_empty: true } },
-                "Use the trama-setup skill to rework the rejected Proposal abcdef07 with the developer's feedback.".into(),
+                "Use the weaver-setup skill to rework the rejected Proposal abcdef07 with the developer's feedback.".into(),
             ),
             (
                 Job::Rework { proposal: id(7), kind: ReworkKind::Setup { model_is_empty: false } },
-                "Use the trama-design skill to rework the rejected Proposal abcdef07 with the developer's feedback.".into(),
+                "Use the weaver-design skill to rework the rejected Proposal abcdef07 with the developer's feedback.".into(),
             ),
             (
                 Job::Rework { proposal: id(7), kind: ReworkKind::Import },
-                "Use the trama-import skill to rework the rejected Proposal abcdef07 with the developer's feedback.".into(),
+                "Use the weaver-import skill to rework the rejected Proposal abcdef07 with the developer's feedback.".into(),
             ),
             (
                 Job::Rework { proposal: id(7), kind: ReworkKind::Resolution { open_drifts: vec![id(8), id(9)] } },
-                "Use the trama-resolve-drifts skill to rework the rejected Proposal abcdef07 with the developer's feedback on the Drifts `abcdef08`, `abcdef09`.".into(),
+                "Use the weaver-resolve-drifts skill to rework the rejected Proposal abcdef07 with the developer's feedback on the Drifts `abcdef08`, `abcdef09`.".into(),
             ),
             (
                 Job::Refinement { proposal: id(10) },
-                "Use the trama-design skill to refine the stale Proposal abcdef10 on the current Model and Requirements.".into(),
+                "Use the weaver-design skill to refine the stale Proposal abcdef10 on the current Model and Requirements.".into(),
             ),
         ]
     }
@@ -550,19 +550,19 @@ mod tests {
             assert!(text.contains("## Sub-agents context sharing"), "{name}");
         }
         // The rework and refinement sentences name sections the skills must have.
-        assert!(skill("trama-design").contains("## Reworking a rejected Proposal"));
-        assert!(skill("trama-design").contains("## Refining a stale Proposal"));
-        assert!(skill("trama-setup").contains("## Reworking a rejected setup Proposal"));
-        assert!(skill("trama-import").contains("## Reworking a rejected import Proposal"));
-        assert!(skill("trama-resolve-drifts").contains("## Reworking a rejected resolution"));
+        assert!(skill("weaver-design").contains("## Reworking a rejected Proposal"));
+        assert!(skill("weaver-design").contains("## Refining a stale Proposal"));
+        assert!(skill("weaver-setup").contains("## Reworking a rejected setup Proposal"));
+        assert!(skill("weaver-import").contains("## Reworking a rejected import Proposal"));
+        assert!(skill("weaver-resolve-drifts").contains("## Reworking a rejected resolution"));
         assert!(
-            skill("trama-resolve-drifts").contains("with the developer's feedback on the Drifts")
+            skill("weaver-resolve-drifts").contains("with the developer's feedback on the Drifts")
         );
-        assert!(skill("trama-resolve-drifts")
+        assert!(skill("weaver-resolve-drifts")
             .contains("The developer already answered its prepared question:"));
-        assert!(skill("trama-import")
+        assert!(skill("weaver-import")
             .contains("Do not import these paths and do not ask which folders to import"));
-        assert!(skill("trama-import")
+        assert!(skill("weaver-import")
             .contains("Import every folder and do not ask which folders to import"));
     }
 }

@@ -61,3 +61,19 @@ description: "Use when building anything that must stay fast, reliable, logged, 
 
 - Texts Weaver writes for the agent (instructions, skills, sub-agent definitions, CLI help and errors) and for the developer (UI, notifications, errors) use no first person (`I`, `we`, `my`, `our`). They name `Weaver` and `the agent`.
 - The UI is always in English; only texts the agent writes follow the language setting.
+
+## system-certificates
+
+- **Security:** Weaver never turns TLS checking off: no `NODE_TLS_REJECT_UNAUTHORIZED`, `GIT_SSL_NO_VERIFY`, `PYTHONHTTPSVERIFY=0`, `-k`/`--insecure` or `strict-ssl=false`, ever. Only the machine's and the current user's stores are read, never another user's. No file of a project, no environment variable and no message from the UI chooses the sources, the bundle path, the variables or the processes that get them; the UI can only ask for an export while the setting is on.
+- **Privacy:** no network call for the export or the Zscaler check. The bundle holds public certificates only, no keys. Error output is tested in memory only.
+- **Reliability:** an export never blocks the start, a window, the UI or a job, and ends within 30 s; a failed or late export leaves the earlier bundle whole. With the setting off, every process Weaver starts gets exactly the environment it got before System Certificates existed. A failure of the Zscaler check changes nothing and shows nothing.
+- **Logs:** each export at `info`: automatic or asked, outcome, certificate count, duration and, on failure, the reason; the Zscaler turn-on at `info` and a failure of its writes at `warn`. Never the bundle's content, certificate subjects or the variables' values.
+- **Tests:**
+  - bundle building: duplicates, non-CA and unreadable certificates, no system authority, public roots added after the system's, PEM shape;
+  - the atomic write with a failing rename leaving the earlier bundle, and the 30 s limit with an injected slow reader;
+  - the 24 h rule at start and the daily timer, with an injected clock;
+  - the variables with the setting on, off and without a bundle, their precedence over inherited ones, and their presence at every spawn site: the omp commands, jobs, General, resumes, and the installer and login terminals of each system (in the environment on Windows and Linux, in the command on macOS and in the Linux script), never in the job registry;
+  - Zscaler detection per system with an injected file system, and the turn-on: flag absent or present, setting already on, Zscaler absent, failed setting write, notification and banners sent once;
+  - the installer command per system and its marker: a code, `0`, no marker, a stale nonce, forgotten at the next install and when omp is found;
+  - each certificate marker and HTTP form and code, other codes, bare numbers, certificate precedence, the explanation with the setting on and off, and that no error text names a product;
+  - the switch, status line, `Refresh` and banners in Vitest with their keyboard paths and accessible names.

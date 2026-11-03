@@ -2,7 +2,7 @@
 //!
 //! | Module | Responsibility |
 //! |--------|----------------|
-//! | [`requirement_skills`] | The `trama-req-*` skills: budget, mode, generated text (pure) |
+//! | [`requirement_skills`] | The `weaver-req-*` skills: budget, mode, generated text (pure) |
 //! | [`plan`] | A set of files to write and remove, applied whole or not at all |
 //! | [`sync`] | The one function that keeps the installed files and the Requirement skills right, and its structured report |
 //! | [`initialise`] | `developer.INITIALISE_PROJECT`: `.weaver/`, the starting Areas and every agent file |

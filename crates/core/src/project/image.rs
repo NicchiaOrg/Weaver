@@ -19,7 +19,9 @@ use super::changes::{Change, ChangeSet};
 use super::check::{check_duplicate_identities, check_sections};
 use super::diagnostic::{has_errors, Diagnostic};
 use super::ids::draw_identity;
-use super::layout::{self, classify, FileClass, MODEL_DIR, VERSIONED_ENTRIES};
+use super::layout::{
+    self, classify, FileClass, DRIFTS_DIR, MODEL_DIR, PROPOSALS_DIR, TASKS_DIR, VERSIONED_ENTRIES,
+};
 use super::model::{
     parse_actor, parse_machine, parse_titled, Actor, Machine, Model, ModelFiles, Titled,
 };
@@ -110,6 +112,19 @@ impl ProjectImage {
     pub fn load(project_root: &Path) -> Self {
         let mut image = Self::empty(project_root);
         image.refresh_all();
+        image
+    }
+
+    /// Reads only the cards (Proposals, Tasks and Drifts), never the Model, the Requirements,
+    /// the Specs or the History.
+    pub fn load_cards(project_root: &Path) -> Self {
+        let mut image = Self::empty(project_root);
+        let weaver = layout::weaver_dir(project_root);
+        let mut present = BTreeSet::new();
+        for name in [PROPOSALS_DIR, TASKS_DIR, DRIFTS_DIR] {
+            image.scan(&weaver.join(name), name, 0, &mut present);
+        }
+        image.rebuild();
         image
     }
 

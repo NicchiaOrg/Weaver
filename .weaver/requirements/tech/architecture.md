@@ -1,5 +1,5 @@
 ---
-description: "Use when building the app structure, backend state, file watching, IPC with the CLI, windows or system notifications."
+description: "Use when building the app structure, backend state, the project's file watching, IPC with the CLI or question rounds."
 ---
 # Architecture
 
@@ -24,6 +24,7 @@ description: "Use when building the app structure, backend state, file watching,
   - Each open project has one in-memory picture built from its files.
   - It is rebuilt 150 ms after the last watcher event of a batch, and at most 1 s after the first event under continuous changes.
   - Parsing is incremental: each file is kept parsed with its content hash, and only changed or removed paths are parsed again. Derived data (blocking, design membership, short numbers, Board) is recomputed whole.
+  - Files of the code never enter the picture and never cause a rebuild; the File view keeps its own state (`requirements/tech#files`).
   - Each rebuild increments a revision. The event `project-changed` carries the project id, the revision and the changed slices.
   - The UI fetches a full snapshot when a window loads, or when it sees a gap in revisions.
 - **Mutations:**
@@ -46,7 +47,7 @@ description: "Use when building the app structure, backend state, file watching,
 - **Watched paths:**
   - the project root, non-recursively, only to see `.weaver` appear or vanish; a `.trama` folder appearing, changing or vanishing is ignored;
   - `.weaver/`, recursively, while it exists;
-  - no code, no skills folder, no `.omp/`.
+  - no code, no skills folder, no `.omp/`; the File view watches its folders and files with its own watcher (`requirements/tech#file-view`).
 - **Ignored events:** temp files of atomic writes, and the local folders of `.weaver/` except `requests/`, where a deletion is `workspace.REQUEST_DELETED`.
 - **`.weaver` vanishes:** the recursive watch is dropped, then `PROJECT_FOLDER_REMOVED`.
 - **`.weaver` appears:** the watch is added and the picture fully rebuilt, then `PROJECT_FOLDER_APPEARED`.
@@ -55,8 +56,8 @@ description: "Use when building the app structure, backend state, file watching,
 - **Self-writes:** the app records the hash of each file it writes. An event whose content matches the recorded hash updates the picture but is not `workspace.FILES_CHANGED`. Writes by the CLI and the agent are `FILES_CHANGED`.
 - **Requirement skills:** when a batch touches `.weaver/requirements/`, they are regenerated in the same rebuild through the project queue, by one core function.
 - **Embedded files:** the installed files are embedded in `weaver-core` with `include_dir`, so the CLI and the app write identical bytes:
-  - skills `trama-setup`, `trama-design` (+ format reference), `trama-import`, `trama-scan`, `trama-compare`, `trama-implement`, `trama-resolve-drifts`;
-  - `.omp/agents/trama-analysis.md` and `.omp/agents/trama-implementer.md`;
+  - skills `weaver-setup`, `weaver-design` (+ format reference and command reference), `weaver-import`, `weaver-scan`, `weaver-compare`, `weaver-implement`, `weaver-resolve-drifts`;
+  - `.omp/agents/weaver-analysis.md` and `.omp/agents/weaver-implementer.md`;
   - `.omp/WATCHDOG.yml`.
 - **Comparing installed files:**
   - Pure content: read the file, normalise CRLF to LF, compare byte for byte with the embedded or generated content.
@@ -87,36 +88,4 @@ description: "Use when building the app structure, backend state, file watching,
   These outcomes are never conflated.
 - **Abandoned:** the CLI closes the connection on SIGINT, SIGTERM or a closed stdout (Windows: Ctrl+C or pipe closure). End-of-stream on a queued or presented round is `agent.STOP_WAITING`.
 - Round state, drafts included, lives only in backend memory. Free-text drafts reach it debounced at 300 ms. Nothing of a round is written to disk or logged.
-
-## window
-- **Single instance:** `tauri-plugin-single-instance` is registered first.
-  - A second launch passes its arguments and cwd to the running instance and exits.
-  - A folder argument is `developer.OPEN_PROJECT`. Otherwise the most recently focused window comes forward.
-- **Project identity:** the canonical path, with symlinks resolved and the Windows `\\?\` prefix stripped (`dunce`), compared case-insensitively on Windows.
-- **Window labels:** a project window is `p-<project hash>`; the welcome window is `welcome`.
-- **Window state:** `tauri-plugin-window-state` saves size, position, maximised and fullscreen per label, never visibility.
-  - A position on a missing monitor falls back to centred on the primary monitor.
-  - Default 1280×800, minimum 960×600.
-- **Close confirmation:**
-  - `WindowEvent::CloseRequested` is prevented while jobs of that project work, and `RunEvent::ExitRequested` while jobs of any project work.
-  - The confirmation is a native `tauri-plugin-dialog` dialog that says how many jobs work, so it works even with a hung webview.
-  - After confirming, the jobs are suspended (omp ended as in `requirements/tech#job`), then the window closes or the app exits.
-- **Last window:**
-  - Closing the last project window opens the welcome window.
-  - Closing the welcome window quits on Windows and Linux. On macOS the app stays in the Dock with no window, and `RunEvent::Reopen` shows the welcome window.
-  - Quit is `Cmd+Q` on macOS, `Ctrl+Q` and File › Quit elsewhere.
-- **Restore list:** written only when Weaver quits. It lists the project windows open then.
-- **Abnormal ends:** a shutdown that allows no confirmation suspends the jobs without asking. After a crash, the last-written resume registry brings them back as Suspended.
-
-## notification
-- **Sending:** `tauri-plugin-notification` ≥ 2.8, called from Rust only. Desktop clicks arrive through `Notification::on_action`. There is no Weaver setting; the OS permission decides.
-- **Foreground test, at send time:** the project window is visible, not minimised and `is_focused()`, tracked from `WindowEvent::Focused`. Another focused Weaver window does not count.
-- **Click routing:**
-  - Each notification gets an `i32` id from an app-wide counter, mapped to the project hash and its target (job, round or permission).
-  - A `tap` on a mapped id is `desktop.NOTIFICATION_CLICKED`: the project window is shown, unminimised and focused, and the UI is told what to show.
-  - Clicks on unmapped ids, or for a closed project, are ignored.
-- **Withdrawing:**
-  - Linux: `remove_active`.
-  - macOS and Windows cannot remove a shown notification. Weaver drops its mapping instead, so a later click only brings the window forward.
-  - All mappings are dropped when the window closes.
-- **Windows:** a click is reported only while the toast is on screen. A click from the Action Center launches Weaver, and single-instance focuses the latest window.
+- **Ask more:** the request names the round by its identity and the question by its position. The backend reads, from the presented round, its questions and options and either its asking job (name and identity) or, for a prepared question, the Drift's permanent identity, which the round keeps besides the short number it shows; it never reads the drafts. When another round, or none, is presented, nothing opens.

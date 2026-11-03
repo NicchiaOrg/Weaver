@@ -91,7 +91,7 @@ fn held_files(
 
 /// The three views of `image`, with `overlay` (a Proposal identity) drawn over the Model when it
 /// can be.
-pub fn snapshot(
+fn snapshot(
     project_id: &str,
     revision: u64,
     root: &Path,

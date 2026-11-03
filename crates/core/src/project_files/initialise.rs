@@ -37,7 +37,7 @@ pub struct Initialised {
     pub areas: Vec<&'static str>,
     /// The agent files written, relative to the project folder.
     pub agent_files: Vec<String>,
-    /// The `trama-req-*` files removed because the new project generates none of them.
+    /// The `weaver-req-*` files removed because the new project generates none of them.
     pub removed: Vec<String>,
 }
 
@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn differing_agent_files_are_all_listed_and_nothing_is_created_without_confirmation() {
         let dir = tempfile::tempdir().unwrap();
-        for file in [".agents/skills/trama-design/SKILL.md", ".omp/WATCHDOG.yml"] {
+        for file in [".agents/skills/weaver-design/SKILL.md", ".omp/WATCHDOG.yml"] {
             let path = dir.path().join(file);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, "mine").unwrap();
@@ -178,13 +178,13 @@ mod tests {
         assert_eq!(
             initialise(dir.path(), false),
             Err(InitialiseError::Conflicts(vec![
-                ".agents/skills/trama-design/SKILL.md".into(),
+                ".agents/skills/weaver-design/SKILL.md".into(),
                 ".omp/WATCHDOG.yml".into()
             ]))
         );
         assert_eq!(
             conflicts(dir.path()),
-            [".agents/skills/trama-design/SKILL.md", ".omp/WATCHDOG.yml"]
+            [".agents/skills/weaver-design/SKILL.md", ".omp/WATCHDOG.yml"]
         );
         assert_eq!(snapshot(dir.path()), before, "nothing was created");
         assert_eq!(
@@ -224,11 +224,11 @@ mod tests {
     #[test]
     fn requirement_skills_left_by_an_earlier_project_are_removed() {
         let dir = tempfile::tempdir().unwrap();
-        let old = dir.path().join(".agents/skills/trama-req-ui-old/SKILL.md");
+        let old = dir.path().join(".agents/skills/weaver-req-ui-old/SKILL.md");
         fs::create_dir_all(old.parent().unwrap()).unwrap();
         fs::write(&old, "old").unwrap();
         let done = initialise(dir.path(), false).unwrap();
-        assert_eq!(done.removed, [".agents/skills/trama-req-ui-old/SKILL.md"]);
+        assert_eq!(done.removed, [".agents/skills/weaver-req-ui-old/SKILL.md"]);
         assert!(!old.exists());
     }
 

@@ -84,12 +84,20 @@ pub fn list(root: &Path, rel: &str) -> Result<Vec<TreeEntry>, String> {
 
 /// The paths among `entries` that git ignores; none when git cannot say (not a repository, no git).
 fn git_ignored(root: &Path, entries: &[TreeEntry]) -> Vec<String> {
-    if entries.is_empty() {
+    let paths: Vec<&str> = entries.iter().map(|entry| entry.path.as_str()).collect();
+    git_ignored_paths(root, &paths)
+}
+
+/// The paths among `paths` (relative to `root`, with `/`) that git ignores, with one
+/// `git check-ignore -z --stdin`; none when git cannot say (not a repository, no git). Also what
+/// the File view's listing leaves out.
+pub(crate) fn git_ignored_paths(root: &Path, paths: &[&str]) -> Vec<String> {
+    if paths.is_empty() {
         return Vec::new();
     }
     let mut input: Vec<u8> = Vec::new();
-    for entry in entries {
-        input.extend_from_slice(entry.path.as_bytes());
+    for path in paths {
+        input.extend_from_slice(path.as_bytes());
         input.push(0);
     }
     let Ok(mut child) = process::command("git", ["check-ignore", "-z", "--stdin"])

@@ -31,6 +31,9 @@ pub struct CommandRequest {
     /// `WEAVER_GENERAL`, the token of the project's working General, when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub general: Option<String>,
+    /// `WEAVER_ASK`, the identity of a working Ask more conversation of the project, when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<String>,
 }
 
 /// What a command printed.
@@ -93,9 +96,10 @@ mod tests {
             state: Some("doing".into()),
             input: Map::new(),
             general: None,
+            ask: None,
         };
         let text = serde_json::to_string(&request).unwrap();
-        assert!(!text.contains("general"));
+        assert!(!text.contains("general") && !text.contains("\"ask\""));
         assert_eq!(
             serde_json::from_str::<CommandRequest>(&text).unwrap(),
             request

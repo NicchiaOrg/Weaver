@@ -11,6 +11,7 @@ use std::path::Path;
 
 use super::kinds::{JobKind, Role};
 use crate::settings::{ModelSettings, Permissions};
+use crate::system_certificates::Variables;
 
 /// What the command line of a job depends on, copied from the settings when the job starts:
 /// running jobs never read the settings again.
@@ -81,7 +82,7 @@ fn yaml_string(text: &str) -> String {
 /// The overlay file (`<app local data>/overlays/<job id>.yml`): omp's own auto-backgrounding and
 /// tool timeout are off, so that `weaver question new` can wait as long as the developer needs. A
 /// Run also gets the advisor model (the scan model, when set) and the advisor of the
-/// `trama-implementer` sub-agents.
+/// `weaver-implementer` sub-agents.
 pub fn overlay_text(kind: JobKind, scan_model: &str) -> String {
     let mut text =
         String::from("bash:\n  autoBackground:\n    enabled: false\ntools:\n  maxTimeout: 0\n");
@@ -90,7 +91,7 @@ pub fn overlay_text(kind: JobKind, scan_model: &str) -> String {
         if !scan.is_empty() {
             text.push_str(&format!("modelRoles:\n  advisor: {}\n", yaml_string(scan)));
         }
-        text.push_str("task:\n  agentAdvisor:\n    trama-implementer: \"on\"\n");
+        text.push_str("task:\n  agentAdvisor:\n    weaver-implementer: \"on\"\n");
     }
     text
 }
@@ -115,20 +116,33 @@ pub fn weaver_env(
     env
 }
 
-/// The whole environment of the process: the inherited variables but every `WEAVER_*`, then the
-/// ones Weaver sets, then `PATH`.
+/// The whole environment of the process: the inherited variables but every `WEAVER_*` and those
+/// of `certificates`, then the ones Weaver sets, then the System Certificates variables of this
+/// start, then `PATH`. `certificates` is never part of `set`, which the registry keeps.
 pub fn child_env(
     inherited: impl IntoIterator<Item = (OsString, OsString)>,
     set: &BTreeMap<String, String>,
+    certificates: &Variables,
     path: &OsStr,
 ) -> Vec<(OsString, OsString)> {
     let mut env: Vec<(OsString, OsString)> = inherited
         .into_iter()
-        .filter(|(name, _)| !is_weaver(name) && !name.eq_ignore_ascii_case("PATH"))
+        .filter(|(name, _)| {
+            !is_weaver(name)
+                && !name.eq_ignore_ascii_case("PATH")
+                && !certificates
+                    .iter()
+                    .any(|(own, _)| name.eq_ignore_ascii_case(own))
+        })
         .collect();
     env.extend(
         set.iter()
             .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+    );
+    env.extend(
+        certificates
+            .iter()
+            .map(|(name, value)| (OsString::from(name), value.clone())),
     );
     env.push((OsString::from("PATH"), path.to_owned()));
     env
@@ -301,11 +315,11 @@ mod tests {
         assert_eq!(overlay_text(JobKind::Design, ""), base);
         assert_eq!(
             overlay_text(JobKind::Run, "s/m:high"),
-            format!("{base}modelRoles:\n  advisor: \"s/m:high\"\ntask:\n  agentAdvisor:\n    trama-implementer: \"on\"\n")
+            format!("{base}modelRoles:\n  advisor: \"s/m:high\"\ntask:\n  agentAdvisor:\n    weaver-implementer: \"on\"\n")
         );
         assert_eq!(
             overlay_text(JobKind::Run, " "),
-            format!("{base}task:\n  agentAdvisor:\n    trama-implementer: \"on\"\n")
+            format!("{base}task:\n  agentAdvisor:\n    weaver-implementer: \"on\"\n")
         );
         // It is YAML.
         let value: serde_yaml::Value =
@@ -348,7 +362,7 @@ mod tests {
         ]
         .map(|(n, v)| (OsString::from(n), OsString::from(v)));
         let set = BTreeMap::from([("WEAVER_JOB".to_owned(), "new".to_owned())]);
-        let env = child_env(inherited, &set, OsStr::new("/w/bin:/x"));
+        let env = child_env(inherited, &set, &Variables::new(), OsStr::new("/w/bin:/x"));
         let names: Vec<String> = env
             .iter()
             .map(|(n, _)| n.to_string_lossy().into_owned())
@@ -356,5 +370,34 @@ mod tests {
         assert_eq!(names, ["HOME", "WEAVER_JOB", "PATH"]);
         assert_eq!(env[1].1, "new");
         assert_eq!(env[2].1, "/w/bin:/x");
+    }
+
+    #[test]
+    fn certificate_variables_win_over_inherited_ones_and_stay_out_of_the_set_env() {
+        let inherited = [("SSL_CERT_FILE", "/old.pem"), ("HOME", "/h")]
+            .map(|(n, v)| (OsString::from(n), OsString::from(v)));
+        let set = BTreeMap::from([("WEAVER_JOB".to_owned(), "j".to_owned())]);
+        let certificates: Variables = vec![("SSL_CERT_FILE", OsString::from("/bundle.pem"))];
+        let env = child_env(inherited, &set, &certificates, OsStr::new("/p"));
+        let values: Vec<(String, String)> = env
+            .iter()
+            .map(|(n, v)| {
+                (
+                    n.to_string_lossy().into_owned(),
+                    v.to_string_lossy().into_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            values,
+            [
+                ("HOME", "/h"),
+                ("WEAVER_JOB", "j"),
+                ("SSL_CERT_FILE", "/bundle.pem"),
+                ("PATH", "/p"),
+            ]
+            .map(|(n, v)| (n.to_owned(), v.to_owned()))
+        );
+        assert!(!set.contains_key("SSL_CERT_FILE"));
     }
 }

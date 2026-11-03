@@ -13,16 +13,23 @@
 use std::path::Path;
 
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_dialog::{
+    DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
+};
 use tauri_plugin_window_state::AppHandleExt;
 
+use super::fullscreen::Fullscreen;
 use super::jobs::BoxFuture;
-use super::manager::{ConfirmPrompt, Shell, ShowRequest};
+use super::manager::{ConfirmPrompt, Confirmation, Shell, ShowRequest};
 use super::registry::WELCOME_LABEL;
+use super::unsaved::{self, FilesSaveFailed};
 use super::STATE_FLAGS;
+use crate::blocking;
 use crate::events::{self, EventName, ProjectChanged};
+use crate::file_tabs::{SaveMode, SaveOutcome};
 use crate::log_warn;
 use crate::pictures::Rebuild;
+use crate::state::AppState;
 
 /// Size of a project window without a saved state.
 pub const DEFAULT_SIZE: (f64, f64) = (1280.0, 800.0);
@@ -33,19 +40,51 @@ pub const WELCOME_SIZE: (f64, f64) = (640.0, 480.0);
 
 pub struct TauriShell {
     app: AppHandle,
+    fullscreen: Fullscreen,
 }
 
 impl TauriShell {
     pub fn new(app: AppHandle) -> Self {
-        Self { app }
+        Self {
+            app,
+            fullscreen: Fullscreen::default(),
+        }
+    }
+
+    /// Shows, restores and focuses a window: back from the background, in the order the
+    /// requirements give (`show()`, `unminimize()`, `set_focus()`).
+    fn bring_forward(&self, window: &WebviewWindow) {
+        self.reveal_window(window);
+        let _ = window.set_focus();
+    }
+
+    /// Shows a window and restores it when minimised, without taking the focus; a window that left
+    /// fullscreen to go to the background goes back to fullscreen.
+    fn reveal_window(&self, window: &WebviewWindow) {
+        let _ = window.show();
+        let _ = window.unminimize();
+        self.fullscreen.restore(window);
     }
 }
 
-/// Restores, shows and focuses a window.
-fn bring_forward(window: &WebviewWindow) {
-    let _ = window.unminimize();
-    let _ = window.show();
-    let _ = window.set_focus();
+/// The button a native dialog reports as a [`Confirmation`]. The platforms report a custom button
+/// by its label or as `Yes` / `No` / `Ok`; anything else is a cancel. The middle button of a
+/// three-button dialog is `second`: its label and what pressing it means.
+fn confirmation_of(
+    pressed: &MessageDialogResult,
+    accept: &str,
+    second: Option<(&str, Confirmation)>,
+) -> Confirmation {
+    match pressed {
+        MessageDialogResult::Yes | MessageDialogResult::Ok => Confirmation::Accept,
+        MessageDialogResult::No => second.map_or(Confirmation::Cancel, |(_, meaning)| meaning),
+        MessageDialogResult::Custom(label) if label == accept => Confirmation::Accept,
+        MessageDialogResult::Custom(label) => match second {
+            Some((second, meaning)) if second == label => meaning,
+            _ => Confirmation::Cancel,
+        },
+        _ => Confirmation::Cancel,
+    }
 }
 
 impl Shell for TauriShell {
@@ -59,13 +98,13 @@ impl Shell for TauriShell {
                 .visible(false)
                 .build()
                 .map_err(|error| error.to_string())?;
-        bring_forward(&window);
+        self.bring_forward(&window);
         Ok(())
     }
 
     fn show_welcome(&self) -> Result<(), String> {
         if let Some(window) = self.app.get_webview_window(WELCOME_LABEL) {
-            bring_forward(&window);
+            self.bring_forward(&window);
             return Ok(());
         }
         let window = WebviewWindowBuilder::new(
@@ -81,7 +120,7 @@ impl Shell for TauriShell {
         .visible(false)
         .build()
         .map_err(|error| error.to_string())?;
-        bring_forward(&window);
+        self.bring_forward(&window);
         Ok(())
     }
 
@@ -94,17 +133,33 @@ impl Shell for TauriShell {
     fn focus(&self, label: &str) -> bool {
         match self.app.get_webview_window(label) {
             Some(window) => {
-                bring_forward(&window);
+                self.bring_forward(&window);
                 true
             }
             None => false,
         }
     }
 
-    fn focus_any(&self) -> bool {
-        match self.app.webview_windows().into_values().next() {
+    fn focus_any(&self) -> Option<String> {
+        let (label, window) = self.app.webview_windows().into_iter().next()?;
+        self.bring_forward(&window);
+        Some(label)
+    }
+
+    fn hide(&self, label: &str) -> Result<(), String> {
+        let window = self
+            .app
+            .get_webview_window(label)
+            .ok_or_else(|| format!("the window {label} does not exist"))?;
+        self.fullscreen
+            .hide(&window)
+            .map_err(|error| error.to_string())
+    }
+
+    fn reveal(&self, label: &str) -> bool {
+        match self.app.get_webview_window(label) {
             Some(window) => {
-                bring_forward(&window);
+                self.reveal_window(&window);
                 true
             }
             None => false,
@@ -112,6 +167,7 @@ impl Shell for TauriShell {
     }
 
     fn destroy(&self, label: &str) {
+        self.fullscreen.forget(label);
         if let Some(window) = self.app.get_webview_window(label) {
             if let Err(error) = window.destroy() {
                 log_warn!("the window {label} could not be closed: {error}");
@@ -123,22 +179,80 @@ impl Shell for TauriShell {
         self.app.webview_windows().len()
     }
 
-    fn confirm(&self, prompt: ConfirmPrompt) -> BoxFuture<bool> {
+    fn confirm(&self, prompt: ConfirmPrompt) -> BoxFuture<Confirmation> {
         let (answer, receiver) = tokio::sync::oneshot::channel();
+        let ConfirmPrompt {
+            title,
+            message,
+            accept,
+            discard,
+            background,
+        } = prompt;
+        // The middle button: `Discard all`, or `Keep working in background`; never both.
+        let second = discard
+            .map(|label| (label, Confirmation::Discard))
+            .or_else(|| background.map(|label| (label, Confirmation::Background)));
+        let buttons = match &second {
+            Some((label, _)) => MessageDialogButtons::YesNoCancelCustom(
+                accept.clone(),
+                label.clone(),
+                "Cancel".to_owned(),
+            ),
+            None => MessageDialogButtons::OkCancelCustom(accept.clone(), "Cancel".to_owned()),
+        };
         self.app
             .dialog()
-            .message(prompt.message)
-            .title(prompt.title)
+            .message(message)
+            .title(title)
             .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                prompt.accept,
-                "Cancel".to_owned(),
-            ))
-            .show(move |accepted| {
-                let _ = answer.send(accepted);
+            .buttons(buttons)
+            .show_with_result(move |pressed| {
+                let second = second
+                    .as_ref()
+                    .map(|(label, meaning)| (label.as_str(), *meaning));
+                let _ = answer.send(confirmation_of(&pressed, &accept, second));
             });
         // A dialog that never answered (the app is going away) counts as a cancel.
-        Box::pin(async move { receiver.await.unwrap_or(false) })
+        Box::pin(async move { receiver.await.unwrap_or(Confirmation::Cancel) })
+    }
+
+    fn request_tab_texts(&self, project_id: &str) -> bool {
+        unsaved::emit_flush(&self.app, project_id)
+    }
+
+    fn save_tab(
+        &self,
+        project_id: &str,
+        path: &str,
+        text: &str,
+    ) -> BoxFuture<Result<String, String>> {
+        let tabs = self.app.state::<AppState>().file_tabs.clone();
+        let (project_id, path, text) = (project_id.to_owned(), path.to_owned(), text.to_owned());
+        Box::pin(async move {
+            let outcome =
+                blocking::disk(move || tabs.save(&project_id, &path, &text, SaveMode::Check))
+                    .await
+                    .map_err(|error| error.message)?;
+            match outcome {
+                SaveOutcome::Saved { hash } => Ok(hash),
+                SaveOutcome::Changed => {
+                    Err("the file changed on disk since it was opened".to_owned())
+                }
+                SaveOutcome::Gone => Err("the file no longer exists".to_owned()),
+                SaveOutcome::Failed(reason) => Err(reason),
+            }
+        })
+    }
+
+    fn save_failed(&self, failed: FilesSaveFailed) {
+        unsaved::emit_save_failed(&self.app, &failed);
+    }
+
+    fn drop_tabs(&self, project_id: &str) {
+        self.app
+            .state::<AppState>()
+            .file_tabs
+            .close_project(project_id);
     }
 
     fn exit(&self, code: i32) {
@@ -174,5 +288,50 @@ impl Shell for TauriShell {
         if let Err(error) = self.app.save_window_state(STATE_FLAGS) {
             log_warn!("the size and position of the windows were not saved: {error}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn custom(label: &str) -> MessageDialogResult {
+        MessageDialogResult::Custom(label.to_owned())
+    }
+
+    #[test]
+    fn the_middle_button_of_the_close_confirmation_keeps_the_jobs_working_in_the_background() {
+        let second = Some(("Keep working in background", Confirmation::Background));
+        let answer =
+            |pressed: MessageDialogResult| confirmation_of(&pressed, "Suspend and Close", second);
+        assert_eq!(answer(custom("Suspend and Close")), Confirmation::Accept);
+        assert_eq!(
+            answer(custom("Keep working in background")),
+            Confirmation::Background
+        );
+        assert_eq!(answer(custom("Cancel")), Confirmation::Cancel);
+        assert_eq!(answer(MessageDialogResult::Yes), Confirmation::Accept);
+        assert_eq!(answer(MessageDialogResult::No), Confirmation::Background);
+        assert_eq!(answer(MessageDialogResult::Cancel), Confirmation::Cancel);
+    }
+
+    #[test]
+    fn the_middle_button_of_the_unsaved_changes_confirmation_discards() {
+        let second = Some(("Discard all", Confirmation::Discard));
+        let answer = |pressed: MessageDialogResult| confirmation_of(&pressed, "Save all", second);
+        assert_eq!(answer(custom("Save all")), Confirmation::Accept);
+        assert_eq!(answer(custom("Discard all")), Confirmation::Discard);
+        assert_eq!(answer(MessageDialogResult::No), Confirmation::Discard);
+        assert_eq!(answer(custom("Cancel")), Confirmation::Cancel);
+    }
+
+    #[test]
+    fn a_confirmation_with_two_buttons_has_no_middle_one() {
+        let answer =
+            |pressed: MessageDialogResult| confirmation_of(&pressed, "Suspend and Quit", None);
+        assert_eq!(answer(custom("Suspend and Quit")), Confirmation::Accept);
+        assert_eq!(answer(MessageDialogResult::Ok), Confirmation::Accept);
+        assert_eq!(answer(MessageDialogResult::No), Confirmation::Cancel);
+        assert_eq!(answer(custom("Cancel")), Confirmation::Cancel);
     }
 }

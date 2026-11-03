@@ -811,7 +811,7 @@ mod tests {
         assert!(dir.path().join(".weaver/model/system.md").is_file());
         assert!(dir
             .path()
-            .join(".agents/skills/trama-design/SKILL.md")
+            .join(".agents/skills/weaver-design/SKILL.md")
             .is_file());
         // An Empty Model is not checked when the window opens, and nothing is reported.
         assert_eq!(env.last().unwrap().check, SkillsCheck::none());
@@ -1007,7 +1007,9 @@ mod tests {
         let setup = setup(&env);
         open(&setup, dir.path());
         until(&env, |all| all.last().is_some_and(|s| s.check.opening == 1)).await;
-        let skill = dir.path().join(".agents/skills/trama-req-ui-main/SKILL.md");
+        let skill = dir
+            .path()
+            .join(".agents/skills/weaver-req-ui-main/SKILL.md");
         assert!(!skill.exists());
 
         fs::write(

@@ -21,6 +21,11 @@ export function useQuestionRound(): QuestionRoundState {
   return value;
 }
 
+/** The round of the window when it has the layer (the Jobs view also renders without it). */
+export function useOptionalQuestionRound(): QuestionRoundState | null {
+  return useContext(QuestionRoundContext);
+}
+
 /** What is on screen once a draft was written, before the backend answers. */
 function withDraft(round: QuestionRoundView, action: Extract<ActionInput, { kind: "draft" }>): QuestionRoundView {
   return {

@@ -10,7 +10,7 @@ import { subjectText, type ViewName } from "@/components/views/focus-model";
 import { useViews } from "@/components/views/views-state";
 
 /**
- * The focus bar under a view's toolbar: what the focus is about, the step name, `<n> of <N>` with
+ * The focus bar under a view's header: what the focus is about, the step name, `<n> of <N>` with
  * `Previous` / `Next` (only when there are several steps), `<M> not found`, on Requirements the
  * `Only these` toggle, and `Clear`. Step changes are announced to assistive technologies.
  */

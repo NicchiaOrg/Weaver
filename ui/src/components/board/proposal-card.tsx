@@ -1,7 +1,8 @@
-import { Check, ChevronDown, Cpu, Sparkles, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, Cpu, Settings, Sparkles, Trash2, X } from "lucide-react";
 import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { ProposalView } from "@/bindings/ProposalView";
+import { AskMoreButton } from "@/components/ask/ask-button";
 import { useBoard } from "@/components/board/board-state";
 import { useBoardUi } from "@/components/board/board-ui";
 import { registerCardRenderer, type BoardCardOf } from "@/components/board/card-registry";
@@ -179,8 +180,8 @@ function ModelControl({ card }: { card: ProposalCardData }) {
       <Tooltip>
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
-            <Button variant="outline" size="icon" className="size-8" aria-label="Model">
-              <Cpu aria-hidden />
+            <Button variant="outline" size="icon" className="ml-auto size-8" aria-label="Model">
+              <Settings aria-hidden />
             </Button>
           </PopoverTrigger>
         </TooltipTrigger>
@@ -327,8 +328,8 @@ function ReworkDialog({
 /**
  * The controls of a Proposal: `Approve`, or `Refine` in its place when the backend says a click
  * starts a refinement job; the `Reject` split button (its menu has `Rework with
- * feedback…`, absent once the Proposal is itself a rework), the model control, and `View
- * requirements`. A Draft a refinement left half-way has only `Refine` and
+ * feedback…`, absent once the Proposal is itself a rework), `View requirements`, and last the
+ * model control, pushed to the right edge of the row (also when it wraps). A Draft a refinement left half-way has only `Refine` and
  * `Discard`. Every reason a control is disabled comes from the backend, in its fixed order.
  */
 function ProposalControls({ card }: { card: ProposalCardData }) {
@@ -413,9 +414,9 @@ function ProposalControls({ card }: { card: ProposalCardData }) {
           </DropdownMenu>
         ) : null}
       </div>
-      {view.carriesTasks ? <ModelControl card={card} /> : null}
       <FocusButton view="requirements" refs={view.scopeRefs} subject={subject} />
-      <div onClick={(event) => event.stopPropagation()}>
+      {/* `contents`: the dialogs live in the React tree of the card but take no room in its row. */}
+      <div className="contents" onClick={(event) => event.stopPropagation()}>
         <RejectDialog
           name={name}
           open={dialog === "reject"}
@@ -432,6 +433,7 @@ function ProposalControls({ card }: { card: ProposalCardData }) {
           returnFocus={arrow}
         />
       </div>
+      {view.carriesTasks ? <ModelControl card={card} /> : null}
     </>
   );
 }
@@ -630,16 +632,27 @@ function ProposalDetails({ card }: { card: ProposalCardData }) {
   );
 }
 
+/** The controls of the card, then `Ask more` (also for a resolution and for a Draft a refinement left half-way). */
+function ProposalFooter({ card }: { card: ProposalCardData }) {
+  const { head } = card;
+  return (
+    <>
+      <ProposalControls card={card} />
+      <AskMoreButton target={{ kind: "proposal", id: head.id }} noun="Proposal" name={head.shortNumber ?? head.id} />
+    </>
+  );
+}
+
 registerCardRenderer("proposal", {
   Card: ProposalCard,
   Details: ProposalDetails,
-  Footer: ProposalControls,
+  Footer: ProposalFooter,
   description: (card) => `${standingText(card)}${card.proposalKind === "change" ? "" : ` · ${card.proposalKind}`}`,
 });
 
 registerCardRenderer("resolution", {
   Card: ResolutionCard,
   Details: ProposalDetails,
-  Footer: ProposalControls,
+  Footer: ProposalFooter,
   description: (card) => `${standingText(card)} · resolution`,
 });

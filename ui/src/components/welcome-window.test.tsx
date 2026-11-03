@@ -2,11 +2,13 @@ import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { SettingsSnapshot } from "@/bindings/SettingsSnapshot";
 import type { StartupFailure } from "@/bindings/StartupFailure";
 import type { WelcomeState } from "@/bindings/WelcomeState";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WelcomeWindow } from "@/components/welcome-window";
 import { OmpProvider } from "@/hooks/use-omp";
+import { SettingsProvider } from "@/hooks/use-settings";
 import { call, on } from "@/lib/backend";
 
 vi.mock("@/lib/backend", () => ({
@@ -20,14 +22,43 @@ const gone = { path: "/work/gone", name: "gone", opened: "2026-11-01T07:00:00.00
 
 const state = (recent: WelcomeState["recent"]): WelcomeState => ({ name: "Weaver", version: "0.1.0", recent });
 
+const settings: SettingsSnapshot = {
+  revision: 1,
+  settings: {
+    ompPath: "",
+    models: { analysis: "", scan: "", execution: "" },
+    maxParallelAgents: 20,
+    language: "",
+    theme: "auto",
+    editor: { preset: "vscode", command: "" },
+    permissions: "yolo",
+    systemCertificates: { enabled: false },
+  },
+  issues: [],
+  fileError: null,
+  schema: [
+    {
+      key: "systemCertificates.enabled",
+      title: "System Certificates",
+      description: "About System Certificates.",
+      advice: null,
+      kind: "boolean",
+      defaultValue: "false",
+      choices: [],
+    },
+  ],
+};
+
 let answers: Record<string, (args?: unknown) => unknown>;
 
 function render_() {
   return render(
     <TooltipProvider>
-      <OmpProvider>
-        <WelcomeWindow />
-      </OmpProvider>
+      <SettingsProvider>
+        <OmpProvider>
+          <WelcomeWindow />
+        </OmpProvider>
+      </SettingsProvider>
     </TooltipProvider>,
   );
 }
@@ -38,6 +69,8 @@ beforeEach(() => {
     startup_failures: () => [],
     update_status: () => ({ available: null, downloading: false }),
     omp_status: () => new Promise(() => {}),
+    settings_get: () => settings,
+    system_certificates_status: () => ({ revision: 1, phase: "off", automatic: false, count: null, writtenAt: null, error: null, turnOnNotice: false, failureBanner: false, failureReason: null }),
   };
   vi.mocked(on).mockImplementation((() => Promise.resolve(() => {})) as unknown as typeof on);
   vi.mocked(call).mockImplementation(((name: string, args?: unknown) => {
@@ -51,6 +84,27 @@ describe("welcome window", () => {
     render_();
     expect(await screen.findByText("Version 0.1.0")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1, name: "Weaver" })).toBeInTheDocument();
+  });
+
+  it("shows the System Certificates notice and the failure banner without Open Settings", async () => {
+    answers.system_certificates_status = () => ({
+      revision: 2,
+      phase: "failed",
+      automatic: true,
+      count: null,
+      writtenAt: null,
+      error: "no certificate authority found",
+      turnOnNotice: true,
+      failureBanner: true,
+      failureReason: "no certificate authority found",
+    });
+    render_();
+    const notice = await screen.findByRole("status", { name: "System Certificates turned on" });
+    const failure = screen.getByRole("alert", { name: "System Certificates export failed" });
+    for (const banner of [notice, failure]) {
+      expect(within(banner).getByRole("button", { name: "Close" })).toBeInTheDocument();
+      expect(within(banner).queryByRole("button", { name: "Open Settings" })).not.toBeInTheDocument();
+    }
   });
 
   it("lists the recent projects with the folder name and the full path, most recent first", async () => {
@@ -139,9 +193,16 @@ describe("welcome window", () => {
       loginProvider: null,
       terminalProblem: null,
       logout: null,
+      waitingForExport: false,
+      installerFailure: null,
     });
     render_();
     expect(await screen.findByRole("button", { name: "Install omp" })).toBeInTheDocument();
+  });
+
+  it("shows the System Certificates switch under the omp status box", async () => {
+    render_();
+    expect(await screen.findByRole("switch", { name: "System Certificates" })).not.toBeChecked();
   });
 
   it("tells a project of the last session that could not open", async () => {

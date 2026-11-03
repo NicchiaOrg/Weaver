@@ -1,0 +1,7 @@
+# Files
+
+The File view of a project window: a tree of the project's files and folders, and an editor that opens files in tabs with the colours of their syntax, for quick changes next to the developer's own editor. It has no completion, no diagnostics and no language server, and every file it shows can also be opened in the developer's editor. From the tree the developer creates, renames, moves and deletes files and folders; a deletion goes to the system's trash.
+
+Weaver reads and watches only what the File view shows: nothing of the code while it is closed; while it is open, only the folders expanded in its tree and the files open in its tabs, one by one. It never reads a folder with everything inside it, builds an index or searches the project. The tree leaves out what git ignores and never shows `.git`; `.weaver/` shows but stays read-only, because Weaver writes it itself. Files of the code never enter the project's picture and never make it rebuild.
+
+There is no lock on the files of the code: a save writes only when the file on disk is still the one its tab read, otherwise the developer chooses what to keep. While an agent of the project changes a file open in a tab, that tab becomes read-only until the agent's tools on it end. This is only an indication: sub-agents, commands and other programs change files without it, and the check at saving stays the protection.

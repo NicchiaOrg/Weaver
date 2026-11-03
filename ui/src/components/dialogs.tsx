@@ -19,6 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useViewShown } from "@/components/view-shown";
 
 /** Where the focus goes when a dialog closes, when the control that opened it will be gone. */
 export type ReturnFocus = React.RefObject<HTMLElement | null>;
@@ -72,8 +73,10 @@ export function FormDialog({
   className,
 }: FormDialogProps) {
   const onCloseAutoFocus = useFocusReturn(open, returnFocus);
+  // A dialog of a view the window does not show hides, and shows again when the view does.
+  const shown = useViewShown();
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open && shown} onOpenChange={onOpenChange}>
       <DialogContent className={className} onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>

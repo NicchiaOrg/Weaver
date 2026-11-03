@@ -1,16 +1,30 @@
 //! Opening the system terminal for omp's installer and login (`requirements/tech#omp-setup`).
 //!
 //! The command runs where the developer sees it and the terminal stays open at its end. These
-//! launches do pass through a shell, so [`quote_posix`], [`quote_powershell`] and
-//! [`applescript_string`] are the one place text is quoted for a target; the only text inserted
-//! into a command is the absolute path of omp and the id of a provider of the fixed list
-//! ([`Provider`]).
+//! launches do pass through a shell, so [`quote`] is the one place text is quoted for a target
+//! shell; the only text inserted into a command is the absolute path of omp, the id of a provider
+//! of the fixed list ([`Provider`]), the path of the System Certificates bundle and the path of
+//! the installer marker.
 //!
 //! | System  | Launch |
 //! |---------|--------|
 //! | macOS   | `/usr/bin/osascript` with fixed `-e` lines: Terminal runs `do script "<command>"` and comes forward |
 //! | Windows | `powershell.exe -NoExit -NoProfile -ExecutionPolicy Bypass -Command <command>` in a new console |
 //! | Linux   | the first available of `x-terminal-emulator -e`, `gnome-terminal --`, `konsole -e`, `xfce4-terminal -x`, `xterm -e`, running `sh -c '<command>; printf "\nPress Enter to close"; read _'` |
+//!
+//! # System Certificates
+//!
+//! With the variables of `crate::system_certificates` given, they reach the terminal like this:
+//! Windows, in the environment of the `powershell.exe` process; macOS, Terminal starts the
+//! developer's own shell, so the command of `do script` starts with `/usr/bin/env <NAME>=<path> … `
+//! and the rest runs under `/bin/sh -c`; Linux, the script starts with `export <NAME>=<path> …;`.
+//! The command to copy, when no terminal can be opened, includes them too.
+//!
+//! # The installer
+//!
+//! It downloads the official installer to a temporary file and runs it, never piping it into a
+//! shell, so that a failed download counts as a failure; then it writes the exit code of the first
+//! step that failed, else `0`, to the marker (`super::installer`) and deletes the temporary file.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -18,11 +32,12 @@ use std::time::Duration;
 
 use super::lookup::Os;
 use super::providers::Provider;
+use crate::system_certificates::Variables;
 
 /// The official installer for macOS and Linux.
-pub const INSTALLER_UNIX: &str = "curl -fsSL https://omp.sh/install | sh";
+pub const INSTALLER_UNIX_URL: &str = "https://omp.sh/install";
 /// The official installer for Windows.
-pub const INSTALLER_WINDOWS: &str = "irm https://omp.sh/install.ps1 | iex";
+pub const INSTALLER_WINDOWS_URL: &str = "https://omp.sh/install.ps1";
 
 /// The emulators tried on Linux, in order, with the flag that precedes the command.
 pub const LINUX_TERMINALS: [(&str, &str); 5] = [
@@ -43,7 +58,7 @@ const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 pub enum TerminalError {
     #[error("the path of omp is not absolute")]
     NotAbsolute,
-    #[error("the path of omp holds a line break or a quote that cannot be passed to a terminal")]
+    #[error("a path or value holds a line break or a quote that cannot be passed to a terminal")]
     UnsafePath,
     #[error("no terminal emulator was found")]
     NoTerminal,
@@ -51,25 +66,35 @@ pub enum TerminalError {
     Launch(String),
 }
 
-/// `text` in single quotes for `sh`, `bash`, `zsh`, `dash` and `fish`: a quote inside becomes
-/// `'\''`.
-pub fn quote_posix(text: &str) -> String {
-    format!("'{}'", text.replace('\'', r"'\''"))
+/// The shell a command is quoted for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shell {
+    /// `sh`, `bash`, `zsh`, `dash` and `fish`.
+    Posix,
+    /// Windows PowerShell.
+    PowerShell,
 }
 
-/// `text` in single quotes for PowerShell: a quote inside is doubled. PowerShell also reads the
-/// typographic single quotes as quotes, so they are doubled too.
-pub fn quote_powershell(text: &str) -> String {
-    let mut quoted = String::with_capacity(text.len() + 2);
-    quoted.push('\'');
-    for c in text.chars() {
-        quoted.push(c);
-        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
-            quoted.push(c);
+/// `text` as one word of `shell`, with nothing in it left to the shell to read: in single quotes,
+/// where a quote inside is `'\''` for a POSIX shell and doubled for PowerShell, which also reads
+/// the typographic single quotes as quotes, so those are doubled too. The one function that
+/// quotes for a terminal.
+pub fn quote(shell: Shell, text: &str) -> String {
+    match shell {
+        Shell::Posix => format!("'{}'", text.replace('\'', r"'\''")),
+        Shell::PowerShell => {
+            let mut quoted = String::with_capacity(text.len() + 2);
+            quoted.push('\'');
+            for c in text.chars() {
+                quoted.push(c);
+                if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
+                    quoted.push(c);
+                }
+            }
+            quoted.push('\'');
+            quoted
         }
     }
-    quoted.push('\'');
-    quoted
 }
 
 /// `text` as an AppleScript string literal: `\` and `"` are escaped.
@@ -77,31 +102,178 @@ pub fn applescript_string(text: &str) -> String {
     format!("\"{}\"", text.replace('\\', r"\\").replace('"', r#"\""#))
 }
 
-/// The installer command for `os`.
-pub fn installer_command(os: Os) -> &'static str {
-    if os == Os::Windows {
-        INSTALLER_WINDOWS
-    } else {
-        INSTALLER_UNIX
+/// What the terminal runs.
+#[derive(Debug, Clone, Copy)]
+pub enum Task<'a> {
+    /// omp's official installer; it leaves its exit code in `marker`.
+    Installer { marker: &'a Path },
+    /// `omp login <provider>`.
+    Login {
+        omp: &'a Path,
+        provider: &'a Provider,
+    },
+}
+
+/// A task written for the system the terminal is on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Command {
+    /// What the terminal is told to run.
+    pub terminal: String,
+    /// Windows: the certificate variables for the process environment of `powershell.exe`; the
+    /// other systems carry them in `terminal`.
+    pub environment: Vec<(String, String)>,
+    /// What the developer can copy into a terminal of his own when none can be opened: the same
+    /// task with the certificate variables.
+    pub copy: String,
+}
+
+/// The command to copy when `task` cannot be written for the terminal (a path that cannot be
+/// passed): no certificate variable, no marker.
+pub fn plain_command(os: Os, task: Task) -> String {
+    match task {
+        Task::Login { provider, .. } => format!("omp login {}", provider.id),
+        Task::Installer { .. } if os == Os::Windows => format!(
+            "Invoke-RestMethod {INSTALLER_WINDOWS_URL} -OutFile install.ps1; powershell.exe -NoProfile -ExecutionPolicy Bypass -File install.ps1"
+        ),
+        Task::Installer { .. } => {
+            format!("curl -fsSL {INSTALLER_UNIX_URL} -o install.sh && sh install.sh")
+        }
     }
 }
 
-/// `omp login <provider>` for `os`, with the absolute path of omp quoted for the shell of the
-/// terminal (PowerShell on Windows, a POSIX-like shell elsewhere).
-pub fn login_command(os: Os, omp: &Path, provider: &Provider) -> Result<String, TerminalError> {
-    let text = omp.to_str().ok_or(TerminalError::UnsafePath)?;
+/// Writes `task` for `os`, with `variables` (the certificate variables; empty when System
+/// Certificates is off or has no bundle). Only the absolute path of omp, a provider id, the
+/// marker path and the values of `variables` are inserted, quoted for the shell that reads them.
+pub fn command(os: Os, task: Task, variables: &Variables) -> Result<Command, TerminalError> {
+    let environment = checked_variables(os, variables)?;
+    if os == Os::Windows {
+        let body = windows_body(os, task)?;
+        let assignments: String = environment
+            .iter()
+            .map(|(name, value)| format!("$env:{name} = {}; ", quote(Shell::PowerShell, value)))
+            .collect();
+        return Ok(Command {
+            terminal: body.clone(),
+            environment,
+            copy: format!("{assignments}{body}"),
+        });
+    }
+
+    let body = posix_body(os, task)?;
+    let installer = matches!(task, Task::Installer { .. });
+    let assignments: Vec<String> = environment
+        .iter()
+        .map(|(name, value)| format!("{name}={}", quote(Shell::Posix, value)))
+        .collect();
+    // From the developer's own shell: the variables, then the rest under `/bin/sh`. The installer
+    // is a script for `sh`, so it always runs there.
+    let copy = if installer || !assignments.is_empty() {
+        let mut words = Vec::new();
+        if !assignments.is_empty() {
+            words.push("/usr/bin/env".to_owned());
+            words.extend(assignments.iter().cloned());
+        }
+        words.push("/bin/sh -c".to_owned());
+        words.push(quote(Shell::Posix, &body));
+        words.join(" ")
+    } else {
+        body.clone()
+    };
+    let terminal = match os {
+        Os::Linux if !assignments.is_empty() => {
+            let exports = assignments.join(" ");
+            format!("export {exports}; {body}")
+        }
+        Os::Linux => body,
+        _ => copy.clone(),
+    };
+    Ok(Command {
+        terminal,
+        environment: Vec::new(),
+        copy,
+    })
+}
+
+/// The variables as text, each name and value checked.
+fn checked_variables(
+    os: Os,
+    variables: &Variables,
+) -> Result<Vec<(String, String)>, TerminalError> {
+    variables
+        .iter()
+        .map(|(name, value)| {
+            let valid_name = !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
+            let value = value.to_str().ok_or(TerminalError::UnsafePath)?;
+            if !valid_name || is_unsafe(os, value) {
+                return Err(TerminalError::UnsafePath);
+            }
+            Ok(((*name).to_owned(), value.to_owned()))
+        })
+        .collect()
+}
+
+/// Whether `text` holds a character that cannot be passed to a terminal: a control character,
+/// or on Windows a double quote, which the command line of `powershell.exe` cannot carry.
+fn is_unsafe(os: Os, text: &str) -> bool {
+    text.chars()
+        .any(|c| c.is_control() || (os == Os::Windows && c == '"'))
+}
+
+/// `path` as text: absolute on `os` and safe to pass.
+fn absolute_text(os: Os, path: &Path) -> Result<&str, TerminalError> {
+    let text = path.to_str().ok_or(TerminalError::UnsafePath)?;
     if !is_absolute_on(os, text) {
         return Err(TerminalError::NotAbsolute);
     }
-    if text
-        .chars()
-        .any(|c| c.is_control() || (os == Os::Windows && c == '"'))
-    {
+    if is_unsafe(os, text) {
         return Err(TerminalError::UnsafePath);
     }
-    Ok(match os {
-        Os::Windows => format!("& {} login {}", quote_powershell(text), provider.id),
-        Os::MacOs | Os::Linux => format!("{} login {}", quote_posix(text), provider.id),
+    Ok(text)
+}
+
+/// The text for `sh` (macOS and Linux).
+fn posix_body(os: Os, task: Task) -> Result<String, TerminalError> {
+    Ok(match task {
+        Task::Login { omp, provider } => format!(
+            "{} login {}",
+            quote(Shell::Posix, absolute_text(os, omp)?),
+            provider.id
+        ),
+        Task::Installer { marker } => format!(
+            "t=$(mktemp \"${{TMPDIR:-/tmp}}/omp-install.XXXXXX\"); c=$?; \
+             if [ \"$c\" -eq 0 ]; then \
+             curl -fsSL {INSTALLER_UNIX_URL} -o \"$t\"; c=$?; \
+             if [ \"$c\" -eq 0 ]; then sh \"$t\"; c=$?; fi; \
+             rm -f \"$t\"; \
+             fi; \
+             printf '%s\\n' \"$c\" > {}",
+            quote(Shell::Posix, absolute_text(os, marker)?)
+        ),
+    })
+}
+
+/// The text for Windows PowerShell 5.1.
+fn windows_body(os: Os, task: Task) -> Result<String, TerminalError> {
+    Ok(match task {
+        Task::Login { omp, provider } => format!(
+            "& {} login {}",
+            quote(Shell::PowerShell, absolute_text(os, omp)?),
+            provider.id
+        ),
+        // The child `powershell.exe` takes the `exit` of the installer; its `$LASTEXITCODE` is the
+        // code, and a terminating error of the download is `1`.
+        Task::Installer { marker } => format!(
+            "$b = [IO.Path]::GetTempFileName(); $t = $b + '.ps1'; $c = 0; \
+             try {{ Invoke-RestMethod {INSTALLER_WINDOWS_URL} -OutFile $t -ErrorAction Stop }} catch {{ $c = 1 }}; \
+             if ($c -eq 0) {{ powershell.exe -NoProfile -ExecutionPolicy Bypass -File $t; \
+             $c = $LASTEXITCODE; if ($null -eq $c) {{ $c = 1 }} }}; \
+             Remove-Item -LiteralPath $b, $t -ErrorAction SilentlyContinue; \
+             Set-Content -LiteralPath {} -Value $c -Encoding ASCII",
+            quote(Shell::PowerShell, absolute_text(os, marker)?)
+        ),
     })
 }
 
@@ -126,6 +298,8 @@ fn is_absolute_on(os: Os, text: &str) -> bool {
 pub struct Launch {
     pub program: PathBuf,
     pub args: Vec<OsString>,
+    /// Windows: variables for the process environment of the terminal.
+    pub environment: Vec<(String, String)>,
     /// Windows: the process is created with `CREATE_NEW_CONSOLE`.
     pub new_console: bool,
 }
@@ -137,12 +311,13 @@ fn os_args(args: &[&str]) -> Vec<OsString> {
 /// How to run `command` in a terminal of `os`. `which` finds a program of the Linux list by name.
 pub fn launch_plan(
     os: Os,
-    command: &str,
+    command: &Command,
     which: &dyn Fn(&str) -> Option<PathBuf>,
 ) -> Result<Launch, TerminalError> {
+    let text = command.terminal.as_str();
     match os {
         Os::MacOs => {
-            let run = format!("do script {}", applescript_string(command));
+            let run = format!("do script {}", applescript_string(text));
             Ok(Launch {
                 program: PathBuf::from("/usr/bin/osascript"),
                 args: os_args(&[
@@ -155,6 +330,7 @@ pub fn launch_plan(
                     "-e",
                     "end tell",
                 ]),
+                environment: Vec::new(),
                 new_console: false,
             })
         }
@@ -166,12 +342,13 @@ pub fn launch_plan(
                 "-ExecutionPolicy",
                 "Bypass",
                 "-Command",
-                command,
+                text,
             ]),
+            environment: command.environment.clone(),
             new_console: true,
         }),
         Os::Linux => {
-            let script = format!("{command}; printf \"\\nPress Enter to close\"; read _");
+            let script = format!("{text}; printf \"\\nPress Enter to close\"; read _");
             let (program, flag) = LINUX_TERMINALS
                 .iter()
                 .find_map(|(name, flag)| which(name).map(|found| (found, *flag)))
@@ -179,6 +356,7 @@ pub fn launch_plan(
             Ok(Launch {
                 program,
                 args: os_args(&[flag, "sh", "-c", &script]),
+                environment: Vec::new(),
                 new_console: false,
             })
         }
@@ -190,6 +368,9 @@ pub fn launch_plan(
 /// thread.
 pub fn open(os: Os, launch: &Launch) -> Result<(), TerminalError> {
     let mut command = crate::process::command(&launch.program, &launch.args);
+    for (name, value) in &launch.environment {
+        command.env(name, value);
+    }
     #[cfg(windows)]
     if launch.new_console {
         use std::os::windows::process::CommandExt;
@@ -222,7 +403,7 @@ mod tests {
         provider("anthropic").unwrap()
     }
 
-    fn linux_with(available: &'static [&'static str]) -> impl Fn(&str) -> Option<PathBuf> {
+    fn linux_with<'a>(available: &'a [&'a str]) -> impl Fn(&str) -> Option<PathBuf> + 'a {
         move |name| {
             available
                 .contains(&name)
@@ -236,30 +417,60 @@ mod tests {
             .collect()
     }
 
+    fn certificates(bundle: &str) -> Variables {
+        vec![
+            ("NODE_EXTRA_CA_CERTS", OsString::from(bundle)),
+            ("SSL_CERT_FILE", OsString::from(bundle)),
+            ("PI_REQUEST_COMPRESSION", OsString::from("0")),
+        ]
+    }
+
+    fn login(os: Os, omp: &str, variables: &Variables) -> Command {
+        command(
+            os,
+            Task::Login {
+                omp: Path::new(omp),
+                provider: anthropic(),
+            },
+            variables,
+        )
+        .unwrap()
+    }
+
+    fn install(os: Os, marker: &str, variables: &Variables) -> Command {
+        command(
+            os,
+            Task::Installer {
+                marker: Path::new(marker),
+            },
+            variables,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn posix_quoting_wraps_in_single_quotes_and_escapes_quotes() {
-        assert_eq!(quote_posix("/usr/bin/omp"), "'/usr/bin/omp'");
-        assert_eq!(quote_posix("/Users/o'neil/omp"), r"'/Users/o'\''neil/omp'");
+        let posix = |text| quote(Shell::Posix, text);
+        assert_eq!(posix("/usr/bin/omp"), "'/usr/bin/omp'");
+        assert_eq!(posix("/Users/o'neil/omp"), r"'/Users/o'\''neil/omp'");
         assert_eq!(
-            quote_posix("/a b/$HOME/`id`/\"x\"/;rm"),
+            posix("/a b/$HOME/`id`/\"x\"/;rm"),
             "'/a b/$HOME/`id`/\"x\"/;rm'"
         );
-        assert_eq!(quote_posix(""), "''");
-        assert_eq!(quote_posix("''"), r"''\'''\'''");
+        assert_eq!(posix(""), "''");
+        assert_eq!(posix("''"), r"''\'''\'''");
     }
 
     #[test]
     fn powershell_quoting_doubles_every_kind_of_single_quote() {
+        let ps = |text| quote(Shell::PowerShell, text);
         assert_eq!(
-            quote_powershell(r"C:\Program Files\omp\omp.exe"),
+            ps(r"C:\Program Files\omp\omp.exe"),
             r"'C:\Program Files\omp\omp.exe'"
         );
-        assert_eq!(
-            quote_powershell("C:\\o'neil\\omp.exe"),
-            "'C:\\o''neil\\omp.exe'"
-        );
-        assert_eq!(quote_powershell("a\u{2019}b"), "'a\u{2019}\u{2019}b'");
-        assert_eq!(quote_powershell("$env:X `n $(calc)"), "'$env:X `n $(calc)'");
+        assert_eq!(ps("C:\\o'neil\\omp.exe"), "'C:\\o''neil\\omp.exe'");
+        assert_eq!(ps("a\u{2019}b"), "'a\u{2019}\u{2019}b'");
+        assert_eq!(ps("$env:X `n $(calc)"), "'$env:X `n $(calc)'");
     }
 
     #[test]
@@ -272,70 +483,197 @@ mod tests {
     }
 
     #[test]
-    fn the_installers_are_the_official_ones() {
-        assert_eq!(
-            installer_command(Os::MacOs),
-            "curl -fsSL https://omp.sh/install | sh"
-        );
-        assert_eq!(
-            installer_command(Os::Linux),
-            "curl -fsSL https://omp.sh/install | sh"
-        );
-        assert_eq!(
-            installer_command(Os::Windows),
-            "irm https://omp.sh/install.ps1 | iex"
-        );
-    }
-
-    #[test]
     fn the_login_command_quotes_the_path_for_each_shell() {
         assert_eq!(
-            login_command(Os::MacOs, Path::new("/Users/o'neil/bin/omp"), anthropic()).unwrap(),
+            login(Os::MacOs, "/Users/o'neil/bin/omp", &vec![]).terminal,
             r"'/Users/o'\''neil/bin/omp' login anthropic"
         );
         assert_eq!(
-            login_command(
+            command(
                 Os::Linux,
-                Path::new("/home/a b/omp"),
-                provider("openai-codex").unwrap()
+                Task::Login {
+                    omp: Path::new("/home/a b/omp"),
+                    provider: provider("openai-codex").unwrap()
+                },
+                &vec![]
             )
-            .unwrap(),
+            .unwrap()
+            .terminal,
             "'/home/a b/omp' login openai-codex"
         );
         assert_eq!(
-            login_command(
+            command(
                 Os::Windows,
-                Path::new(r"C:\Users\o'neil\omp.exe"),
-                provider("cursor").unwrap()
+                Task::Login {
+                    omp: Path::new(r"C:\Users\o'neil\omp.exe"),
+                    provider: provider("cursor").unwrap()
+                },
+                &vec![]
             )
-            .unwrap(),
+            .unwrap()
+            .terminal,
             r"& 'C:\Users\o''neil\omp.exe' login cursor"
         );
     }
 
     #[test]
     fn a_path_that_is_not_absolute_or_holds_a_line_break_is_refused() {
+        let refused = |os, omp: &str| {
+            command(
+                os,
+                Task::Login {
+                    omp: Path::new(omp),
+                    provider: anthropic(),
+                },
+                &vec![],
+            )
+            .unwrap_err()
+        };
+        assert_eq!(refused(Os::Linux, "omp"), TerminalError::NotAbsolute);
         assert_eq!(
-            login_command(Os::Linux, Path::new("omp"), anthropic()),
-            Err(TerminalError::NotAbsolute)
+            refused(Os::Linux, "/a\n; touch /tmp/x\n/omp"),
+            TerminalError::UnsafePath
         );
+        assert_eq!(refused(Os::MacOs, "/a\r/omp"), TerminalError::UnsafePath);
         assert_eq!(
-            login_command(
+            refused(Os::Windows, r#"C:\a"b\omp.exe"#),
+            TerminalError::UnsafePath
+        );
+        // The marker and the bundle are checked the same way.
+        assert_eq!(
+            command(
                 Os::Linux,
-                Path::new("/a\n; touch /tmp/x\n/omp"),
-                anthropic()
-            ),
-            Err(TerminalError::UnsafePath)
+                Task::Installer {
+                    marker: Path::new("relative.code")
+                },
+                &vec![]
+            )
+            .unwrap_err(),
+            TerminalError::NotAbsolute
         );
         assert_eq!(
-            login_command(Os::MacOs, Path::new("/a\r/omp"), anthropic()),
-            Err(TerminalError::UnsafePath)
+            command(
+                Os::Linux,
+                Task::Login {
+                    omp: Path::new("/omp"),
+                    provider: anthropic()
+                },
+                &certificates("/b\n/x.pem")
+            )
+            .unwrap_err(),
+            TerminalError::UnsafePath
         );
     }
 
     #[test]
+    fn macos_starts_with_env_and_runs_the_rest_under_sh_when_certificates_are_on() {
+        let command = login(Os::MacOs, "/opt/omp", &certificates("/data/bundle.pem"));
+        assert_eq!(
+            command.terminal,
+            "/usr/bin/env NODE_EXTRA_CA_CERTS='/data/bundle.pem' SSL_CERT_FILE='/data/bundle.pem' \
+             PI_REQUEST_COMPRESSION='0' /bin/sh -c ''\\''/opt/omp'\\'' login anthropic'"
+        );
+        assert_eq!(command.copy, command.terminal);
+        assert!(command.environment.is_empty());
+    }
+
+    #[test]
+    fn linux_exports_the_variables_at_the_start_of_the_script() {
+        let command = login(Os::Linux, "/opt/omp", &certificates("/data/bundle.pem"));
+        assert_eq!(
+            command.terminal,
+            "export NODE_EXTRA_CA_CERTS='/data/bundle.pem' SSL_CERT_FILE='/data/bundle.pem' \
+             PI_REQUEST_COMPRESSION='0'; '/opt/omp' login anthropic"
+        );
+        // To copy into any shell: the same as macOS.
+        assert!(command.copy.starts_with(
+            "/usr/bin/env NODE_EXTRA_CA_CERTS='/data/bundle.pem' SSL_CERT_FILE='/data/bundle.pem'"
+        ));
+        assert!(command.copy.contains("/bin/sh -c "));
+        let off = login(Os::Linux, "/opt/omp", &vec![]);
+        assert_eq!(off.terminal, "'/opt/omp' login anthropic");
+        assert_eq!(off.copy, off.terminal);
+    }
+
+    #[test]
+    fn windows_gives_the_variables_to_the_process_and_the_copy_sets_them() {
+        let command = login(
+            Os::Windows,
+            r"C:\omp\omp.exe",
+            &certificates(r"C:\d a\b.pem"),
+        );
+        assert_eq!(command.terminal, r"& 'C:\omp\omp.exe' login anthropic");
+        assert_eq!(
+            command.environment,
+            [
+                ("NODE_EXTRA_CA_CERTS".to_owned(), r"C:\d a\b.pem".to_owned()),
+                ("SSL_CERT_FILE".to_owned(), r"C:\d a\b.pem".to_owned()),
+                ("PI_REQUEST_COMPRESSION".to_owned(), "0".to_owned()),
+            ]
+        );
+        assert_eq!(
+            command.copy,
+            r"$env:NODE_EXTRA_CA_CERTS = 'C:\d a\b.pem'; $env:SSL_CERT_FILE = 'C:\d a\b.pem'; $env:PI_REQUEST_COMPRESSION = '0'; & 'C:\omp\omp.exe' login anthropic"
+        );
+    }
+
+    #[test]
+    fn the_installer_downloads_to_a_file_runs_it_and_leaves_its_code_in_the_marker() {
+        let posix = install(Os::Linux, "/data/omp-install/ab12.code", &vec![]);
+        for needle in [
+            "curl -fsSL https://omp.sh/install -o \"$t\"",
+            "sh \"$t\"",
+            "rm -f \"$t\"",
+            "> '/data/omp-install/ab12.code'",
+        ] {
+            assert!(posix.terminal.contains(needle), "{needle}");
+        }
+        assert!(!posix.terminal.contains('|'), "never piped into a shell");
+        // The developer's shell is not assumed: the copy runs it under `/bin/sh`.
+        assert!(posix.copy.starts_with("/bin/sh -c "), "{}", posix.copy);
+        assert_eq!(
+            install(Os::MacOs, "/m/ab.code", &vec![]).terminal,
+            install(Os::MacOs, "/m/ab.code", &vec![]).copy
+        );
+        assert!(install(Os::MacOs, "/m/ab.code", &vec![])
+            .terminal
+            .starts_with("/bin/sh -c '"));
+
+        let windows = install(Os::Windows, r"C:\d\omp-install\ab12.code", &vec![]);
+        for needle in [
+            "Invoke-RestMethod https://omp.sh/install.ps1 -OutFile $t",
+            "-ErrorAction Stop } catch { $c = 1 }",
+            "powershell.exe -NoProfile -ExecutionPolicy Bypass -File $t",
+            "$c = $LASTEXITCODE",
+            "Remove-Item -LiteralPath $b, $t",
+            "Set-Content -LiteralPath 'C:\\d\\omp-install\\ab12.code' -Value $c",
+        ] {
+            assert!(windows.terminal.contains(needle), "{needle}");
+        }
+        assert!(!windows.terminal.contains("iex"));
+        assert!(!windows.terminal.contains('"'));
+    }
+
+    #[test]
+    fn the_marker_path_is_quoted_for_the_shell_that_reads_it() {
+        let posix = install(Os::Linux, "/d/o'neil/ab.code", &vec![]);
+        assert!(posix.terminal.ends_with(r"> '/d/o'\''neil/ab.code'"));
+        let windows = install(Os::Windows, r"C:\o'neil\ab.code", &vec![]);
+        assert!(windows.terminal.contains(r"'C:\o''neil\ab.code'"));
+    }
+
+    fn plan(os: Os, command: &Command) -> Launch {
+        launch_plan(os, command, &linux_with(&["xterm", "konsole"])).unwrap()
+    }
+
+    #[test]
     fn macos_runs_the_command_in_terminal_through_osascript_with_fixed_lines() {
-        let launch = launch_plan(Os::MacOs, r#"'/o"mp' login anthropic"#, &|_| None).unwrap();
+        let command = Command {
+            terminal: r#"'/o"mp' login anthropic"#.to_owned(),
+            environment: vec![],
+            copy: String::new(),
+        };
+        let launch = plan(Os::MacOs, &command);
         assert_eq!(launch.program, PathBuf::from("/usr/bin/osascript"));
         assert_eq!(
             strings(&launch.args),
@@ -354,11 +692,9 @@ mod tests {
     }
 
     #[test]
-    fn windows_runs_powershell_51_in_a_new_console_that_stays_open() {
-        let launch = launch_plan(Os::Windows, "irm https://omp.sh/install.ps1 | iex", &|_| {
-            None
-        })
-        .unwrap();
+    fn windows_runs_powershell_51_in_a_new_console_with_the_variables() {
+        let command = login(Os::Windows, r"C:\omp.exe", &certificates(r"C:\b.pem"));
+        let launch = plan(Os::Windows, &command);
         assert_eq!(launch.program, PathBuf::from("powershell.exe"));
         assert_eq!(
             strings(&launch.args),
@@ -368,16 +704,17 @@ mod tests {
                 "-ExecutionPolicy",
                 "Bypass",
                 "-Command",
-                "irm https://omp.sh/install.ps1 | iex"
+                r"& 'C:\omp.exe' login anthropic"
             ]
         );
+        assert_eq!(launch.environment, command.environment);
         assert!(launch.new_console);
     }
 
     #[test]
     fn linux_uses_the_first_emulator_of_the_list_that_exists() {
-        let command = "'/home/a/omp' login anthropic";
-        let launch = launch_plan(Os::Linux, command, &linux_with(&["xterm", "konsole"])).unwrap();
+        let command = login(Os::Linux, "/home/a/omp", &vec![]);
+        let launch = plan(Os::Linux, &command);
         assert_eq!(launch.program, PathBuf::from("/usr/bin/konsole"));
         assert_eq!(
             strings(&launch.args),
@@ -388,19 +725,222 @@ mod tests {
                 "'/home/a/omp' login anthropic; printf \"\\nPress Enter to close\"; read _"
             ]
         );
+        assert!(launch.environment.is_empty());
         for (name, flag) in LINUX_TERMINALS {
-            let only: &'static [&'static str] = Box::leak(Box::new([name]));
-            let launch = launch_plan(Os::Linux, command, &linux_with(only)).unwrap();
+            let only = [name];
+            let launch = launch_plan(Os::Linux, &command, &linux_with(&only)).unwrap();
             assert_eq!(launch.program, PathBuf::from("/usr/bin").join(name));
             assert_eq!(strings(&launch.args)[0], flag);
         }
     }
 
     #[test]
-    fn linux_without_a_terminal_cannot_open_one() {
+    fn linux_with_certificates_starts_the_script_with_the_exports() {
+        let command = login(Os::Linux, "/home/a/omp", &certificates("/d/b.pem"));
+        let launch = plan(Os::Linux, &command);
         assert_eq!(
-            launch_plan(Os::Linux, "x", &|_| None),
+            strings(&launch.args)[3],
+            "export NODE_EXTRA_CA_CERTS='/d/b.pem' SSL_CERT_FILE='/d/b.pem' \
+             PI_REQUEST_COMPRESSION='0'; '/home/a/omp' login anthropic; \
+             printf \"\\nPress Enter to close\"; read _"
+        );
+    }
+
+    #[test]
+    fn the_plain_command_has_no_variable_marker_or_pipe() {
+        let marker = Path::new("/m/ab.code");
+        let unix = plain_command(Os::Linux, Task::Installer { marker });
+        assert_eq!(
+            unix,
+            "curl -fsSL https://omp.sh/install -o install.sh && sh install.sh"
+        );
+        let windows = plain_command(Os::Windows, Task::Installer { marker });
+        assert!(windows.starts_with("Invoke-RestMethod https://omp.sh/install.ps1 -OutFile "));
+        assert!(!windows.contains("iex"));
+        let login = Task::Login {
+            omp: Path::new("/omp"),
+            provider: anthropic(),
+        };
+        assert_eq!(plain_command(Os::MacOs, login), "omp login anthropic");
+    }
+
+    #[test]
+    fn linux_without_a_terminal_cannot_open_one() {
+        let command = login(Os::Linux, "/omp", &vec![]);
+        assert_eq!(
+            launch_plan(Os::Linux, &command, &|_| None),
             Err(TerminalError::NoTerminal)
         );
+    }
+
+    /// The installer and the variables, run for real by `/bin/sh` with a `curl` that is a script.
+    #[cfg(unix)]
+    mod run_posix {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command as Process;
+
+        use super::*;
+
+        struct Rig {
+            _root: tempfile::TempDir,
+            fake_bin: PathBuf,
+            tmp: PathBuf,
+            marker: PathBuf,
+            curl_args: PathBuf,
+            seen: PathBuf,
+        }
+
+        impl Rig {
+            fn new() -> Self {
+                let root = tempfile::tempdir().unwrap();
+                let base = root.path();
+                let fake_bin = base.join("bin");
+                let tmp = base.join("o'neil tmp");
+                std::fs::create_dir_all(&fake_bin).unwrap();
+                std::fs::create_dir_all(&tmp).unwrap();
+                std::fs::create_dir_all(base.join("omp-install")).unwrap();
+                let curl_args = base.join("curl-args");
+                let curl = fake_bin.join("curl");
+                // Fails with FAKE_CURL_EXIT when it is not 0, else writes FAKE_INSTALLER (a shell
+                // script) where `-o` says.
+                std::fs::write(
+                    &curl,
+                    format!(
+                        "#!/bin/sh\nprintf '%s ' \"$@\" > '{}'\n\
+                         [ \"${{FAKE_CURL_EXIT:-0}}\" -ne 0 ] && exit \"$FAKE_CURL_EXIT\"\n\
+                         while [ $# -gt 0 ]; do\n\
+                         if [ \"$1\" = -o ]; then printf '%s\\n' \"$FAKE_INSTALLER\" > \"$2\"; fi\n\
+                         shift\ndone\n",
+                        curl_args.display()
+                    ),
+                )
+                .unwrap();
+                std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755)).unwrap();
+                Rig {
+                    marker: base.join("omp-install").join("ab12.code"),
+                    seen: base.join("seen"),
+                    _root: root,
+                    fake_bin,
+                    tmp,
+                    curl_args,
+                }
+            }
+
+            /// Runs `text` as the terminal would (`sh -c`), with the fake `curl`.
+            fn run(&self, text: &str, curl_exit: &str, installer: &str) {
+                let path = format!("{}:/usr/bin:/bin", self.fake_bin.display());
+                let status = Process::new("/bin/sh")
+                    .args(["-c", text])
+                    .env("PATH", path)
+                    .env("TMPDIR", &self.tmp)
+                    .env("FAKE_CURL_EXIT", curl_exit)
+                    .env("FAKE_INSTALLER", installer)
+                    .status()
+                    .unwrap();
+                assert!(status.success());
+            }
+
+            fn code(&self) -> String {
+                std::fs::read_to_string(&self.marker).unwrap()
+            }
+
+            fn leftovers(&self) -> usize {
+                std::fs::read_dir(&self.tmp).unwrap().count()
+            }
+        }
+
+        fn installer_text(rig: &Rig) -> String {
+            install(Os::Linux, rig.marker.to_str().unwrap(), &vec![]).terminal
+        }
+
+        #[test]
+        fn a_good_installer_leaves_zero_and_no_temporary_file() {
+            let rig = Rig::new();
+            rig.run(&installer_text(&rig), "0", "exit 0");
+            assert_eq!(rig.code(), "0\n");
+            assert_eq!(rig.leftovers(), 0);
+            let args = std::fs::read_to_string(&rig.curl_args).unwrap();
+            assert!(
+                args.starts_with("-fsSL https://omp.sh/install -o "),
+                "{args}"
+            );
+        }
+
+        #[test]
+        fn a_failed_download_is_the_code_of_curl_and_the_installer_never_runs() {
+            let rig = Rig::new();
+            rig.run(
+                &installer_text(&rig),
+                "22",
+                &format!("touch '{}'", rig.seen.display()),
+            );
+            assert_eq!(rig.code(), "22\n");
+            assert!(!rig.seen.exists());
+            assert_eq!(rig.leftovers(), 0);
+        }
+
+        #[test]
+        fn a_failed_installer_leaves_its_own_code() {
+            let rig = Rig::new();
+            rig.run(&installer_text(&rig), "0", "exit 7");
+            assert_eq!(rig.code(), "7\n");
+            assert_eq!(rig.leftovers(), 0);
+        }
+
+        #[test]
+        fn the_variables_reach_the_installer_through_env_and_sh() {
+            let rig = Rig::new();
+            let bundle = "/d/o'neil dir/bundle.pem";
+            let command = install(
+                Os::MacOs,
+                rig.marker.to_str().unwrap(),
+                &certificates(bundle),
+            );
+            rig.run(
+                &command.terminal,
+                "0",
+                &format!(
+                    "printf '%s|%s' \"$SSL_CERT_FILE\" \"$PI_REQUEST_COMPRESSION\" > '{}'",
+                    rig.seen.display()
+                ),
+            );
+            assert_eq!(
+                std::fs::read_to_string(&rig.seen).unwrap(),
+                format!("{bundle}|0")
+            );
+            assert_eq!(rig.code(), "0\n");
+            // What is copied runs the same way from any shell.
+            std::fs::remove_file(&rig.seen).unwrap();
+            rig.run(
+                &command.copy,
+                "0",
+                &format!(
+                    "printf '%s' \"$NODE_EXTRA_CA_CERTS\" > '{}'",
+                    rig.seen.display()
+                ),
+            );
+            assert_eq!(std::fs::read_to_string(&rig.seen).unwrap(), bundle);
+        }
+
+        #[test]
+        fn linux_exports_reach_the_login_command() {
+            let rig = Rig::new();
+            let omp = rig.fake_bin.join("omp");
+            std::fs::write(
+                &omp,
+                format!(
+                    "#!/bin/sh\nprintf '%s %s' \"$SSL_CERT_FILE\" \"$*\" > '{}'\n",
+                    rig.seen.display()
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&omp, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let command = login(Os::Linux, omp.to_str().unwrap(), &certificates("/d/b.pem"));
+            rig.run(&command.terminal, "0", "");
+            assert_eq!(
+                std::fs::read_to_string(&rig.seen).unwrap(),
+                "/d/b.pem login anthropic"
+            );
+        }
     }
 }

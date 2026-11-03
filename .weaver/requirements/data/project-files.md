@@ -23,7 +23,7 @@ description: "Use when reading, writing or validating files under `.weaver/`: la
 
 - `model/`, `requirements/`, `specs.yaml`, `proposals/`, `tasks/`, `drifts/` and `history/` are versioned with the project. Decided Proposals and Drifts are never deleted.
 - Local-only folders (`requests/`, `short-numbers/`, `task-images/`) each hold their own `.gitignore` containing `*`, written when the folder is created and written again whenever it is missing. Nothing else in `.weaver/` is ignored.
-- The Model, Requirements and Specs formats are exactly those of the `FORMAT.md` reference installed with the `trama-design` skill. The core's parser and that file are tested together: every example in it parses, and every rule it states is enforced by `model check` or the hand-over.
+- The Model, Requirements and Specs formats are exactly those of the `FORMAT.md` reference installed with the `weaver-design` skill. The core's parser and that file are tested together: every example in it parses, and every rule it states is enforced by `model check` or the hand-over.
 - Files and folders whose name starts with `.` are never read as Model, Requirement, Specs or card files.
 - A `.trama` folder, the project folder of earlier versions of Weaver, is never read, written, moved or deleted: without `.weaver/` the folder is not a project, and with both the project is `.weaver/`.
 

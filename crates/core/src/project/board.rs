@@ -394,7 +394,7 @@ fn label_of(numbers: &ShortNumbers, kind: CardKind, id: &str) -> String {
 }
 
 /// Files under `task-images/<id>/`, relative to `.weaver/`, in order.
-pub(crate) fn task_image_files(project_root: &Path, id: &str) -> Vec<String> {
+pub fn task_image_files(project_root: &Path, id: &str) -> Vec<String> {
     fn walk(folder: &Path, rel: &str, out: &mut Vec<String>) {
         let Ok(entries) = fs::read_dir(folder) else {
             return;
