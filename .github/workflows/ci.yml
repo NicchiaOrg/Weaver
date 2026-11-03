@@ -52,7 +52,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: macos-arm64, os: macos-latest, required: true }
+          # The developer's own Mac (self-hosted runner `weaver-mac`): the hosted macOS arm64
+          # runners were not acquired for long stretches.
+          - { name: macos-arm64, os: [self-hosted, weaver-mac], required: true }
           - { name: windows-x64, os: windows-latest, required: false }
           - { name: linux-x64, os: ubuntu-22.04, required: false }
     env:
@@ -97,12 +99,15 @@ jobs:
       - name: Locate the pnpm store
         id: pnpm-store
         run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      # Not on the self-hosted Mac: these paths are the developer's own stores in its home.
       - name: Cache the JS package store
+        if: runner.environment == 'github-hosted'
         uses: actions/cache@v4
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.pins.outputs.node }}-pnpm-${{ steps.pins.outputs.pnpm }}-${{ hashFiles('pnpm-lock.yaml') }}
       - name: Cache the Cargo registry and target
+        if: runner.environment == 'github-hosted'
         uses: actions/cache@v4
         with:
           path: |

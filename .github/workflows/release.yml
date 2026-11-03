@@ -154,7 +154,8 @@ jobs:
       matrix:
         include:
           - name: macos-universal
-            os: macos-latest
+            # The developer's own Mac (self-hosted runner `weaver-mac`), like the macOS job of ci.
+            os: [self-hosted, weaver-mac]
             rust-targets: aarch64-apple-darwin x86_64-apple-darwin
             args: --target universal-apple-darwin --bundles app,dmg
     steps:
@@ -200,12 +201,15 @@ jobs:
       - name: Locate the pnpm store
         id: pnpm-store
         run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      # Not on the self-hosted Mac: these paths are the developer's own stores in its home.
       - name: Cache the JS package store
+        if: runner.environment == 'github-hosted'
         uses: actions/cache@v4
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.pins.outputs.node }}-pnpm-${{ steps.pins.outputs.pnpm }}-${{ hashFiles('pnpm-lock.yaml') }}
       - name: Cache the Cargo registry and target
+        if: runner.environment == 'github-hosted'
         uses: actions/cache@v4
         with:
           path: |
