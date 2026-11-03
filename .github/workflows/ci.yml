@@ -43,9 +43,10 @@ jobs:
   build-test:
     name: build-test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
     # Only macOS is released for now: Windows and Linux still run, but their failures do not fail
-    # `ci`, so they do not stop a release (scripts/release.mjs RELEASED).
+    # `ci`, so they do not stop a release (scripts/release.mjs RELEASED). A timeout would cancel the
+    # whole run, so they get more time than the 25 minutes of macOS.
+    timeout-minutes: ${{ matrix.required && 25 || 60 }}
     continue-on-error: ${{ !matrix.required }}
     strategy:
       fail-fast: false
