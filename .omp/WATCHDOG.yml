@@ -20,7 +20,7 @@ instructions: >-
 
   When a difference is in existing code outside the work of the Tasks of this
   Run, file one Drift with `weaver drift new`, without `task`, following the
-  Drift rules of the trama-implement skill: re-read the code at `where` first,
+  Drift rules of the weaver-implement skill: re-read the code at `where` first,
   check with `weaver drift list` the Drifts already filed on the same
   references (a dismissed Drift whose text has not changed is never filed
   again), and write fix options that respect the Model and the Requirements.
