@@ -108,17 +108,6 @@ export async function retryWhileNoSuchWindow(action, timeout = 30_000, pause = 2
 }
 
 /**
- * Closes the window the session is switched to, through tauri-driver directly. WebdriverIO's own
- * `closeWindow` ends the session when no window is left at that instant, and closing the last
- * project window leaves none until Weaver opens the welcome window again.
- */
-export async function closeWindowKeepingSession(browser) {
-  const { hostname, port } = browser.options;
-  const response = await fetch(`http://${hostname}:${port}/session/${browser.sessionId}/window`, { method: "DELETE" });
-  if (!response.ok) throw new Error(`closing the window failed: ${response.status} ${await response.text()}`);
-}
-
-/**
  * The WebDriver handle of the project window: the one that is not the welcome window's. Never found
  * by the WebDriver title, which is the page's `document.title` (`Weaver` in every window). The
  * `no such window` of the welcome window being destroyed is retried. Fails after the timeout.

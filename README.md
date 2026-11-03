@@ -4,7 +4,7 @@ Weaver is a desktop app for macOS, Windows and Linux that works on top of Weaver
 
 ## Install
 
-Download the build for your system from the [Releases](https://github.com/nicchia-code/weaver/releases) page and open it. Weaver keeps itself up to date from the same releases.
+Download the build for your system from the [Releases](https://github.com/nicchia-code/weaver/releases) page and open it. Weaver keeps itself up to date from the same releases. For now the releases hold the macOS build only; Windows and Linux builds come later.
 
 > **Builds are not signed or notarised for now.** Code signing and notarisation on macOS and signing on Windows are deliberately left out and will come with a dedicated Proposal, so macOS and Windows warn that the app comes from an unidentified developer. The warning does not mean the file is damaged. Open an unsigned build like this:
 >
@@ -125,8 +125,8 @@ The File view keeps nothing on disk and writes nothing outside the files you cha
 The workflow `.github/workflows/release.yml` (`release`) runs when `ci` completed with success on a push to `main`, and works on that run's commit; it never runs for `dev` or a pull request.
 
 1. `prepare` reads `version` from `src-tauri/tauri.conf.json` and looks for the tag `v<version>` on `origin`. When the tag exists the workflow ends with a `::notice::` and builds nothing: the push only ran the tests. Otherwise it creates the draft release `Weaver v<version>` for that commit (a draft does not create the tag), with notes that name the file to download on each platform and how to open an unsigned build.
-2. `build` runs `tauri-apps/tauri-action` on `macos-latest` (`universal-apple-darwin`: `.dmg`, `.app.tar.gz` + `.sig`), `windows-latest` (`x86_64-pc-windows-msvc`: NSIS `-setup.exe` + `.sig`, no MSI) and `ubuntu-22.04` (`x86_64-unknown-linux-gnu`: `.AppImage` + `.sig`, `.deb`) and uploads to the draft. `weaver-cli` is built for the same target as the app and bundled as its sidecar; on macOS the arm64 and x64 builds are joined with `lipo`.
-3. `manifest` checks that the draft holds every file the notes name and attaches `latest.json` (platforms `darwin-aarch64`, `darwin-x86_64`, `windows-x86_64`, `linux-x86_64`), made by `scripts/release.mjs` from the `.sig` files.
+2. `build` runs `tauri-apps/tauri-action` on `macos-latest` (`universal-apple-darwin`: `.dmg`, `.app.tar.gz` + `.sig`) and uploads to the draft. `weaver-cli` is built for the same target as the app and bundled as its sidecar; the arm64 and x64 builds are joined with `lipo`. Windows (`windows-latest`, NSIS `-setup.exe`) and Linux (`ubuntu-22.04`, `.AppImage` and `.deb`) are left out for now: `RELEASED` in `scripts/release.mjs` and the build matrix say which systems are released.
+3. `manifest` checks that the draft holds every file the notes name and attaches `latest.json` (platforms `darwin-aarch64` and `darwin-x86_64`), made by `scripts/release.mjs` from the `.sig` files.
 4. `publish` publishes the draft, which creates the tag `v<version>` on that commit, only when every build job succeeded. When one failed or was cancelled, `discard` deletes the draft and no tag is created. The workflow never moves, deletes or recreates a tag and never edits a published release.
 
 To release, raise the version in the five files `scripts/check-versions.mjs` checks and merge `dev` into `main`.
@@ -147,7 +147,7 @@ Weaver uses the Tauri updater plugin with the endpoint `https://github.com/nicch
 
 ## Tests and CI
 
-The workflow `.github/workflows/ci.yml` (`ci`) runs on every push to `dev` or `main` and every pull request to `dev` or `main`, on `macos-latest` (arm64), `windows-latest` (x64) and `ubuntu-22.04` (x64), with `fail-fast: false`. A change to `main` needs `ci` to pass. Per platform it installs from the lockfiles (`pnpm install --frozen-lockfile`, `cargo --locked`), builds the frontend, checks that the `ts-rs` types are up to date, runs `cargo test --workspace --locked` and Vitest, builds the app in release mode (with `weaver-cli` as its sidecar), smoke-tests the built `weaver-cli`, runs the CLI contract tests and, on Linux (`xvfb-run`) and Windows (`msedgedriver`), the end-to-end smoke test. A separate job fails when the version in `src-tauri/tauri.conf.json` differs from `src-tauri/Cargo.toml`, `crates/core/Cargo.toml`, `crates/cli/Cargo.toml` or `ui/package.json`.
+The workflow `.github/workflows/ci.yml` (`ci`) runs on every push to `dev` or `main` and every pull request to `dev` or `main`, on `macos-latest` (arm64), `windows-latest` (x64) and `ubuntu-22.04` (x64), with `fail-fast: false`. A change to `main` needs `ci` to pass. Only the macOS job decides that for now: the Windows and Linux jobs run with `continue-on-error`, since those systems are not released yet. Per platform it installs from the lockfiles (`pnpm install --frozen-lockfile`, `cargo --locked`), builds the frontend, checks that the `ts-rs` types are up to date, runs `cargo test --workspace --locked` and Vitest, builds the app in release mode (with `weaver-cli` as its sidecar), smoke-tests the built `weaver-cli`, runs the CLI contract tests and, on Linux (`xvfb-run`) and Windows (`msedgedriver`), the end-to-end smoke test. A separate job fails when the version in `src-tauri/tauri.conf.json` differs from `src-tauri/Cargo.toml`, `crates/core/Cargo.toml`, `crates/cli/Cargo.toml` or `ui/package.json`.
 
 | What | Where | Run it |
 |---|---|---|

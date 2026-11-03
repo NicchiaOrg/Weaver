@@ -307,9 +307,13 @@ mod certificate_tests {
         );
         assert!(exec.system_certificates_on());
 
-        // Read at each start: turned off, the next command gets nothing.
+        // Read at each start: turned off, the next command gets the inherited environment as it is
+        // (the runner may set `SSL_CERT_FILE` itself).
         on.store(false, Ordering::SeqCst);
-        assert_eq!(run(&exec), "||");
+        let inherited = ["NODE_EXTRA_CA_CERTS", "PI_REQUEST_COMPRESSION", "SSL_CERT_FILE"]
+            .map(|name| std::env::var(name).unwrap_or_default())
+            .join("|");
+        assert_eq!(run(&exec), inherited);
         assert!(!exec.system_certificates_on());
     }
 

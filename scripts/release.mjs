@@ -21,41 +21,63 @@ function checkVersion(version) {
   return version;
 }
 
-/** The files a user downloads, as Tauri names them for the product `Weaver`. */
-export function downloads(version) {
-  checkVersion(version);
-  return {
-    macos: [`Weaver_${version}_universal.dmg`],
-    windows: [`Weaver_${version}_x64-setup.exe`],
-    linux: [`Weaver_${version}_amd64.AppImage`, `Weaver_${version}_amd64.deb`],
-  };
-}
+/**
+ * The systems a release is built for. Windows and Linux are left out for now: their builds are not
+ * ready to ship. Adding one back here and to the build matrix of release.yml releases it again.
+ */
+export const RELEASED = ["macos"];
 
-/** What each platform's updater downloads: the file matching a name, and `<file>.sig` beside it. */
-export const UPDATER_FILES = {
-  macos: /\.app\.tar\.gz$/,
-  windows: /-setup\.exe$/,
-  linux: /\.AppImage$/,
+/** Per system: the files a user downloads, as Tauri names them for the product `Weaver`. */
+const DOWNLOADS = {
+  macos: (version) => [`Weaver_${version}_universal.dmg`],
+  windows: (version) => [`Weaver_${version}_x64-setup.exe`],
+  linux: (version) => [`Weaver_${version}_amd64.AppImage`, `Weaver_${version}_amd64.deb`],
 };
 
-/** The platforms of `latest.json` and the updater file each one takes. */
-export const MANIFEST_PLATFORMS = {
-  "darwin-aarch64": "macos",
-  "darwin-x86_64": "macos",
-  "windows-x86_64": "windows",
-  "linux-x86_64": "linux",
+/** The files a user downloads for each released system. */
+export function downloads(version) {
+  checkVersion(version);
+  return Object.fromEntries(RELEASED.map((system) => [system, DOWNLOADS[system](version)]));
+}
+
+/** What each released system's updater downloads: the file matching a name, and `<file>.sig` beside it. */
+export const UPDATER_FILES = Object.fromEntries(
+  RELEASED.map((system) => [system, { macos: /\.app\.tar\.gz$/, windows: /-setup\.exe$/, linux: /\.AppImage$/ }[system]]),
+);
+
+/** The platforms of `latest.json` and the updater file each one takes, for the released systems. */
+export const MANIFEST_PLATFORMS = Object.fromEntries(
+  Object.entries({
+    "darwin-aarch64": "macos",
+    "darwin-x86_64": "macos",
+    "windows-x86_64": "windows",
+    "linux-x86_64": "linux",
+  }).filter(([, system]) => RELEASED.includes(system)),
+);
+
+/** Per system: its row of the download table and how to open its unsigned build. */
+const NOTES = {
+  macos: ([dmg]) => ({
+    row: `| macOS (Apple silicon and Intel) | \`${dmg}\` |`,
+    open: `**macOS** (\`${dmg}\`): open the disk image and drag Weaver to Applications. Right-click Weaver and choose **Open**, then **Open** again. If macOS still refuses, open System Settings → Privacy & Security and choose **Open Anyway** next to Weaver.`,
+  }),
+  windows: ([setup]) => ({
+    row: `| Windows 10 and 11 (x64) | \`${setup}\` |`,
+    open: `**Windows** (\`${setup}\`): run the installer. When SmartScreen shows "Windows protected your PC", choose **More info** and then **Run anyway**.`,
+  }),
+  linux: ([appImage, deb]) => ({
+    row: `| Linux (x64) | \`${appImage}\`, or \`${deb}\` |`,
+    open: `**Linux** (\`${appImage}\`): make the file executable with \`chmod +x ${appImage}\`, then run it. For \`${deb}\`, install it with \`sudo apt install ./${deb}\`.`,
+  }),
 };
 
 export function releaseNotes(version) {
-  const { macos, windows, linux } = downloads(version);
-  const [appImage, deb] = linux;
+  const systems = Object.entries(downloads(version)).map(([system, files]) => NOTES[system](files));
   return `## Download
 
 | System | File to download |
 |---|---|
-| macOS (Apple silicon and Intel) | \`${macos[0]}\` |
-| Windows 10 and 11 (x64) | \`${windows[0]}\` |
-| Linux (x64) | \`${appImage}\`, or \`${deb}\` |
+${systems.map((s) => s.row).join("\n")}
 
 The other files of this release (\`.sig\`, \`.app.tar.gz\` and \`latest.json\`) are read by the updater of Weaver; they are not meant to be downloaded by hand.
 
@@ -63,11 +85,7 @@ The other files of this release (\`.sig\`, \`.app.tar.gz\` and \`latest.json\`) 
 
 This build is not signed or notarised yet, so the system warns that it comes from an unidentified developer. The warning does not mean the file is damaged.
 
-**macOS** (\`${macos[0]}\`): open the disk image and drag Weaver to Applications. Right-click Weaver and choose **Open**, then **Open** again. If macOS still refuses, open System Settings → Privacy & Security and choose **Open Anyway** next to Weaver.
-
-**Windows** (\`${windows[0]}\`): run the installer. When SmartScreen shows "Windows protected your PC", choose **More info** and then **Run anyway**.
-
-**Linux** (\`${appImage}\`): make the file executable with \`chmod +x ${appImage}\`, then run it. For \`${deb}\`, install it with \`sudo apt install ./${deb}\`.
+${systems.map((s) => s.open).join("\n\n")}
 
 Weaver then keeps itself up to date from the releases of this repository.
 `;

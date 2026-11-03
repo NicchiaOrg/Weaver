@@ -44,13 +44,16 @@ jobs:
     name: build-test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
+    # Only macOS is released for now: Windows and Linux still run, but their failures do not fail
+    # `ci`, so they do not stop a release (scripts/release.mjs RELEASED).
+    continue-on-error: ${{ !matrix.required }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: macos-arm64, os: macos-latest }
-          - { name: windows-x64, os: windows-latest }
-          - { name: linux-x64, os: ubuntu-22.04 }
+          - { name: macos-arm64, os: macos-latest, required: true }
+          - { name: windows-x64, os: windows-latest, required: false }
+          - { name: linux-x64, os: ubuntu-22.04, required: false }
     env:
       BUILT_WEAVER_CLI: ${{ github.workspace }}/target/release/weaver-cli${{ matrix.os == 'windows-latest' && '.exe' || '' }}
     steps:

@@ -8,7 +8,8 @@ name: release
 #   prepare   reads the version of src-tauri/tauri.conf.json; ends with a notice when the tag
 #             v<version> exists, otherwise creates the draft release `Weaver v<version>`
 #             (a draft does not create the tag)
-#   build     one job per platform: tauri-action builds the bundles and uploads them to the draft
+#   build     one job per platform: tauri-action builds the bundles and uploads them to the draft;
+#             only macOS for now (RELEASED in scripts/release.mjs), Windows and Linux are left out
 #   manifest  checks the files of the draft and attaches the updater manifest latest.json
 #   publish   only when every build job succeeded: publishes the draft, which creates the tag
 #             v<version> on head_sha
@@ -144,7 +145,9 @@ jobs:
     needs: prepare
     if: ${{ needs.prepare.outputs.build == 'true' }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    # The universal macOS build compiles the app and weaver-cli twice (arm64 and x64), from a cold
+    # cache on the first release: 25 minutes may not be enough for it.
+    timeout-minutes: 45
     permissions:
       contents: write
     strategy:
@@ -154,14 +157,6 @@ jobs:
             os: macos-latest
             rust-targets: aarch64-apple-darwin x86_64-apple-darwin
             args: --target universal-apple-darwin --bundles app,dmg
-          - name: windows-x64
-            os: windows-latest
-            rust-targets: x86_64-pc-windows-msvc
-            args: --target x86_64-pc-windows-msvc --bundles nsis
-          - name: linux-x64
-            os: ubuntu-22.04
-            rust-targets: x86_64-unknown-linux-gnu
-            args: --target x86_64-unknown-linux-gnu --bundles appimage,deb
     steps:
       - name: Install the Tauri system packages (Linux)
         if: runner.os == 'Linux'
@@ -250,7 +245,7 @@ jobs:
           releaseId: ${{ needs.prepare.outputs.release_id }}
           tauriScript: pnpm tauri
           args: ${{ matrix.args }}
-          # latest.json is made once, by the manifest job, from the files all three builds uploaded.
+          # latest.json is made once, by the manifest job, from the files the builds uploaded.
           includeUpdaterJson: false
 
   manifest:
