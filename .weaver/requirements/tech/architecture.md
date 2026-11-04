@@ -48,7 +48,7 @@ description: "Use when building the app structure, backend state, the project's 
   - the project root, non-recursively, only to see `.weaver` appear or vanish; a `.trama` folder appearing, changing or vanishing is ignored;
   - `.weaver/`, recursively, while it exists;
   - no code, no skills folder, no `.omp/`; the File view watches its folders and files with its own watcher (`requirements/tech#file-view`).
-- **Ignored events:** temp files of atomic writes, and the local folders of `.weaver/` except `requests/`, where a deletion is `workspace.REQUEST_DELETED`.
+- **Ignored events:** temp files of atomic writes, and the local folders of `.weaver/` except `requests/`, where a deletion is `workspace.REQUEST_DELETED`, and `notes/`, whose events only reach the Notes view (`requirements/tech#notes-view`). Events under `assets/` only refresh the asset list (`requirements/tech#assets`). Neither ever touches the picture.
 - **`.weaver` vanishes:** the recursive watch is dropped, then `PROJECT_FOLDER_REMOVED`.
 - **`.weaver` appears:** the watch is added and the picture fully rebuilt, then `PROJECT_FOLDER_APPEARED`.
 - A rescan or overflow event triggers a full rebuild.

@@ -20,3 +20,12 @@ description: "Use when writing or updating README.md or CHANGELOG.md, including 
   - that Java's tools and every program that reads a truststore instead of a PEM bundle are not covered.
 - `README.md` `### Where Weaver keeps files` names the bundle `system-certificates.pem` and the installer markers `omp-install/` in the local data folder.
 - `CHANGELOG.md` is created with this change; its first `## [Unreleased]` entries describe System Certificates, the Zscaler turn-on, the new error explanations and the installer that now reports its failure.
+
+## solo-mode
+- `README.md` has a section `## Solo mode`, after `## Install` and `## Behind a corporate proxy`, saying:
+  - what Solo mode does: Weaver's files stay only in this working copy and never go into a commit, through git's local exclusions;
+  - that it belongs to the working copy, not the user, and where it is chosen (Get Started, Settings → Project, `solo` of `weaver project new` and `project edit`);
+  - the two modes, whole folders and Weaver's files only, and when to use the second;
+  - that files git already tracks are not hidden and Settings lists them;
+  - that it needs git and that, with it on, losing the working copy loses Weaver's files.
+- `CHANGELOG.md` adds under `## [Unreleased]`, `Added`, one line describing Solo mode.

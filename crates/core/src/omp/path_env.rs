@@ -122,8 +122,8 @@ pub fn child_path(
 mod tests {
     use std::time::Duration;
 
-    use crate::omp::failure::Failure;
-    use crate::omp::run::Output;
+    use crate::process::timed::Failure;
+    use crate::process::timed::Output;
 
     use super::*;
 

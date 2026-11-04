@@ -20,7 +20,7 @@ use tauri_plugin_window_state::AppHandleExt;
 
 use super::fullscreen::Fullscreen;
 use super::jobs::BoxFuture;
-use super::manager::{ConfirmPrompt, Confirmation, Shell, ShowRequest};
+use super::manager::{ConfirmPrompt, Confirmation, HideFailed, Shell, ShowRequest};
 use super::registry::WELCOME_LABEL;
 use super::unsaved::{self, FilesSaveFailed};
 use super::STATE_FLAGS;
@@ -28,6 +28,7 @@ use crate::blocking;
 use crate::events::{self, EventName, ProjectChanged};
 use crate::file_tabs::{SaveMode, SaveOutcome};
 use crate::log_warn;
+use crate::notes::changes::NotesBatch;
 use crate::pictures::Rebuild;
 use crate::state::AppState;
 
@@ -268,14 +269,50 @@ impl Shell for TauriShell {
         }
     }
 
+    fn emit_hide_failed(&self, label: &str, failure: &HideFailed) {
+        if let Err(error) = self
+            .app
+            .emit_to(label, EventName::WindowHideFailed.as_str(), failure)
+        {
+            log_warn!("the window {label} was not told why it could not be hidden: {error}");
+        }
+    }
+
     fn files_changed(&self, project_id: &str, root: &Path, batch: &Rebuild) {
         crate::requests::files_changed(&self.app, project_id, root, batch);
+    }
+
+    fn assets_changed(&self, project_id: &str, root: &Path) {
+        let service = self.app.state::<AppState>().assets.clone();
+        let project_id = project_id.to_owned();
+        let root = root.to_path_buf();
+        // One `read_dir`, on the blocking pool; the service tells the window when the list changed.
+        tauri::async_runtime::spawn_blocking(move || {
+            service.refresh(&project_id, &root);
+        });
+    }
+
+    fn notes_changed(&self, project_id: &str, root: &Path, batch: NotesBatch) {
+        let state = self.app.state::<AppState>();
+        let changes = state.notes_changes.clone();
+        let notes = state.notes.clone();
+        let project_id = project_id.to_owned();
+        let root = root.to_path_buf();
+        // Reads the sheet and lists the folder, on the blocking pool; the service tells the window
+        // when something changed that Weaver did not write itself.
+        tauri::async_runtime::spawn_blocking(move || {
+            changes.announce(&project_id, &root, &batch, &|| notes.last_hash(&project_id));
+        });
     }
 
     fn flush_before_close(&self, project_id: &str) -> BoxFuture<()> {
         let app = self.app.clone();
         let project_id = project_id.to_owned();
-        Box::pin(async move { crate::requests::flush_window(&app, &project_id).await })
+        Box::pin(async move {
+            crate::requests::flush_window(&app, &project_id).await;
+            // The sheet's waiting text and the removed images of the Notes view, after the editor.
+            crate::notes::flush_window(&app, &project_id).await;
+        })
     }
 
     fn publish(&self, change: ProjectChanged) {
@@ -333,5 +370,65 @@ mod tests {
         assert_eq!(answer(MessageDialogResult::Ok), Confirmation::Accept);
         assert_eq!(answer(MessageDialogResult::No), Confirmation::Cancel);
         assert_eq!(answer(custom("Cancel")), Confirmation::Cancel);
+    }
+
+    /// Every `.rs` file under `dir`.
+    fn sources(dir: &Path, found: &mut Vec<std::path::PathBuf>) {
+        for item in std::fs::read_dir(dir).unwrap() {
+            let path = item.unwrap().path();
+            if path.is_dir() {
+                sources(&path, found);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                found.push(path);
+            }
+        }
+    }
+
+    /// Whether `value` holds the key `key` anywhere.
+    fn has_key(value: &serde_json::Value, key: &str) -> bool {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.contains_key(key) || map.values().any(|inner| has_key(inner, key))
+            }
+            serde_json::Value::Array(items) => items.iter().any(|inner| has_key(inner, key)),
+            _ => false,
+        }
+    }
+
+    /// Tauri's native drag-drop handler is what reports the paths of dropped files, in the File
+    /// view and in the request editor: both windows are built with it on, and nothing turns it off.
+    #[test]
+    fn the_project_and_welcome_windows_are_built_with_tauris_drag_drop_handler_on() {
+        // The names are put together so that this test does not hold what it looks for.
+        let disable_call = concat!("disable_", "drag_drop_handler");
+        let disable_config = concat!("dragDrop", "Enabled");
+        let disable_config_rust = concat!("drag_drop_", "enabled");
+
+        let mut found = Vec::new();
+        sources(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut found,
+        );
+        assert!(!found.is_empty());
+        for file in &found {
+            let text = std::fs::read_to_string(file).unwrap();
+            for forbidden in [disable_call, disable_config, disable_config_rust] {
+                assert!(
+                    !text.contains(forbidden),
+                    "{} holds {forbidden}",
+                    file.display()
+                );
+            }
+        }
+
+        // Both windows come from builders in this file, and the configuration holds none.
+        let shell = include_str!("tauri_shell.rs");
+        let code = shell.split_once("#[cfg(test)]").unwrap().0;
+        assert_eq!(code.matches("WebviewWindowBuilder::new(").count(), 2);
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+        assert_eq!(config["app"]["windows"], serde_json::json!([]));
+        assert!(!has_key(&config, disable_config));
+        assert!(!has_key(&config, disable_config_rust));
     }
 }

@@ -3,12 +3,12 @@ import { Fragment, useEffect, useRef, useState } from "react";
 
 import type { AskRow } from "@/bindings/AskRow";
 import type { Entry } from "@/bindings/Entry";
+import { TaggedTextarea } from "@/components/assets/tagged-textarea";
 import { MESSAGE_PLACEHOLDER, PLACEHOLDERS } from "@/components/ask/ask-model";
 import { useAskConversation } from "@/components/ask/use-ask-conversation";
 import { EntryView, FollowScroller } from "@/components/jobs/jobs-view";
 import { useOptionalQuestionRound } from "@/components/questions/use-question-round";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { useOmp } from "@/hooks/use-omp";
 import { call, isAppError } from "@/lib/backend";
 
@@ -91,7 +91,7 @@ export function AskConversation({ ask, focus }: { ask: AskRow; focus: number }) 
         </p>
       )}
       <div className="flex items-end gap-2 border-t p-3">
-        <Textarea
+        <TaggedTextarea
           ref={box}
           aria-label="Message the agent"
           placeholder={entries.length === 0 ? PLACEHOLDERS[ask.kind] : MESSAGE_PLACEHOLDER}

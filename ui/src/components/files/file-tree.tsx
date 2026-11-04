@@ -1,15 +1,18 @@
 import { ChevronDown, ChevronRight, File, FilePlus, Folder, FolderInput, FolderOpen, FolderPlus, Lock, Pencil, Trash2 } from "lucide-react";
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useRef,
   useState,
-  type DragEvent,
   type KeyboardEvent,
   type MouseEvent,
+  type PointerEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
+import type { DragDropEvent } from "@tauri-apps/api/webview";
 
 import type { FileEntry } from "@/bindings/FileEntry";
 import { useFileTabs } from "@/components/files/file-tabs-context";
@@ -24,9 +27,11 @@ import {
   WEAVER_READ_ONLY,
   type Row,
 } from "@/components/files/tree-model";
+import { useDragAids, type Point } from "@/components/files/use-drag-aids";
 import type { FileTree as Tree } from "@/components/files/use-file-tree";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { onDragDrop } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
 /** What the view can ask of the tree from outside. */
@@ -41,6 +46,25 @@ export interface FileTreeProps {
   onRequestMove: (path: string) => void;
   /** `Delete` (menu or key) was chosen for this path. */
   onRequestDelete: (path: string) => void;
+}
+
+/** How far the pointer must move with the button held before a press on a row becomes a drag. */
+const DRAG_THRESHOLD_PX = 4;
+
+/** Where the drag label sits from the pointer. */
+const LABEL_OFFSET_PX = 12;
+
+/** A press on a row that may become a drag. */
+interface Press {
+  pointerId: number;
+  /** Where it started. */
+  x: number;
+  y: number;
+  entry: FileEntry;
+  /** The row that holds the pointer until the press ends. */
+  row: HTMLElement;
+  /** The pointer moved past the threshold: it is a drag. */
+  started: boolean;
 }
 
 const REASON_ID = "file-tree-read-only-reason";
@@ -139,7 +163,9 @@ const isMac = () => typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(n
  * Enter opens a file in a tab or toggles a folder (a click does the same), `F2` renames and `Delete`
  * (`Cmd+Backspace` on macOS) deletes the selected row. A right click, the Menu key or `Shift+F10`
  * opens the menu of the row, and of the root on the empty space. A row dragged onto a folder, or
- * onto the empty space, moves there.
+ * onto the empty space, moves there (pointer events), and files dragged in from outside are
+ * copied there; both highlight the target, expand a folder held over for a second and scroll the
+ * tree near its edges.
  */
 export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree({ tree, onRequestMove, onRequestDelete }, handle) {
   const tabs = useFileTabs();
@@ -293,41 +319,158 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     );
 
   // --- dragging -------------------------------------------------------------------------------
+  //
+  // A row is dragged with pointer events, never the HTML5 drag and drop API: Tauri's native drag
+  // and drop handler stays on in every window (it reports the paths of dropped files) and takes
+  // the HTML5 events away from the page. Dropped files are reported by that handler too.
 
-  /** The folder a drop on this event's target would go to: a folder row, or the empty space for the root. */
-  const dropFolderOf = (event: DragEvent<HTMLDivElement>): string | null => {
-    if (!dragging) return null;
-    const row = rowOf(event);
-    const path = row?.dataset.path;
-    let folder: string | null;
-    if (path === undefined) folder = ROOT;
-    else folder = tree.entryOf(path)?.kind === "folder" ? path : null;
-    return folder !== null && canDrop(dragging, folder) ? folder : null;
+  const aids = useDragAids(container, tree.expand, tree.isExpanded);
+  /** The press on a row that may become a drag, and whether it did. */
+  const press = useRef<Press | null>(null);
+  const label = useRef<HTMLDivElement>(null);
+  const lastPoint = useRef<Point>({ x: 0, y: 0 });
+  /** Set when a drag ended: the click that follows it must not open or toggle the row. */
+  const swallowClick = useRef(false);
+
+  /**
+   * The folder a drop on `element` would go to: a folder row, the empty string (the root) for the
+   * empty space of the tree, and `null` for a file, the row being made, or anything outside the tree.
+   */
+  const folderUnder = (element: Element | null): string | null => {
+    const treeNode = container.current;
+    if (!element || !treeNode || !treeNode.contains(element)) return null;
+    const row = element.closest<HTMLElement>('[role="treeitem"]');
+    if (!row || !treeNode.contains(row)) return ROOT;
+    const path = row.dataset.path;
+    if (path === undefined || path === NEW_ROW) return null;
+    return tree.entryOf(path)?.kind === "folder" ? path : null;
   };
 
-  const endDrag = () => {
+  const endDrag = useCallback(() => {
+    const ended = press.current;
+    press.current = null;
+    aids.stop();
     setDragging(null);
     setDropTarget(null);
+    if (!ended) return;
+    swallowClick.current = ended.started;
+    if (ended.row.hasPointerCapture(ended.pointerId)) ended.row.releasePointerCapture(ended.pointerId);
+  }, [aids]);
+
+  const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    swallowClick.current = false;
+    if (event.button !== 0 || event.ctrlKey || press.current || event.target instanceof HTMLInputElement) return;
+    const row = rowOf(event);
+    const path = row?.dataset.path;
+    if (!row || path === undefined || path === NEW_ROW || inWeaver(path)) return;
+    const entry = tree.entryOf(path);
+    if (!entry || (editing?.mode === "rename" && editing.path === path)) return;
+    try {
+      // The row keeps the pointer until the press ends, so the click that follows a press that did not move stays the row's.
+      row.setPointerCapture(event.pointerId);
+    } catch {
+      return;
+    }
+    press.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, entry, row, started: false };
   };
 
-  const onDragOver = (event: DragEvent<HTMLDivElement>) => {
-    const folder = dropFolderOf(event);
-    setDropTarget(folder);
-    if (folder === null) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
+  const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const current = press.current;
+    if (!current || event.pointerId !== current.pointerId) return;
+    const point = { x: event.clientX, y: event.clientY };
+    if (!current.started) {
+      if (Math.hypot(point.x - current.x, point.y - current.y) < DRAG_THRESHOLD_PX) return;
+      current.started = true;
+      lastPoint.current = point;
+      setDragging(current.entry);
+    }
+    lastPoint.current = point;
+    if (label.current) {
+      label.current.style.left = `${point.x + LABEL_OFFSET_PX}px`;
+      label.current.style.top = `${point.y + LABEL_OFFSET_PX}px`;
+    }
+    const folder = folderUnder(document.elementFromPoint(point.x, point.y));
+    setDropTarget(folder !== null && canDrop(current.entry, folder) ? folder : null);
+    aids.update(point, folder === current.entry.path ? null : folder);
   };
 
-  const onDrop = (event: DragEvent<HTMLDivElement>) => {
-    const folder = dropFolderOf(event);
-    const source = dragging;
+  const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
+    const current = press.current;
+    if (!current || event.pointerId !== current.pointerId) return;
+    const folder = current.started ? folderUnder(document.elementFromPoint(event.clientX, event.clientY)) : null;
     endDrag();
-    if (folder === null || !source) return;
-    event.preventDefault();
-    tree.move(source.path, folder).catch(() => {});
+    if (folder !== null && canDrop(current.entry, folder)) tree.move(current.entry.path, folder).catch(() => {});
   };
+
+  /** The pointer was cancelled or lost its capture: the drag ends and nothing changes. */
+  const onPointerEnd = (event: PointerEvent<HTMLDivElement>) => {
+    if (press.current && event.pointerId === press.current.pointerId) endDrag();
+  };
+
+  // Esc ends the drag.
+  useEffect(() => {
+    if (!dragging) return;
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      endDrag();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [dragging, endDrag]);
+
+  // --- drops from outside ---------------------------------------------------------------------
+  //
+  // Files and folders dragged in from the Finder or Explorer arrive as events of Tauri's drag and
+  // drop handler, with the pointer in physical pixels.
+
+  const dropped = (event: DragDropEvent) => {
+    if (event.type === "leave") {
+      setDropTarget(null);
+      aids.stop();
+      return;
+    }
+    const ratio = window.devicePixelRatio || 1;
+    const point = { x: event.position.x / ratio, y: event.position.y / ratio };
+    const folder = folderUnder(document.elementFromPoint(point.x, point.y));
+    if (event.type === "drop") {
+      setDropTarget(null);
+      aids.stop();
+      // Outside the tree, or on a file: nothing happens here.
+      if (folder !== null && event.paths.length > 0) void tree.copyIn(folder, event.paths);
+      return;
+    }
+    setDropTarget(folder !== null && !inWeaver(folder) ? folder : null);
+    aids.update(point, folder);
+  };
+  const droppedNow = useRef(dropped);
+  droppedNow.current = dropped;
+
+  // The view is shown while this tree is: listening starts and ends with it.
+  useEffect(() => {
+    let listening = true;
+    const stop = onDragDrop((event) => {
+      if (listening) droppedNow.current(event);
+    });
+    return () => {
+      listening = false;
+      stop.then((unlisten) => unlisten()).catch(() => {});
+    };
+  }, []);
+
+  // A copied entry is scrolled into view once its row is on screen.
+  useEffect(() => {
+    if (tree.reveal === null) return;
+    const node = items.current.get(tree.reveal);
+    if (!node) return;
+    node.scrollIntoView({ block: "nearest" });
+    tree.clearReveal();
+  });
+
 
   return (
+    <>
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
@@ -338,13 +481,20 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
           tabIndex={current ? undefined : 0}
           onKeyDown={onKeyDown}
           onContextMenu={onContextMenu}
-          onDragOver={onDragOver}
-          onDrop={onDrop}
-          onDragLeave={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null);
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerEnd}
+          onLostPointerCapture={onPointerEnd}
+          onClickCapture={(event) => {
+            // The click that follows the end of a drag is not a click on a row.
+            if (!swallowClick.current) return;
+            swallowClick.current = false;
+            event.stopPropagation();
+            event.preventDefault();
           }}
           data-drop-target={dropTarget === ROOT ? "" : undefined}
-          className={cn("min-h-full py-3 text-sm", dropTarget === ROOT && "bg-accent/50")}
+          className={cn("min-h-0 flex-1 overflow-auto py-3 text-sm", dragging && "select-none", dropTarget === ROOT && "bg-accent/50")}
         >
           {rows.map((row) => (
             <TreeRow
@@ -363,8 +513,6 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
                 tree.stopEditing();
                 if (refocus) wantFocus.current = SELECTED;
               }}
-              onDragStart={() => setDragging(row.entry)}
-              onDragEnd={endDrag}
             />
           ))}
           {editing === null && rows.length === 0 && tree.ready ? <p className="px-3 py-2 text-muted-foreground">This folder is empty.</p> : null}
@@ -396,6 +544,22 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
         ) : null}
       </ContextMenuContent>
     </ContextMenu>
+    {dragging
+      ? createPortal(
+          <div
+            ref={label}
+            data-drag-label=""
+            aria-hidden
+            style={{ position: "fixed", left: lastPoint.current.x + LABEL_OFFSET_PX, top: lastPoint.current.y + LABEL_OFFSET_PX, pointerEvents: "none" }}
+            className="z-50 flex max-w-64 items-center gap-2 rounded-md border bg-popover px-2 py-1 text-sm text-popover-foreground shadow-md"
+          >
+            {dragging.kind === "folder" ? <Folder aria-hidden className="size-4 shrink-0 text-muted-foreground" /> : <File aria-hidden className="size-4 shrink-0 text-muted-foreground" />}
+            <span className="truncate">{dragging.name}</span>
+          </div>,
+          document.body,
+        )
+      : null}
+    </>
   );
 });
 
@@ -408,8 +572,6 @@ function TreeRow({
   register,
   onOpen,
   onEditEnd,
-  onDragStart,
-  onDragEnd,
 }: {
   row: Row;
   tree: Tree;
@@ -420,8 +582,6 @@ function TreeRow({
   onOpen: () => void;
   /** The edit of the name ended; `refocus` says the row should have the focus. */
   onEditEnd: (refocus: boolean) => void;
-  onDragStart: () => void;
-  onDragEnd: () => void;
 }) {
   const { entry } = row;
   const folder = entry.kind === "folder";
@@ -429,7 +589,6 @@ function TreeRow({
   const Icon = folder ? (expanded ? FolderOpen : Folder) : File;
   const renaming = tree.editing?.mode === "rename" && tree.editing.path === entry.path;
   const creating = row.isNew === true;
-  const readOnly = inWeaver(entry.path);
 
   let label: ReactNode = <span className="min-w-0 flex-1 truncate">{entry.name}</span>;
   if (creating && tree.editing?.mode === "create") {
@@ -475,7 +634,6 @@ function TreeRow({
       aria-posinset={row.position}
       aria-expanded={folder && !creating ? expanded : undefined}
       aria-selected={tree.selected === entry.path}
-      draggable={!creating && !renaming && !readOnly}
       onFocus={(event) => {
         if (event.target === event.currentTarget && !creating) tree.select(entry.path);
       }}
@@ -484,12 +642,6 @@ function TreeRow({
         tree.select(entry.path);
         onOpen();
       }}
-      onDragStart={(event) => {
-        event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData("text/plain", entry.path);
-        onDragStart();
-      }}
-      onDragEnd={onDragEnd}
       style={{ paddingLeft: `${(row.level - 1) * 16 + 8}px` }}
       className={cn(
         "flex cursor-pointer items-center gap-2 py-1 pr-3 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",

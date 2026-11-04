@@ -3,6 +3,7 @@ import { Fragment, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { Entry } from "@/bindings/Entry";
 import type { Step } from "@/bindings/Step";
+import { TaggedTextarea } from "@/components/assets/tagged-textarea";
 import { ConfirmDialog } from "@/components/dialogs";
 import { generalSubAgentsApi, useGeneral } from "@/components/general/use-general";
 import { GuardedButton } from "@/components/guarded-button";
@@ -12,7 +13,6 @@ import { useProject } from "@/components/project-context";
 import { useSubAgentList, useSubAgentsView } from "@/components/sub-agents/api";
 import { SubAgentNavProvider, type SubAgentNav } from "@/components/sub-agents/sub-agent-ui";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { call } from "@/lib/backend";
 import { useFollowScroll } from "@/hooks/use-follow-scroll";
 import { useOmp } from "@/hooks/use-omp";
@@ -117,7 +117,7 @@ export function GeneralView() {
         </p>
       )}
       <div className="flex items-end gap-2 border-t p-3">
-        <Textarea
+        <TaggedTextarea
           aria-label="Message omp"
           placeholder="Message omp…"
           rows={1}

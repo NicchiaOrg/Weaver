@@ -1,5 +1,5 @@
 ---
-description: "Use when reading or writing Weaver's settings, recent projects, job registry, General sessions or the System Certificates bundle."
+description: "Use when reading or writing Weaver's settings, recent projects, job registry, General sessions, the System Certificates bundle or the Solo mode state of a working copy."
 ---
 # Settings and local state
 
@@ -65,3 +65,9 @@ description: "Use when reading or writing Weaver's settings, recent projects, jo
 - Turning the setting off keeps the file on disk, unused.
 - `state.json` also holds `systemCertificates`: `{autoEnabledAt}`, the UTC instant (ISO 8601) when Weaver turned the setting on by itself because Zscaler is installed. Present means Weaver never does it again; it is never removed by Weaver. A `state.json` that cannot be read counts as without it.
 - The marker files of omp's installer live in `omp-install/` in the local data folder: `<nonce>.code`, decimal exit code as text (`requirements/tech#omp-setup`). Starting the installer deletes every earlier marker; omp being found deletes them too.
+
+## solo-mode
+
+- Solo mode is not a setting: it is never in `settings.json` and never in the settings schema. Its state is `.weaver/solo/solo.json` in the working copy, `{"mode": "folders"}` or `{"mode": "files"}`, UTF-8, LF, written atomically like every project file, in the local-only folder `solo/` with its `.gitignore` containing `*` (`requirements/data#General`).
+- No file means Solo mode is off. Turning it off deletes the whole `solo/` folder. A file that cannot be read or holds another value counts as off and is reported as a diagnostic with its path and reason (`requirements/data#General`); it is rewritten only by the next change of Solo mode.
+- At initialisation with Solo mode chosen, `solo/solo.json` is written with the rest of `.weaver/`, after the block (`requirements/rules#solo-mode`); a failure removes both.

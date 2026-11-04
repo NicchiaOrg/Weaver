@@ -42,6 +42,12 @@ pub trait Host: Send + Sync + 'static {
     fn file_locks(&self) -> Option<Arc<crate::file_lock::FileLockService>> {
         None
     }
+    /// The names of the assets of a project now, as the app holds them: the `@` tags of a message
+    /// or a request are recognised against them at the moment it is sent. Hosts of tests that do
+    /// not look at assets have none.
+    fn asset_names(&self, _project_id: &str) -> Vec<String> {
+        Vec::new()
+    }
     /// The environment Weaver itself runs in, to be inherited by omp (minus `WEAVER_*`).
     fn inherited_env(&self) -> Vec<(OsString, OsString)> {
         std::env::vars_os().collect()
@@ -144,6 +150,15 @@ impl Host for TauriHost {
 
     fn file_locks(&self) -> Option<Arc<crate::file_lock::FileLockService>> {
         Some(self.state().file_locks.clone())
+    }
+
+    fn asset_names(&self, project_id: &str) -> Vec<String> {
+        self.state()
+            .assets
+            .assets(project_id)
+            .iter()
+            .map(|asset| asset.name.clone())
+            .collect()
     }
 
     fn emit_jobs(&self, snapshot: &JobsSnapshot) {

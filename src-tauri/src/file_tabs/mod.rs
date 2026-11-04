@@ -35,7 +35,7 @@ use weaver_core::file_tab::save::{self, PathLocks};
 use self::events::FileEvents;
 use self::watch::{ChangeSink, TabWatch, TabWatcher};
 use self::wire::{
-    FileContent, FileKind, FileOpenResult, FileReloadResult, ReadOnlyReason, TabChange,
+    FileContent, FileImage, FileKind, FileOpenResult, FileReloadResult, ReadOnlyReason, TabChange,
 };
 use crate::file_lock::{FileLockService, LockObserver};
 use crate::log_warn;
@@ -175,8 +175,8 @@ impl FileTabs {
             }
         };
 
-        let read = self.read_file(&canonical, is_inside_weaver(&key))?;
-        let content = content_of(&read);
+        let mut read = self.read_file(&canonical, is_inside_weaver(&key))?;
+        let content = content_of(&mut read);
 
         let mut closed = None;
         {
@@ -218,7 +218,7 @@ impl FileTabs {
         let lock = self.paths.of(&canonical);
         let _held = save::hold(&lock);
         let inside = is_inside_weaver(rel);
-        let read = match read::read(&canonical, inside) {
+        let mut read = match read::read(&canonical, inside) {
             Ok(read) => read,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 if let Some(tab) = self
@@ -240,7 +240,7 @@ impl FileTabs {
             tab.adopt(&read);
         }
         Ok(FileReloadResult::Read {
-            content: content_of(&read),
+            content: content_of(&mut read),
         })
     }
 
@@ -572,9 +572,17 @@ fn is_inside_weaver(rel: &str) -> bool {
         .is_some_and(|first| first.eq_ignore_ascii_case(".weaver"))
 }
 
-fn content_of(read: &FileRead) -> FileContent {
+/// What the UI gets of a read. The image moves out of `read` into it, so that it is never copied
+/// and the backend keeps none of it; the rest of `read` is what the tab adopts.
+fn content_of(read: &mut FileRead) -> FileContent {
+    let image = read.image.take().map(|image| FileImage {
+        data_url: image.data_url,
+        size: image.size,
+    });
     FileContent {
-        kind: if read.is_binary() {
+        kind: if image.is_some() {
+            FileKind::Image
+        } else if read.is_binary() {
             FileKind::Binary
         } else {
             FileKind::Text
@@ -585,6 +593,8 @@ fn content_of(read: &FileRead) -> FileContent {
             ReadOnly::TooLarge => ReadOnlyReason::TooLarge,
             ReadOnly::Weaver => ReadOnlyReason::Weaver,
         }),
+        image,
+        image_too_large: read.image_too_large,
     }
 }
 

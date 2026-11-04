@@ -16,10 +16,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ts_rs::TS;
 
-use super::failure::Failure;
 use super::lookup::{find_omp, LookupEnv};
 use super::run::{limits, Exec};
 use super::version::{is_supported, parse_omp_version, Version, MIN_OMP_VERSION};
+use crate::process::timed::Failure;
 
 /// A usable model of `omp models --json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -236,7 +236,7 @@ pub(crate) mod fake {
     use std::time::Duration;
 
     use super::*;
-    use crate::omp::run::Output;
+    use crate::process::timed::Output;
 
     type Answer = Result<Output, Failure>;
 
@@ -301,7 +301,7 @@ mod tests {
     use super::*;
     use crate::omp::lookup::Os;
     use crate::omp::providers::provider;
-    use crate::omp::run::Output;
+    use crate::process::timed::Output;
 
     const MODELS: &str = r#"{"models":[
         {"provider":"anthropic","kind":"chat","id":"a","selector":"anthropic/a","name":"Model A","thinking":["low","high"]},

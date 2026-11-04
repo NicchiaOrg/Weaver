@@ -71,6 +71,8 @@ pub struct TestHost {
     pub file_locks: Arc<FileLockService>,
     /// What the agent lock told the UI.
     pub lock_events: Arc<FileEventsRecorder>,
+    /// The names of the assets of every project, for the `@` tags.
+    pub assets: Mutex<Vec<String>>,
     _base: tempfile::TempDir,
 }
 
@@ -97,6 +99,7 @@ impl TestHost {
             board_changes: Mutex::new(0),
             ready: Mutex::new(true),
             _base: base,
+            assets: Mutex::default(),
         })
     }
 
@@ -188,6 +191,10 @@ impl Host for TestHost {
 
     fn file_locks(&self) -> Option<Arc<FileLockService>> {
         Some(self.file_locks.clone())
+    }
+
+    fn asset_names(&self, _project_id: &str) -> Vec<String> {
+        self.assets.lock().unwrap().clone()
     }
 
     fn inherited_env(&self) -> Vec<(OsString, OsString)> {

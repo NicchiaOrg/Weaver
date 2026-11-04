@@ -5,8 +5,8 @@
 //! | [`requirement_skills`] | The `weaver-req-*` skills: budget, mode, generated text (pure) |
 //! | [`plan`] | A set of files to write and remove, applied whole or not at all |
 //! | [`sync`] | The one function that keeps the installed files and the Requirement skills right, and its structured report |
-//! | [`initialise`] | `developer.INITIALISE_PROJECT`: `.weaver/`, the starting Areas and every agent file |
-//! | [`schedule`] | At most one check per project at a time; requests meanwhile coalesce |
+//! | [`initialise`] | `developer.INITIALISE_PROJECT`: `.weaver/`, the starting Areas, every agent file and, when chosen, Solo mode (`crate::solo_mode`) |
+//! | [`schedule`] | At most one check per project at a time (the repair of Solo mode rides on it); requests meanwhile coalesce |
 //! | [`folder_tree`] | The folders of `Import from Code`: no dot names, nothing git ignores |
 //!
 //! The embedded list of installed files is [`crate::agent_files`]; the starting Areas are in

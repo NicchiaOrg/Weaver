@@ -8,7 +8,7 @@ import type { DriftView } from "@/bindings/DriftView";
 import { BoardProvider } from "@/components/board/board-state";
 import { BoardActionsContext, type BoardActions } from "@/components/board/board-ui";
 import { BoardView } from "@/components/board/board-view";
-import { driftView } from "@/components/board/drift-fixtures";
+import { attachedProposal, driftView } from "@/components/board/drift-fixtures";
 import { proposalView } from "@/components/board/proposal-fixtures";
 import { ProjectContext } from "@/components/project-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -197,20 +197,18 @@ describe("the details of a Drift", () => {
   });
 
   it("replaces the options by a sentence without Fix the code, and Accept Proposal lists the Proposal's reasons", async () => {
-    const attached = {
-      id: "pppppppp",
-      shortNumber: "P2",
-      title: "Paid orders",
-      state: "Open",
+    const attached = attachedProposal({
       body: "The Model says what the code does.",
       files: { added: [], changed: ["model/shop/order.md"], removed: [] },
-      acceptReasons: ["Stale: `model/shop/order.md` changed since the Proposal started"],
-    };
+      acceptReasons: ["A run is in progress", "Not approved yet"],
+    });
     const { user, dialog } = await open(drift({ options: [], attached }));
     expect(within(dialog).getByText("No code change can respect both the Model and the Requirements.")).toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: "Fix the code" })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole("radio")).not.toBeInTheDocument();
     expect(dialog).toHaveTextContent("Paid orders");
+    expect(dialog).toHaveTextContent("Open");
+    expect(dialog).not.toHaveTextContent("stale");
     expect(dialog).toHaveTextContent("~ model/shop/order.md");
     const accept = within(dialog).getByRole("button", { name: "Accept Proposal" });
     expect(reasonsOf(accept)).toEqual(attached.acceptReasons);
@@ -219,12 +217,102 @@ describe("the details of a Drift", () => {
   });
 
   it("accepts the Proposal when it can be approved, and repeats Resolve and Dismiss Drift in the footer", async () => {
-    const attached = { id: "pppppppp", shortNumber: "P2", title: "Paid orders", state: "Open", body: "", files: { added: [], changed: [], removed: [] }, acceptReasons: [] };
-    const { user, dialog } = await open(drift({ attached }));
+    const { user, dialog } = await open(drift({ attached: attachedProposal() }));
+    expect(within(dialog).queryByRole("button", { name: "Refine" })).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Accept Proposal" }));
     expect(decisions).toEqual([{ name: "accept_drift_proposal", args: { projectId: PROJECT, driftId: "dddddddd" } }]);
     expect(within(dialog).getAllByRole("button", { name: "Resolve" }).length).toBeGreaterThan(0);
     expect(within(dialog).getAllByRole("button", { name: "Dismiss Drift" }).length).toBeGreaterThan(0);
+  });
+
+  it("replaces Accept Proposal by Refine on a stale Open Proposal, shows the stale badge, and refines without deciding", async () => {
+    const attached = attachedProposal({
+      stale: true,
+      acceptReasons: ["Stale: `model/shop/order.md` changed since the Proposal started"],
+      refine: { reasons: [], tooltip: "Refine on the current Model", refines: true },
+    });
+    const { user, dialog } = await open(drift({ attached }));
+    expect(dialog).toHaveTextContent("stale");
+    expect(within(dialog).queryByRole("button", { name: "Accept Proposal" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Discard" })).not.toBeInTheDocument();
+    const refine = within(dialog).getByRole("button", { name: "Refine" });
+    expect(refine).not.toHaveAttribute("aria-disabled");
+    act(() => refine.focus());
+    expect((await screen.findAllByText("Refine on the current Model")).length).toBeGreaterThan(0);
+    await user.click(refine);
+    expect(decisions).toEqual([{ name: "refine_drift_proposal", args: { projectId: PROJECT, driftId: "dddddddd" } }]);
+  });
+
+  it("disables Refine only for the agent still finishing", async () => {
+    const attached = attachedProposal({
+      stale: true,
+      acceptReasons: ["A run is in progress"],
+      refine: { reasons: ["The agent is still finishing"], tooltip: "Refine on the current Model", refines: true },
+    });
+    const { user, dialog } = await open(drift({ attached }));
+    const refine = within(dialog).getByRole("button", { name: "Refine" });
+    expect(refine).toHaveAttribute("aria-disabled", "true");
+    expect(reasonsOf(refine)).toEqual(["The agent is still finishing"]);
+    await user.click(refine);
+    expect(decisions).toEqual([]);
+  });
+
+  it("puts the agent that filed the Drift first on Refine", async () => {
+    const attached = attachedProposal({ stale: true, refine: { reasons: [], tooltip: "Refine on the current Model", refines: true } });
+    const { dialog } = await open(drift({ attached }, true));
+    expect(reasonsOf(within(dialog).getByRole("button", { name: "Refine" }))).toEqual(["The agent is still finishing"]);
+  });
+
+  it("says `Refinement interrupted` and has Refine (Continue refining) and a confirmed Discard instead of Accept Proposal", async () => {
+    const attached = attachedProposal({
+      state: "Refinement interrupted",
+      acceptReasons: ["The attached Proposal is still a Draft"],
+      refine: { reasons: [], tooltip: "Continue refining", refines: true },
+      discardReasons: [],
+    });
+    const { user, dialog } = await open(drift({ attached }));
+    expect(dialog).toHaveTextContent("Refinement interrupted");
+    expect(within(dialog).queryByRole("button", { name: "Accept Proposal" })).not.toBeInTheDocument();
+    const refine = within(dialog).getByRole("button", { name: "Refine" });
+    act(() => refine.focus());
+    expect((await screen.findAllByText("Continue refining")).length).toBeGreaterThan(0);
+    await user.click(refine);
+    expect(decisions).toEqual([{ name: "refine_drift_proposal", args: { projectId: PROJECT, driftId: "dddddddd" } }]);
+
+    decisions.length = 0;
+    await user.click(within(dialog).getByRole("button", { name: "Discard" }));
+    const confirm = await screen.findByRole("alertdialog", { name: "Discard P2?" });
+    await user.click(within(confirm).getByRole("button", { name: "Cancel" }));
+    expect(decisions).toEqual([]);
+    await user.click(within(dialog).getByRole("button", { name: "Discard" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Discard" }));
+    expect(decisions).toEqual([{ name: "discard_drift_proposal", args: { projectId: PROJECT, driftId: "dddddddd" } }]);
+  });
+
+  it("shows `Refining`, and while it lasts Accept Proposal, Fix the code, Resolve and Dismiss Drift say `Being refined`", async () => {
+    const attached = attachedProposal({ state: "Refining", stale: true, acceptReasons: ["Being refined"] });
+    const { user, dialog } = await open(
+      drift({
+        attached,
+        fixReasons: ["Being refined"],
+        resolveReasons: ["Being refined"],
+        dismissReasons: ["Being refined"],
+      }),
+    );
+    expect(dialog).toHaveTextContent("Refining");
+    expect(within(dialog).queryByRole("button", { name: "Refine" })).not.toBeInTheDocument();
+    for (const name of ["Accept Proposal", "Fix the code"]) {
+      const button = within(dialog).getByRole("button", { name });
+      expect(button).toHaveAttribute("aria-disabled", "true");
+      expect(reasonsOf(button)).toEqual(["Being refined"]);
+    }
+    for (const name of ["Resolve", "Dismiss Drift"]) {
+      for (const button of within(dialog).getAllByRole("button", { name })) {
+        expect(reasonsOf(button)).toEqual(["Being refined"]);
+      }
+    }
+    await user.click(within(dialog).getByRole("button", { name: "Fix the code" }));
+    expect(decisions).toEqual([]);
   });
 
   it("opens the details of a Drift gathered into a resolution from its row", async () => {

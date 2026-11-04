@@ -28,6 +28,12 @@ vi.mock("@/hooks/use-omp", () => ({ useOmp: () => ({ status: null }) }));
 
 const PROJECT = "0123456789abcdef";
 
+const ASSETS = vi.hoisted(() => [
+  { name: "logo.png", size: 1 },
+  { name: "spec.pdf", size: 1 },
+]);
+vi.mock("@/components/assets/use-assets", () => ({ useAssets: () => ({ assets: ASSETS, loaded: true, apply: () => {} }) }));
+
 function job(id: string, state: JobRow["state"], patch: Partial<JobRow> = {}): JobRow {
   return { id, kind: "run", name: `Run ${id}`, state, reason: null, created: "2026-11-02T07:00:00.000Z", started: null, ended: null, note: null, target: null, ...patch };
 }
@@ -183,7 +189,7 @@ describe("the conversation of an Ask more conversation", () => {
     ["question", "Ask about the question…"],
   ] as const)("is empty with only the message box and the placeholder of a %s", async (kind, placeholder) => {
     mount([ask("askidle1", "Ask T3", { kind })]);
-    const box = await screen.findByRole("textbox", { name: "Message the agent" });
+    const box = await screen.findByRole("combobox", { name: "Message the agent" });
     expect(box).toHaveAttribute("placeholder", placeholder);
     expect(screen.queryByRole("button", { name: "Stop the agent" })).toBeNull();
     expect(screen.queryByText(/Weaver/)).toBeNull();
@@ -194,7 +200,7 @@ describe("the conversation of an Ask more conversation", () => {
     const mounted = mount([ask("askidle1", "Ask T3")], {
       askidle1: [{ kind: "developer", message: 1, text: "First", delivery: { status: "delivered" } }],
     });
-    const box = await screen.findByRole("textbox", { name: "Message the agent" });
+    const box = await screen.findByRole("combobox", { name: "Message the agent" });
     await waitFor(() => expect(box).toHaveAttribute("placeholder", "Message the agent…"));
     await user.type(box, "  Why?  {Enter}");
     expect(mounted.sent).toEqual([{ askId: "askidle1", text: "Why?" }]);
@@ -230,7 +236,7 @@ describe("the conversation of an Ask more conversation", () => {
 
   it("has no `Back to questions` when the round is not the one that is open", async () => {
     mount([ask("askidle1", "Ask question", { kind: "question", round: 7 })], {}, [], null);
-    await screen.findByRole("textbox", { name: "Message the agent" });
+    await screen.findByRole("combobox", { name: "Message the agent" });
     expect(screen.queryByRole("button", { name: "Back to questions" })).toBeNull();
   });
 });
@@ -317,6 +323,22 @@ describe("the focus of a conversation just opened", () => {
         <AskConversation ask={ask("askidle1", "Ask T3")} focus={1} />
       </TooltipProvider>,
     );
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "Message the agent" })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveFocus());
+  });
+});
+
+describe("the @ tags in the box of an Ask more conversation", () => {
+  it("opens the list of assets, inserts the chosen one, does not send with the list open, and colours the recognised tags", async () => {
+    const user = userEvent.setup();
+    const mounted = mount([ask("askidle1", "Ask T3")]);
+    const box = await screen.findByRole("combobox", { name: "Message the agent" });
+    await user.type(box, "See @sp");
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["spec.pdf"]);
+    await user.keyboard("{Tab}");
+    expect(mounted.sent).toEqual([]);
+    expect(box).toHaveValue("See @spec.pdf ");
+    expect(document.querySelector("[data-tag='spec.pdf']")?.textContent).toBe("@spec.pdf");
+    await user.keyboard("{Enter}");
+    expect(mounted.sent).toEqual([{ askId: "askidle1", text: "See @spec.pdf" }]);
   });
 });

@@ -17,6 +17,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+use crate::assets::tags;
 use crate::question::request::{Question, RoundRequest};
 use crate::settings::{ModelSettings, Permissions};
 
@@ -553,16 +554,20 @@ pub fn first_prompt(instruction: &str, message: &str) -> String {
 }
 
 /// What the conversation shows of a user message of a replayed history: for the first prompt only
-/// the text after `Developer's message:`, for any other message the message itself.
+/// the text after `Developer's message:`, for any other message the message itself; in both
+/// without the block Weaver appended for the assets the message tags.
 pub fn shown_message(prompt: &str) -> &str {
-    if !prompt.starts_with(PROMPT_HEAD) {
-        return prompt;
-    }
-    let marker = format!("\n\n{MESSAGE_HEAD}\n");
-    match prompt.find(&marker) {
-        Some(at) => &prompt[at + marker.len()..],
-        None => prompt,
-    }
+    let message = if prompt.starts_with(PROMPT_HEAD) {
+        let marker = format!("\n\n{MESSAGE_HEAD}\n");
+        match prompt.find(&marker) {
+            Some(at) => &prompt[at + marker.len()..],
+            None => prompt,
+        }
+    } else {
+        prompt
+    };
+    // What Weaver appended for the tagged assets is not the developer's.
+    tags::without_block(message)
 }
 
 #[cfg(test)]
@@ -1196,6 +1201,22 @@ mod tests {
         assert_eq!(
             shown_message("Developer's message:\nnot a first prompt"),
             "Developer's message:\nnot a first prompt"
+        );
+    }
+
+    #[test]
+    fn the_block_of_tagged_assets_is_never_shown_in_a_first_or_a_later_message() {
+        let tagged = vec!["logo.png".to_owned(), "my notes.txt".to_owned()];
+        let message = tags::with_block("Look at @logo.png and @my notes.txt", &tagged);
+        let prompt = first_prompt(&instruction(&Chosen::Task(task_bare()), None), &message);
+        assert!(prompt.ends_with("Read the file `.weaver/assets/my notes.txt`."));
+        assert_eq!(
+            shown_message(&prompt),
+            "Look at @logo.png and @my notes.txt"
+        );
+        assert_eq!(
+            shown_message(&message),
+            "Look at @logo.png and @my notes.txt"
         );
     }
 }

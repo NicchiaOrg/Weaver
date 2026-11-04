@@ -32,7 +32,6 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Manager, State};
 use tokio::sync::watch;
-use weaver_core::omp::failure::Failure;
 use weaver_core::omp::installer;
 use weaver_core::omp::lookup::{LookupEnv, Os};
 use weaver_core::omp::machine::{
@@ -44,6 +43,7 @@ use weaver_core::omp::providers::{provider, Provider};
 use weaver_core::omp::run::{which, CertificateSource, Certificates, SystemExec};
 use weaver_core::omp::terminal::{self, Task};
 use weaver_core::omp::usage::{self, connected_providers, Usage};
+use weaver_core::process::timed::Failure;
 use weaver_core::project::clock::{Clock, SystemClock};
 use weaver_core::settings::SettingKey;
 use weaver_core::system_certificates::EXPORT_LIMIT;

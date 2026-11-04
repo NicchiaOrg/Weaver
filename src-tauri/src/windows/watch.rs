@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 use notify::{EventKind, RecursiveMode, Watcher};
 use weaver_core::atomic;
 use weaver_core::project::layout;
+use weaver_core::solo_mode::{self, Git};
 
 use crate::pictures::Rebuild;
 use crate::{log_debug, log_warn};
@@ -223,6 +224,10 @@ fn run(
                             } else if !present {
                                 watching_weaver = false;
                             }
+                            if !present {
+                                // `workspace.PROJECT_FOLDER_REMOVED`, before anything else.
+                                remove_vanished_block(root);
+                            }
                             batcher.push_everything(now);
                         }
                         Route::Inside => {
@@ -251,6 +256,20 @@ fn run(
             log_debug!("a batch of changes in {} is ready", root.display());
             sink(batch);
         }
+    }
+}
+
+/// `solo-mode/On/workspace.PROJECT_FOLDER_REMOVED`: removes the block of this working copy from git's
+/// local exclusions, found by its markers alone. A failure is logged and nothing is shown; when
+/// the folder vanishes while Weaver is closed the block stays.
+fn remove_vanished_block(root: &Path) {
+    match solo_mode::remove_block_of(&Git::system(), root) {
+        Ok(true) => log_debug!("the block of Solo mode of {} was removed", root.display()),
+        Ok(false) => {}
+        Err(reason) => log_warn!(
+            "the block of Solo mode of {} was not removed: {reason}",
+            root.display()
+        ),
     }
 }
 
@@ -418,5 +437,67 @@ mod tests {
             seen.iter()
                 .any(|batch| matches!(batch, Rebuild::Paths(paths) if paths.contains(&file)))
         });
+    }
+
+    #[test]
+    fn a_weaver_folder_that_vanishes_takes_the_block_of_solo_mode_with_it_before_anything_else() {
+        use weaver_core::solo_mode::{set_mode, Mode};
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = weaver_core::paths::canonical_root(dir.path()).unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        assert!(init.success());
+        std::fs::create_dir_all(root.join(".weaver").join("model")).unwrap();
+        let exclude = root.join(".git").join("info").join("exclude");
+        let other = "# >>> weaver solo mode: /elsewhere\n/x/\n# <<< weaver solo mode: /elsewhere\n";
+        let mut text = std::fs::read_to_string(&exclude).unwrap_or_default();
+        text.push_str(other);
+        std::fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+        std::fs::write(&exclude, &text).unwrap();
+        set_mode(&Git::system(), &root, Mode::Folders).unwrap();
+        let marker = format!("# >>> weaver solo mode: {}", root.to_string_lossy());
+        assert!(std::fs::read_to_string(&exclude).unwrap().contains(&marker));
+
+        let (sender, receiver) = mpsc::channel();
+        let _guard = NotifyWatch.start(&root, sink_to(sender)).unwrap();
+        std::fs::remove_dir_all(root.join(".weaver")).unwrap();
+        collect_until(&receiver, |seen| seen.contains(&Rebuild::All));
+
+        // Gone by the time the batch of the vanishing is handed over; the block of another working
+        // copy and every other line stay.
+        assert_eq!(std::fs::read_to_string(&exclude).unwrap(), text);
+    }
+
+    #[test]
+    fn the_block_goes_with_the_weaver_folder_even_when_its_state_file_is_already_gone() {
+        use weaver_core::solo_mode::{set_mode, Mode};
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = weaver_core::paths::canonical_root(dir.path()).unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        assert!(init.success());
+        std::fs::create_dir_all(root.join(".weaver").join("model")).unwrap();
+        let exclude = root.join(".git").join("info").join("exclude");
+        let before = std::fs::read_to_string(&exclude).unwrap_or_default();
+        set_mode(&Git::system(), &root, Mode::Folders).unwrap();
+        let marker = format!("# >>> weaver solo mode: {}", root.to_string_lossy());
+        assert!(std::fs::read_to_string(&exclude).unwrap().contains(&marker));
+        // Solo mode changed behind Weaver's back: the state is gone, the block stays.
+        std::fs::remove_dir_all(root.join(".weaver").join("solo")).unwrap();
+
+        let (sender, receiver) = mpsc::channel();
+        let _guard = NotifyWatch.start(&root, sink_to(sender)).unwrap();
+        std::fs::remove_dir_all(root.join(".weaver")).unwrap();
+        collect_until(&receiver, |seen| seen.contains(&Rebuild::All));
+
+        assert_eq!(std::fs::read_to_string(&exclude).unwrap(), before);
     }
 }

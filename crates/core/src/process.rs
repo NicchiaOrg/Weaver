@@ -5,6 +5,8 @@
 //! The few commands that must pass through a shell (terminal launches of the omp setup) quote
 //! their text with their own tested function and still start through [`command`].
 
+pub mod timed;
+
 use std::ffi::OsStr;
 use std::process::Command;
 

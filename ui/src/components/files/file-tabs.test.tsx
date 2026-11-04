@@ -1,3 +1,4 @@
+import { undo } from "@codemirror/commands";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,10 +24,27 @@ const PROJECT = "0123456789abcdef";
 interface DiskFile {
   text: string;
   binary?: boolean;
+  /** A binary file that is an image Weaver can show. */
+  image?: { dataUrl: string; size: number };
+  /** A binary file with an image signature over 10 MB. */
+  imageTooLarge?: boolean;
   readOnly?: "tooLarge" | "weaver";
   locked?: boolean;
   /** The file on disk changed since the tab read it (a save finds it). */
   stale?: boolean;
+}
+
+/** What `file_open` and `file_reload` tell of a file. */
+function contentOf(file: DiskFile) {
+  const kind = file.image ? "image" : file.binary ? "binary" : "text";
+  return {
+    kind,
+    text: kind === "text" ? file.text : null,
+    hash: "h",
+    readOnly: file.readOnly ?? null,
+    image: file.image ?? null,
+    imageTooLarge: file.imageTooLarge ?? false,
+  };
 }
 
 let disk = new Map<string, DiskFile>();
@@ -75,21 +93,12 @@ function install() {
           if (!victim) return { status: "full" };
           closed = victim.path;
         }
-        return {
-          status: "opened",
-          path,
-          kind: file.binary ? "binary" : "text",
-          text: file.binary ? null : file.text,
-          hash: "h",
-          readOnly: file.readOnly ?? null,
-          locked: file.locked ?? false,
-          closed,
-        };
+        return { status: "opened", path, ...contentOf(file), locked: file.locked ?? false, closed };
       }
       case "file_reload": {
         const file = disk.get(path);
         if (!file) return { status: "gone" };
-        return { status: "read", kind: file.binary ? "binary" : "text", text: file.binary ? null : file.text, hash: "h", readOnly: file.readOnly ?? null };
+        return { status: "read", ...contentOf(file) };
       }
       case "file_save": {
         const file = disk.get(path);
@@ -708,5 +717,282 @@ describe("Save all, and what the tree asks", () => {
     unmount();
     expect(sent("files_unsaved").at(-1)).toEqual({ projectId: PROJECT, paths: [] });
     expect(sent("files_close_key").at(-1)).toEqual({ projectId: PROJECT, claimed: false });
+  });
+});
+
+/** The `<img>` of the image view loads, with the size the browser would find. */
+function loaded(image: HTMLElement, width: number, height: number) {
+  Object.defineProperty(image, "naturalWidth", { configurable: true, value: width });
+  Object.defineProperty(image, "naturalHeight", { configurable: true, value: height });
+  fireEvent.load(image);
+}
+
+const PNG = { dataUrl: "data:image/png;base64,AAAA", size: 12_700 };
+
+describe("images", () => {
+  beforeEach(() => {
+    disk.set("pics/logo.png", { text: "", image: PNG });
+  });
+
+  it("shows an image with its size in pixels and its weight, and no text, at the size of the panel", async () => {
+    const { container } = mount();
+    await open("pics/logo.png");
+    const image = screen.getByAltText("logo.png");
+    expect(image).toHaveAttribute("src", PNG.dataUrl);
+    expect(screen.queryByText("Binary file")).toBeNull();
+    expect(container.querySelector(".cm-content")?.textContent ?? "").toBe("");
+    // The size shows once the image is drawn.
+    expect(screen.queryByText(/ px$/)).toBeNull();
+    loaded(image, 640, 480);
+    expect(screen.getByText("640 × 480 px")).toBeInTheDocument();
+    expect(screen.getByText("12.4 KB")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show actual size" })).toBe(image);
+    expect(tabOf("logo.png")).toBeInTheDocument();
+  });
+
+  it("`Open in editor` on an image opens the file without a line", async () => {
+    const user = userEvent.setup();
+    mount();
+    await open("pics/logo.png");
+    await user.click(screen.getByRole("button", { name: "Open in editor" }));
+    expect(sent("open_in_editor").at(-1)).toMatchObject({ file: "pics/logo.png", line: null });
+  });
+
+  it("a click, or Enter or Space with the focus, switches between fitted and actual size, and the tab keeps the choice", async () => {
+    const user = userEvent.setup();
+    mount();
+    await open("pics/logo.png");
+    const image = screen.getByAltText("logo.png");
+    expect(image.className).toContain("cursor-zoom-in");
+    await user.click(image);
+    expect(screen.getByRole("button", { name: "Fit to panel" })).toBe(image);
+    expect(image.className).toContain("cursor-zoom-out");
+    image.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("button", { name: "Show actual size" })).toBe(image);
+    await user.keyboard(" ");
+    expect(screen.getByRole("button", { name: "Fit to panel" })).toBe(image);
+    // Another tab and back, and a new image read: the tab stays at actual size.
+    await open("notes.txt");
+    act(() => api.showTab("pics/logo.png"));
+    expect(screen.getByRole("button", { name: "Fit to panel" })).toBeInTheDocument();
+    disk.set("pics/logo.png", { text: "", image: { dataUrl: "data:image/png;base64,BBBB", size: 3 } });
+    emitDisk("file-tab-changed", { path: "pics/logo.png", change: "changed" });
+    await waitFor(() => expect(screen.getByAltText("logo.png")).toHaveAttribute("src", "data:image/png;base64,BBBB"));
+    expect(screen.getByRole("button", { name: "Fit to panel" })).toBeInTheDocument();
+  });
+
+  it("reads an image again after a change: the new image shows at once, once per change", async () => {
+    mount();
+    await open("pics/logo.png");
+    loaded(screen.getByAltText("logo.png"), 640, 480);
+    disk.set("pics/logo.png", { text: "", image: { dataUrl: "data:image/png;base64,CCCC", size: 2_097_152 } });
+    emitDisk("file-tab-changed", { path: "pics/logo.png", change: "changed" });
+    await waitFor(() => expect(screen.getByAltText("logo.png")).toHaveAttribute("src", "data:image/png;base64,CCCC"));
+    expect(sent("file_reload")).toHaveLength(1);
+    // The size of the new image comes with its own load; the weight is already the new one.
+    expect(screen.queryByText("640 × 480 px")).toBeNull();
+    expect(screen.getByText("2.0 MB")).toBeInTheDocument();
+    loaded(screen.getByAltText("logo.png"), 32, 16);
+    expect(screen.getByText("32 × 16 px")).toBeInTheDocument();
+  });
+
+  it("turns into the binary panel when the file is no longer an image, and says when it is too large", async () => {
+    mount();
+    await open("pics/logo.png");
+    disk.set("pics/logo.png", { text: "", binary: true });
+    emitDisk("file-tab-changed", { path: "pics/logo.png", change: "changed" });
+    await waitFor(() => expect(screen.getByText("Binary file")).toBeInTheDocument());
+    expect(screen.queryByText(/larger than 10 MB/)).toBeNull();
+    expect(screen.queryByAltText("logo.png")).toBeNull();
+    // It is an image again, then one that is too large.
+    disk.set("pics/logo.png", { text: "", image: PNG });
+    emitDisk("file-tab-changed", { path: "pics/logo.png", change: "changed" });
+    await waitFor(() => expect(screen.getByAltText("logo.png")).toBeInTheDocument());
+    expect(screen.queryByText("Binary file")).toBeNull();
+    disk.set("pics/logo.png", { text: "", binary: true, imageTooLarge: true });
+    emitDisk("file-tab-changed", { path: "pics/logo.png", change: "changed" });
+    await waitFor(() => expect(screen.getByText("This image is larger than 10 MB: no preview.")).toBeInTheDocument());
+    expect(screen.getByText("Binary file")).toBeInTheDocument();
+  });
+
+  it("opens a file over 10 MB with an image signature as binary with the reason", async () => {
+    disk.set("pics/huge.png", { text: "", binary: true, imageTooLarge: true });
+    mount();
+    await open("pics/huge.png");
+    expect(screen.getByText("Binary file")).toBeInTheDocument();
+    expect(screen.getByText("This image is larger than 10 MB: no preview.")).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "huge.png" })).toBeNull();
+  });
+
+  it("an image that cannot be drawn shows the binary panel with the line that it cannot be shown", async () => {
+    mount();
+    await open("pics/logo.png");
+    fireEvent.error(screen.getByAltText("logo.png"));
+    expect(screen.getByText("Binary file")).toBeInTheDocument();
+    expect(screen.getByText("This image cannot be shown.")).toBeInTheDocument();
+    expect(screen.queryByAltText("logo.png")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open in editor" })).toBeInTheDocument();
+  });
+
+  it("a deleted image stays with a bar and no `Save again`, and the bar goes when the file is back", async () => {
+    mount();
+    await open("pics/logo.png");
+    disk.delete("pics/logo.png");
+    emitDisk("file-tab-changed", { path: "pics/logo.png", change: "deleted" });
+    expect(screen.getByRole("alert")).toHaveTextContent("This file was deleted on disk.");
+    expect(screen.queryByRole("button", { name: "Save again" })).toBeNull();
+    expect(screen.getByAltText("logo.png")).toBeInTheDocument();
+    disk.set("pics/logo.png", { text: "", image: PNG });
+    emitDisk("file-tab-changed", { path: "pics/logo.png", change: "changed" });
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(screen.getByAltText("logo.png")).toBeInTheDocument();
+  });
+
+  it("an image has no lock line and nothing in it can be saved", async () => {
+    mount();
+    await open("pics/logo.png");
+    emitDisk("file-lock-changed", { path: "pics/logo.png", locked: true, movedTo: null });
+    expect(screen.queryByText("The agent is editing this file.")).toBeNull();
+    act(() => api.save(api.activeId ?? ""));
+    expect(sent("file_save")).toHaveLength(0);
+  });
+});
+
+describe("SVG files", () => {
+  const SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>\n';
+  const dataUrlOf = (text: string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`;
+
+  beforeEach(() => {
+    disk.set("art/shape.svg", { text: SVG });
+    disk.set("art/UPPER.SVG", { text: SVG });
+    disk.set("art/shape.svg.txt", { text: SVG });
+  });
+
+  it("opens on the drawing, built from the text as a data URL in an image, with its size and its weight", async () => {
+    const { container } = mount();
+    await open("art/shape.svg");
+    const image = screen.getByAltText("shape.svg");
+    expect(image).toHaveAttribute("src", dataUrlOf(SVG));
+    expect(screen.getByRole("radio", { name: "Preview" })).toBeChecked();
+    expect(container.querySelector("[data-language]")).toHaveAttribute("hidden");
+    loaded(image, 10, 10);
+    expect(screen.getByText("10 × 10 px")).toBeInTheDocument();
+    expect(screen.getByText(`${new TextEncoder().encode(SVG).length} B`)).toBeInTheDocument();
+  });
+
+  it("the name decides, whatever the case, and the content never does", async () => {
+    mount();
+    await open("art/UPPER.SVG");
+    expect(screen.getByAltText("UPPER.SVG")).toBeInTheDocument();
+    await open("art/shape.svg.txt");
+    expect(screen.queryByAltText("shape.svg.txt")).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Code" })).toBeNull();
+    await open("notes.txt");
+    expect(screen.queryByRole("radio", { name: "Preview" })).toBeNull();
+  });
+
+  it("switches between the drawing and the text with Code and Preview, keeping the cursor, the selection and the undo history", async () => {
+    const user = userEvent.setup();
+    const { container } = mount();
+    await open("art/shape.svg");
+    await user.click(screen.getByRole("radio", { name: "Code" }));
+    expect(container.querySelector("[data-language]")).not.toHaveAttribute("hidden");
+    expect(screen.queryByAltText("shape.svg")).toBeNull();
+    const view = editorView(container);
+    typeAtEnd(container, "<!-- x -->");
+    act(() => view.dispatch({ selection: { anchor: 3, head: 7 } }));
+    await user.click(screen.getByRole("radio", { name: "Preview" }));
+    // The drawing is the text of the tab, unsaved changes included.
+    expect(screen.getByAltText("shape.svg")).toHaveAttribute("src", dataUrlOf(`${SVG}<!-- x -->`));
+    await user.click(screen.getByRole("radio", { name: "Code" }));
+    expect(editorView(container)).toBe(view);
+    expect(view.state.selection.main).toMatchObject({ anchor: 3, head: 7 });
+    expect(view.state.doc.toString()).toBe(`${SVG}<!-- x -->`);
+    // The switch added nothing to the history: one undo takes back the one typed edit.
+    act(() => {
+      undo(view);
+    });
+    expect(view.state.doc.toString()).toBe(SVG);
+    // The file was never touched by the switch.
+    expect(sent("file_save")).toHaveLength(0);
+  });
+
+  it("the choice holds for the tab while it stays open", async () => {
+    const user = userEvent.setup();
+    mount();
+    await open("art/shape.svg");
+    await user.click(screen.getByRole("radio", { name: "Code" }));
+    await open("notes.txt");
+    act(() => api.showTab("art/shape.svg"));
+    expect(screen.getByRole("radio", { name: "Code" })).toBeChecked();
+    expect(screen.queryByAltText("shape.svg")).toBeNull();
+  });
+
+  it("Left and Right move between Code and Preview", async () => {
+    const user = userEvent.setup();
+    mount();
+    await open("art/shape.svg");
+    screen.getByRole("radio", { name: "Preview" }).focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(screen.getByRole("radio", { name: "Code" })).toHaveFocus();
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("radio", { name: "Preview" })).toHaveFocus();
+  });
+
+  it("draws nothing while the text is shown, however much is typed, and builds the drawing again when it is shown", async () => {
+    const user = userEvent.setup();
+    const { container } = mount();
+    await open("art/shape.svg");
+    await user.click(screen.getByRole("radio", { name: "Code" }));
+    const encode = vi.spyOn(globalThis, "encodeURIComponent");
+    typeAtEnd(container, "<a/>");
+    typeAtEnd(container, "<b/>");
+    expect(encode).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("radio", { name: "Preview" }));
+    expect(encode).toHaveBeenCalledTimes(1);
+    encode.mockRestore();
+  });
+
+  it("draws the text again when it is read from the disk while the drawing is shown", async () => {
+    mount();
+    await open("art/shape.svg");
+    const next = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"/>\n';
+    disk.set("art/shape.svg", { text: next });
+    emitDisk("file-tab-changed", { path: "art/shape.svg", change: "changed" });
+    await waitFor(() => expect(screen.getByAltText("shape.svg")).toHaveAttribute("src", dataUrlOf(next)));
+  });
+
+  it("a text that cannot be drawn says so in muted text in place of the drawing", async () => {
+    mount();
+    await open("art/shape.svg");
+    fireEvent.error(screen.getByAltText("shape.svg"));
+    expect(screen.getByText("This SVG cannot be drawn.")).toBeInTheDocument();
+    expect(screen.queryByAltText("shape.svg")).toBeNull();
+    expect(screen.queryByText(/ px$/)).toBeNull();
+  });
+
+  it("the switch is there for a read-only SVG too, and Cmd+S still saves the text", async () => {
+    const user = userEvent.setup();
+    const { container } = mount();
+    disk.set("art/big.svg", { text: SVG, readOnly: "tooLarge" });
+    await open("art/big.svg");
+    expect(screen.getByText("This file is larger than 2 MB: read-only, without colours.")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Code" })).toBeInTheDocument();
+    await open("art/shape.svg");
+    await user.click(screen.getByRole("radio", { name: "Code" }));
+    typeAtEnd(container, "<!-- y -->");
+    await user.click(screen.getByRole("radio", { name: "Preview" }));
+    fireEvent.keyDown(window, { key: "s", metaKey: true });
+    await waitFor(() => expect(sent("file_save")).toHaveLength(1));
+    expect(sent("file_save")[0]).toMatchObject({ path: "art/shape.svg", text: `${SVG}<!-- y -->` });
+  });
+
+  it("`Open in editor` on the drawing opens the file at the cursor's line", async () => {
+    const user = userEvent.setup();
+    mount();
+    await open("art/shape.svg");
+    await user.click(screen.getByRole("button", { name: "Open in editor" }));
+    expect(sent("open_in_editor").at(-1)).toMatchObject({ file: "art/shape.svg", line: 1 });
   });
 });

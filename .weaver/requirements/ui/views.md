@@ -44,6 +44,8 @@ description: "Use when building or changing the Requirements, Specs, History, fo
 - With no project window open, Weaver shows the welcome window, 640 × 480 px, not resizable: the app name and version, the recent projects (up to 10, most recent first; folder name, full path muted; a folder that no longer exists is marked `Not found` and can be removed from the list), `Open Folder` (system folder picker), and the omp status line linking to the omp setup (see `omp-setup`).
 - Clicking a recent project or choosing a folder opens it as described by `developer.OPEN_PROJECT`; the welcome window closes once a project window is open.
 - A project window's title is the project folder's name.
+- The sidebar has no entry that sends the window to the background: only `Keep working in background` of the close confirmation does (`requirements/tech#window`). When the window comes back it shows the same view, with every view's state as it was.
+- When the window cannot leave the screen after `Keep working in background`, it stays as it was and shows an error toast `Could not hide the window.` with the reason as its description.
 
 ## usage
 - **Dialog:** a shadcn `Dialog`, max width 480 px, title `Usage`, opened by the sidebar entry `Usage`; Esc, `X` or a click outside close it and the focus goes back to the entry. No Refresh button: the limits are read at each opening.

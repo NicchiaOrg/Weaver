@@ -1328,8 +1328,8 @@ fn accepting_needs_a_proposal_that_could_be_approved() {
     let before_stale = snapshot(root);
     let why = decide_at(root, &AgentFacts::default(), &Decision::AcceptProposal).unwrap_err();
     assert!(
-        why.contains("Stale: `model/shop/order.md` changed"),
-        "{why}"
+        why.contains("cannot be approved now"),
+        "a stale Proposal is refined, never accepted: {why}"
     );
     assert_eq!(snapshot(root), before_stale, "a refusal writes nothing");
     assert_ne!(before, before_stale);
@@ -1342,6 +1342,223 @@ fn accepting_needs_a_proposal_that_could_be_approved() {
     };
     let why = decide_at(root, &run, &Decision::AcceptProposal).unwrap_err();
     assert!(why.contains("A run is in progress"), "{why}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Refine the attached Proposal
+// ---------------------------------------------------------------------------------------------
+
+/// Makes the attached Proposal `pppppppp` stale: the file it changes is no longer the one it
+/// started from.
+fn make_stale(root: &Path) {
+    put(
+        root,
+        "model/shop/order.md",
+        &ORDER.replace("The customer is choosing.", "The customer is browsing."),
+    );
+}
+
+fn status_of_proposal(image: &ProjectImage) -> Option<Status> {
+    data::status_of(image.card(CardKind::Proposal, "pppppppp").unwrap())
+}
+
+#[test]
+fn refining_a_stale_attached_proposal_makes_it_refining_and_leaves_the_drift_open() {
+    let dir = project();
+    let root = dir.path();
+    put_drift(root, DRIFT, "open", "proposal: pppppppp\n");
+    attached_proposal(root, "pppppppp", "open");
+    make_stale(root);
+    let drift_before = fs::read(root.join(".weaver/drifts/dddddddd-d.md")).unwrap();
+    // A Run does not matter.
+    let run = AgentFacts {
+        run_in_progress: true,
+        ..AgentFacts::default()
+    };
+    let (image, decided) = decide_at(root, &run, &Decision::RefineProposal).unwrap();
+    assert_eq!(decided.refine.as_deref(), Some("pppppppp"));
+    assert_eq!(decided.status, "open");
+    assert_eq!(status_of_proposal(&image), Some(Status::Refining));
+    let attached = image.card(CardKind::Proposal, "pppppppp").unwrap();
+    assert!(data::refining_flag(attached), "refining: true is recorded");
+    assert_eq!(
+        fs::read(root.join(".weaver/drifts/dddddddd-d.md")).unwrap(),
+        drift_before,
+        "the Drift is not written"
+    );
+    assert_eq!(drift_of(&image, DRIFT).str_key("status"), Some("open"));
+    assert_eq!(
+        decide::Decision::RefineProposal.verb(),
+        "refine the Proposal of"
+    );
+}
+
+#[test]
+fn refining_continues_an_attached_draft_a_refinement_left_half_way() {
+    let dir = project();
+    let root = dir.path();
+    put_drift(root, DRIFT, "open", "proposal: pppppppp\n");
+    attached_proposal(root, "pppppppp", "draft\nrefining: true");
+    let (image, decided) =
+        decide_at(root, &AgentFacts::default(), &Decision::RefineProposal).unwrap();
+    assert_eq!(decided.refine.as_deref(), Some("pppppppp"));
+    assert_eq!(status_of_proposal(&image), Some(Status::Refining));
+    assert_eq!(drift_of(&image, DRIFT).str_key("status"), Some("open"));
+}
+
+#[test]
+fn refining_is_refused_without_a_stale_or_interrupted_attached_proposal_and_writes_nothing() {
+    let dir = project();
+    let root = dir.path();
+    put_drift(root, DRIFT, "open", "");
+    let why = decide_at(root, &AgentFacts::default(), &Decision::RefineProposal).unwrap_err();
+    assert!(why.contains("no attached Proposal"), "{why}");
+
+    put_drift(root, DRIFT, "open", "proposal: pppppppp\n");
+    // Open and not stale.
+    attached_proposal(root, "pppppppp", "open");
+    let before = snapshot(root);
+    let why = decide_at(root, &AgentFacts::default(), &Decision::RefineProposal).unwrap_err();
+    assert!(why.contains("not stale"), "{why}");
+    assert_eq!(snapshot(root), before);
+
+    // A Draft the agent is still writing.
+    attached_proposal(root, "pppppppp", "draft");
+    let before = snapshot(root);
+    let why = decide_at(root, &AgentFacts::default(), &Decision::RefineProposal).unwrap_err();
+    assert!(why.contains("still being written"), "{why}");
+    assert_eq!(snapshot(root), before);
+
+    // Already Refining.
+    attached_proposal(root, "pppppppp", "refining\nrefining: true");
+    make_stale(root);
+    let before = snapshot(root);
+    let why = decide_at(root, &AgentFacts::default(), &Decision::RefineProposal).unwrap_err();
+    assert!(why.contains("Being refined"), "{why}");
+    assert_eq!(snapshot(root), before);
+}
+
+#[test]
+fn refining_is_refused_while_the_agent_that_handed_the_proposal_over_or_the_drift_s_works() {
+    let dir = project();
+    let root = dir.path();
+    put_drift(root, DRIFT, "open", "proposal: pppppppp\n");
+    attached_proposal(root, "pppppppp", "open\njob: jjjjjjjj");
+    make_stale(root);
+    let before = snapshot(root);
+    let working = AgentFacts {
+        working_jobs: ["jjjjjjjj".to_owned()].into(),
+        ..AgentFacts::default()
+    };
+    let why = decide_at(root, &working, &Decision::RefineProposal).unwrap_err();
+    assert!(why.contains("The agent is still finishing"), "{why}");
+    assert_eq!(snapshot(root), before);
+
+    put_drift(root, DRIFT, "open", "proposal: pppppppp\njob: kkkkkkkk\n");
+    let drift_working = AgentFacts {
+        working_jobs: ["kkkkkkkk".to_owned()].into(),
+        ..AgentFacts::default()
+    };
+    let why = decide_at(root, &drift_working, &Decision::RefineProposal).unwrap_err();
+    assert!(why.contains("The agent is still finishing"), "{why}");
+}
+
+#[test]
+fn refining_writes_nothing_when_no_refinement_job_can_start() {
+    let dir = project();
+    let root = dir.path();
+    put_drift(root, DRIFT, "open", "proposal: pppppppp\n");
+    attached_proposal(root, "pppppppp", "open");
+    make_stale(root);
+    let before = snapshot(root);
+    let error = decide::decide_with(
+        root,
+        &AgentFacts::default(),
+        DRIFT,
+        &Decision::RefineProposal,
+        LATER,
+        &mut rng(),
+        &|| Err("no agent job can start yet".to_owned()),
+    )
+    .map(|_| ())
+    .unwrap_err();
+    let MutationError::Refused(refused) = error else {
+        panic!("a refusal was expected");
+    };
+    assert_eq!(
+        refused.notice,
+        "Could not refine the Proposal of D1: no agent job can start yet."
+    );
+    assert_eq!(snapshot(root), before);
+}
+
+#[test]
+fn the_drift_discards_only_an_attached_draft_a_refinement_left_half_way() {
+    let dir = project();
+    let root = dir.path();
+    put_drift(root, DRIFT, "open", "proposal: pppppppp\n");
+    attached_proposal(root, "pppppppp", "draft\nrefining: true\njob: jjjjjjjj");
+    let drift_before = fs::read(root.join(".weaver/drifts/dddddddd-d.md")).unwrap();
+
+    let working = AgentFacts {
+        working_jobs: ["jjjjjjjj".to_owned()].into(),
+        ..AgentFacts::default()
+    };
+    let before = snapshot(root);
+    let why = decide_at(root, &working, &Decision::DiscardProposal).unwrap_err();
+    assert!(why.contains("The agent is still finishing"), "{why}");
+    assert_eq!(snapshot(root), before);
+
+    let (image, decided) =
+        decide_at(root, &AgentFacts::default(), &Decision::DiscardProposal).unwrap();
+    assert_eq!((decided.status, decided.refine), ("open", None));
+    assert_eq!(status_of_proposal(&image), Some(Status::Discarded));
+    assert_eq!(drift_of(&image, DRIFT).str_key("status"), Some("open"));
+    assert_eq!(
+        fs::read(root.join(".weaver/drifts/dddddddd-d.md")).unwrap(),
+        drift_before,
+        "the Drift is not written"
+    );
+    assert_eq!(Decision::DiscardProposal.verb(), "discard the Proposal of");
+
+    for status in ["open", "draft", "refining\nrefining: true"] {
+        attached_proposal(root, "pppppppp", status);
+        let before = snapshot(root);
+        let why = decide_at(root, &AgentFacts::default(), &Decision::DiscardProposal).unwrap_err();
+        assert!(
+            why.contains("not a Draft left half-way") || why.contains("Being refined"),
+            "{status}: {why}"
+        );
+        assert_eq!(snapshot(root), before);
+    }
+}
+
+#[test]
+fn no_decision_but_refine_is_accepted_while_the_attached_proposal_is_refining() {
+    let dir = project();
+    let root = dir.path();
+    put_drift(root, DRIFT, "open", "proposal: pppppppp\n");
+    attached_proposal(root, "pppppppp", "refining\nrefining: true");
+    let before = snapshot(root);
+    for decision in [
+        Decision::AcceptProposal,
+        Decision::FixCode {
+            option: Some(1),
+            note: None,
+        },
+        Decision::Dismiss,
+    ] {
+        let why = decide_at(root, &AgentFacts::default(), &decision).unwrap_err();
+        assert!(why.contains("Being refined"), "{decision:?}: {why}");
+        assert_eq!(snapshot(root), before, "{decision:?} writes nothing");
+    }
+    let (image, _, _) = state(root);
+    let drift = drift_of(&image, DRIFT);
+    assert_eq!(reasons::fix_reasons(&image, drift), ["Being refined"]);
+    assert_eq!(
+        reasons::dismiss_reasons(&image, &AgentFacts::default(), drift),
+        ["Being refined"]
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1570,6 +1787,132 @@ fn dismiss_lists_the_agent_first_then_the_resolution() {
     assert!(
         reasons::dismiss_reasons(&image, &AgentFacts::default(), drift_of(&image, DRIFT)).len()
             == 1
+    );
+}
+
+#[test]
+fn a_resolution_being_refined_counts_as_one_being_written() {
+    let dir = project();
+    let root = dir.path();
+    put_drift(root, DRIFT, "open", "");
+    proposal(
+        root,
+        "rrrrrrrr",
+        "status: refining\nrefining: true\nkind: resolution\ndrifts:\n  - drift: dddddddd\n    decision: dismissed\n",
+        "# R\n",
+        &[],
+        &[],
+    );
+    proposal(
+        root,
+        "oooooooo",
+        "status: refining\nrefining: true\nkind: resolution\ndrifts:\n  - drift: eeeeeeee\n    decision: dismissed\n",
+        "# O\n",
+        &[],
+        &[],
+    );
+    let (image, _, _) = state(root);
+    let drift = drift_of(&image, DRIFT);
+    let none = AgentFacts::default();
+    assert!(
+        reasons::is_resolving(&image, &none, drift),
+        "the badge `resolving`"
+    );
+    assert_eq!(
+        reasons::resolve_reasons(&image, &none, &name, drift),
+        [
+            "This Drift is being resolved",
+            "Another resolution is being written"
+        ]
+    );
+    assert_eq!(
+        reasons::dismiss_reasons(&image, &none, drift),
+        ["This Drift is in a resolution"]
+    );
+    assert!(!reasons::is_unprepared(&image, drift));
+    assert!(crate::project::board::drifts_resolving(&image, &none));
+}
+
+#[test]
+fn a_resolution_left_half_way_by_a_refinement_counts_as_one_waiting_for_a_decision() {
+    let dir = project();
+    let root = dir.path();
+    put_drift(root, DRIFT, "open", "");
+    proposal(
+        root,
+        "rrrrrrrr",
+        "status: draft\nrefining: true\nkind: resolution\ndrifts:\n  - drift: dddddddd\n    decision: dismissed\n",
+        "# R\n",
+        &[],
+        &[],
+    );
+    let (image, _, _) = state(root);
+    let drift = drift_of(&image, DRIFT);
+    let none = AgentFacts::default();
+    assert!(
+        !reasons::is_resolving(&image, &none, drift),
+        "no badge `resolving`"
+    );
+    assert_eq!(
+        reasons::resolve_reasons(&image, &none, &name, drift),
+        ["Proposal P:rrrrrrrr resolving Drifts awaits a decision"],
+        "not `Another resolution is being written`"
+    );
+    assert_eq!(
+        reasons::dismiss_reasons(&image, &none, drift),
+        ["This Drift is in a resolution"]
+    );
+    assert!(!reasons::is_unprepared(&image, drift));
+    assert!(
+        !crate::project::board::drifts_resolving(&image, &none),
+        "Run all is not held back by it"
+    );
+}
+
+#[test]
+fn resolve_names_being_refined_after_a_run_and_before_the_resolution_reasons() {
+    let dir = project();
+    let root = dir.path();
+    put_drift(root, DRIFT, "open", "job: jjjjjjjj\nproposal: pppppppp\n");
+    attached_proposal(root, "pppppppp", "refining\nrefining: true");
+    proposal(
+        root,
+        "oooooooo",
+        "status: draft\nkind: resolution\ndrifts:\n  - drift: eeeeeeee\n    decision: dismissed\n",
+        "# O\n",
+        &[],
+        &[],
+    );
+    proposal(
+        root,
+        "qqqqqqqq",
+        "status: open\nkind: resolution\ndrifts:\n  - drift: gggggggg\n    decision: dismissed\n",
+        "# Q\n",
+        &[],
+        &[],
+    );
+    let (image, _, _) = state(root);
+    let facts = AgentFacts {
+        working_jobs: ["jjjjjjjj".to_owned()].into(),
+        run_in_progress: true,
+        resolving_drifts: [DRIFT.to_owned()].into(),
+        ..AgentFacts::default()
+    };
+    let drift = drift_of(&image, DRIFT);
+    assert_eq!(
+        reasons::resolve_reasons(&image, &facts, &name, drift),
+        [
+            "The agent is still finishing",
+            "A run is in progress",
+            "Being refined",
+            "This Drift is being resolved",
+            "Another resolution is being written",
+            "Proposal P:qqqqqqqq resolving Drifts awaits a decision",
+        ]
+    );
+    assert_eq!(
+        reasons::dismiss_reasons(&image, &facts, drift),
+        ["The agent is still finishing", "Being refined"]
     );
 }
 

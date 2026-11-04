@@ -9,8 +9,10 @@ use ts_rs::TS;
 #[serde(rename_all = "camelCase")]
 pub enum FileKind {
     Text,
-    /// Binary: no text goes to the UI.
+    /// Binary and not an image Weaver can show: no text goes to the UI.
     Binary,
+    /// Binary and an image Weaver can show: `image` holds it, and no text goes to the UI.
+    Image,
 }
 
 /// Why a tab's text cannot be changed.
@@ -23,6 +25,17 @@ pub enum ReadOnlyReason {
     Weaver,
 }
 
+/// An image Weaver can show, as the UI keeps it for its tab only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct FileImage {
+    /// `data:<mime>;base64,<…>`.
+    pub data_url: String,
+    /// The size of the file in bytes.
+    #[ts(type = "number")]
+    pub size: u64,
+}
+
 /// A file as the tab read it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -33,6 +46,10 @@ pub struct FileContent {
     /// The SHA-256 of the raw bytes.
     pub hash: String,
     pub read_only: Option<ReadOnlyReason>,
+    /// The image, for the kind `image`; `null` otherwise.
+    pub image: Option<FileImage>,
+    /// A binary file with an image signature that is larger than 10 MB: no bytes come with it.
+    pub image_too_large: bool,
 }
 
 /// The answer of `file_open`.

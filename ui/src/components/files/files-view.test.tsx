@@ -1,6 +1,8 @@
-import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { PhysicalPosition } from "@tauri-apps/api/dpi";
+import type { DragDropEvent } from "@tauri-apps/api/webview";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { FileEntry } from "@/bindings/FileEntry";
 import type { TreeChanged } from "@/bindings/TreeChanged";
@@ -8,9 +10,10 @@ import type { TreeUpdate } from "@/bindings/TreeUpdate";
 import { FilesView } from "@/components/files/files-view";
 import { ProjectWindow } from "@/components/project-window";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type * as BackendModule from "@/lib/backend";
 import { call, on } from "@/lib/backend";
 
-const { tabs, toast } = vi.hoisted(() => ({
+const { tabs, toast, webview } = vi.hoisted(() => ({
   tabs: {
     openFile: vi.fn(),
     closeUnder: vi.fn(),
@@ -21,14 +24,25 @@ const { tabs, toast } = vi.hoisted(() => ({
     saveAll: vi.fn(async () => [] as { path: string; reason: string }[]),
     closeAll: vi.fn(),
   },
-  toast: { error: vi.fn(), warning: vi.fn() },
+  toast: { error: vi.fn(), warning: vi.fn(), loading: vi.fn(), dismiss: vi.fn() },
+  webview: { handlers: new Set<(event: { payload: unknown }) => void>() },
 }));
 
 vi.mock("sonner", () => ({ toast }));
-vi.mock("@/lib/backend", () => ({
+vi.mock("@/lib/backend", async (importOriginal) => ({
+  ...(await importOriginal<typeof BackendModule>()),
   call: vi.fn(),
   on: vi.fn(),
   isAppError: (value: unknown) => typeof value === "object" && value !== null && "code" in value && "message" in value,
+}));
+// The webview of the window: its drag and drop handler is Tauri's, and the tests emit its events.
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: (handler: (event: { payload: unknown }) => void) => {
+      webview.handlers.add(handler);
+      return Promise.resolve(() => webview.handlers.delete(handler));
+    },
+  }),
 }));
 vi.mock("@/components/files/file-tabs-context", () => ({
   FileTabsProvider: ({ children }: { children: unknown }) => children,
@@ -45,6 +59,10 @@ let listings: Record<string, FileEntry[]>;
 let push: (changed: TreeChanged) => void;
 let calls: [string, Record<string, unknown>][];
 let failWith: Record<string, string>;
+/** The folders the backend holds expanded, and what the next copy in answers, and when. */
+let expanded: Set<string>;
+let copied: string[];
+let copyGate: Promise<void> | null;
 
 const update = (...paths: string[]): TreeUpdate => ({
   generation: ++generation,
@@ -59,6 +77,7 @@ function backend(name: string, args: Record<string, unknown>): Promise<unknown> 
     case "files_open_view":
       return Promise.resolve({ generation: ++generation, folders: [{ path: "", entries: listings[""] }] });
     case "files_expand":
+      expanded.add(args.path as string);
       return Promise.resolve(update(args.path as string));
     case "files_collapse":
     case "files_leave":
@@ -74,6 +93,11 @@ function backend(name: string, args: Record<string, unknown>): Promise<unknown> 
     }
     case "files_move":
       return Promise.resolve({ path: `${args.target ? `${args.target}/` : ""}${(args.path as string).split("/").pop()}`, update: update() });
+    case "files_copy_in": {
+      const target = args.target as string;
+      const done = async () => ({ paths: copied, update: update(...(target === "" || expanded.has(target) ? [target] : [])) });
+      return copyGate ? copyGate.then(done) : done();
+    }
     case "files_delete":
       return Promise.resolve(update());
     case "project_status":
@@ -103,6 +127,13 @@ beforeEach(() => {
   tabs.saveAll.mockReset().mockResolvedValue([]);
   tabs.closeAll.mockReset();
   toast.error.mockReset();
+  toast.loading.mockReset().mockReturnValue("copy-toast");
+  toast.dismiss.mockReset();
+  webview.handlers.clear();
+  document.elementFromPoint = vi.fn(() => null);
+  expanded = new Set();
+  copyGate = null;
+  copied = [];
   vi.mocked(call).mockReset().mockImplementation(((name: string, args: Record<string, unknown>) => backend(name, args)) as unknown as typeof call);
   vi.mocked(on).mockImplementation(((name: string, handler: (changed: TreeChanged) => void) => {
     if (name === "files-tree-changed") push = handler;
@@ -160,7 +191,7 @@ describe("the Files entry", () => {
     const entries = within(screen.getByRole("navigation", { name: "Views" }))
       .getAllByRole("button")
       .map((button) => button.textContent);
-    expect(entries.slice(0, 5)).toEqual(["Board", "Chat", "Jobs", "Files", "Requirements"]);
+    expect(entries.slice(0, 5)).toEqual(["Board", "Chat", "Jobs", "Files", "Assets"]);
     await user.click(screen.getByRole("button", { name: "Board" }));
     expect(screen.queryByRole("tree", { name: "Project files" })).not.toBeInTheDocument();
     expect(screen.getByText("Board content")).toBeInTheDocument();
@@ -496,70 +527,440 @@ describe("deleting", () => {
   });
 });
 
-describe("moving", () => {
-  const dataTransfer = () => ({ setData: vi.fn(), getData: vi.fn(), effectAllowed: "", dropEffect: "" });
+/** What is highlighted as the target of a drop: a folder's path, or `tree` for the tree itself. */
+const highlighted = () => [...document.querySelectorAll("[data-drop-target]")].map((node) => node.getAttribute("data-path") ?? "tree");
+const dragLabel = () => document.querySelector<HTMLElement>("[data-drag-label]");
 
-  it("moves a row dropped on a folder, highlighting the folder under the pointer", async () => {
-    renderView();
+/** What `document.elementFromPoint` answers (jsdom lays nothing out). */
+const pointerIsOver = (element: Element | null) => vi.mocked(document.elementFromPoint).mockReturnValue(element);
+
+/** Where the tree is on screen, and how far it is scrolled: what the drag aids need. */
+function placeTree(view: HTMLElement, scrollTop: number) {
+  const state = { scrollTop };
+  Object.defineProperty(view, "scrollTop", { configurable: true, get: () => state.scrollTop, set: (value: number) => (state.scrollTop = value) });
+  view.getBoundingClientRect = () => ({ top: 100, bottom: 500, left: 0, right: 300, width: 300, height: 400, x: 0, y: 100, toJSON: () => ({}) });
+  return state;
+}
+
+/** Presses the primary button on a row; the drag then moves and ends through the returned functions. */
+function press(name: string, x = 10, y = 10) {
+  fireEvent.pointerDown(item(name), { pointerId: 1, button: 0, clientX: x, clientY: y });
+  return {
+    /** The pointer moves over `target` (the empty space of the tree for the root). */
+    moveTo: (target: Element | null, at = { x: 80, y: 80 }) => {
+      pointerIsOver(target);
+      fireEvent.pointerMove(item(name), { pointerId: 1, clientX: at.x, clientY: at.y });
+    },
+    release: (target: Element | null = null, at = { x: 80, y: 80 }) => {
+      pointerIsOver(target);
+      fireEvent.pointerUp(item(name), { pointerId: 1, clientX: at.x, clientY: at.y });
+    },
+  };
+}
+
+describe("dragging a row", () => {
+  it("uses pointer events only: no row is draggable", async () => {
+    const { container } = renderView();
     await tree();
-    const transfer = dataTransfer();
-    fireEvent.dragStart(item("README.md"), { dataTransfer: transfer });
-    fireEvent.dragOver(item("docs"), { dataTransfer: transfer });
-    expect(item("docs")).toHaveAttribute("data-drop-target");
-    fireEvent.dragOver(item("notes.txt"), { dataTransfer: transfer });
-    expect(item("docs")).not.toHaveAttribute("data-drop-target");
-    fireEvent.dragOver(item("docs"), { dataTransfer: transfer });
-    fireEvent.drop(item("docs"), { dataTransfer: transfer });
-    await waitFor(() => expect(called("files_move")).toEqual([{ projectId: PROJECT, path: "README.md", target: "docs" }]));
-    expect(tabs.moveUnder).toHaveBeenCalledWith("README.md", "docs/README.md");
-    expect(item("docs")).not.toHaveAttribute("data-drop-target");
+    expect(container.querySelector("[draggable]")).toBeNull();
   });
 
-  it("moves a row dropped on the empty space of the tree to the root", async () => {
+  it("starts after 4 px of movement; a press that moves less stays a click", async () => {
+    renderView();
+    await tree();
+    const drag = press("README.md");
+    drag.moveTo(item("docs"), { x: 12, y: 12 });
+    expect(dragLabel()).toBeNull();
+    expect(highlighted()).toEqual([]);
+    drag.release(item("docs"), { x: 12, y: 12 });
+    fireEvent.click(item("README.md"));
+    expect(tabs.openFile).toHaveBeenCalledWith("README.md");
+    expect(called("files_move")).toEqual([]);
+
+    const next = press("docs");
+    next.moveTo(item("docs"), { x: 10, y: 14 });
+    expect(dragLabel()).not.toBeNull();
+  });
+
+  it("follows the pointer with a fixed label of the row's icon and name that never takes the pointer", async () => {
+    renderView();
+    await tree();
+    const drag = press("src");
+    drag.moveTo(null, { x: 100, y: 50 });
+    const label = dragLabel()!;
+    expect(label).toHaveTextContent("src");
+    expect(label.style.position).toBe("fixed");
+    expect(label.style.pointerEvents).toBe("none");
+    expect(label.querySelector("svg")).not.toBeNull();
+    drag.moveTo(null, { x: 140, y: 90 });
+    expect(dragLabel()).toBe(label);
+    expect(label.style.left).toBe("152px");
+    expect(label.style.top).toBe("102px");
+    drag.release();
+    expect(dragLabel()).toBeNull();
+  });
+
+  it("moves a row released on a folder, highlighting the folder under the pointer", async () => {
+    renderView();
+    await tree();
+    const drag = press("README.md");
+    drag.moveTo(item("docs"));
+    expect(highlighted()).toEqual(["docs"]);
+    drag.moveTo(item("notes.txt"));
+    expect(highlighted()).toEqual([]);
+    drag.moveTo(item("docs"));
+    drag.release(item("docs"));
+    await waitFor(() => expect(called("files_move")).toEqual([{ projectId: PROJECT, path: "README.md", target: "docs" }]));
+    expect(tabs.moveUnder).toHaveBeenCalledWith("README.md", "docs/README.md");
+    expect(highlighted()).toEqual([]);
+    expect(dragLabel()).toBeNull();
+    // The click that ends the drag does not open or expand what is under the pointer.
+    fireEvent.click(item("docs"));
+    expect(called("files_expand")).toEqual([]);
+    expect(tabs.openFile).not.toHaveBeenCalled();
+  });
+
+  it("moves a row released on the empty space of the tree to the root, which is highlighted as the tree", async () => {
     const user = userEvent.setup();
     renderView();
     const view = await tree();
     await user.click(item("docs"));
     await waitFor(() => expect(names()).toContain("guide.md"));
-    const transfer = dataTransfer();
-    fireEvent.dragStart(item("guide.md"), { dataTransfer: transfer });
-    fireEvent.dragOver(view, { dataTransfer: transfer });
-    expect(view).toHaveAttribute("data-drop-target");
-    fireEvent.drop(view, { dataTransfer: transfer });
+    const drag = press("guide.md");
+    drag.moveTo(view);
+    expect(highlighted()).toEqual(["tree"]);
+    drag.release(view);
     await waitFor(() => expect(called("files_move")).toEqual([{ projectId: PROJECT, path: "docs/guide.md", target: "" }]));
   });
 
-  it("does nothing where the move can never be: its own folder, itself, inside itself, .weaver", async () => {
+  it("highlights nothing and moves nothing where the move can never be: its own folder, itself, inside itself, .weaver", async () => {
     const user = userEvent.setup();
     renderView();
     const view = await tree();
     await user.click(item("src"));
     await waitFor(() => expect(names()).toContain("deep"));
-    const transfer = dataTransfer();
+    const refused = (name: string, target: Element | null) => {
+      const drag = press(name);
+      drag.moveTo(target);
+      expect(highlighted()).toEqual([]);
+      drag.release(target);
+      expect(dragLabel()).toBeNull();
+    };
     // Onto the folder it is already in, and onto the root while in the root.
-    fireEvent.dragStart(item("main.ts"), { dataTransfer: transfer });
-    const sameFolder = createEvent.dragOver(item("src"), { dataTransfer: transfer });
-    fireEvent(item("src"), sameFolder);
-    expect(sameFolder.defaultPrevented).toBe(false);
-    fireEvent.drop(item("src"), { dataTransfer: transfer });
-    fireEvent.dragEnd(item("main.ts"), { dataTransfer: transfer });
+    refused("main.ts", item("src"));
+    refused("README.md", view);
     // A folder onto itself and into a folder inside it.
-    fireEvent.dragStart(item("src"), { dataTransfer: transfer });
-    fireEvent.drop(item("src"), { dataTransfer: transfer });
-    fireEvent.drop(item("deep"), { dataTransfer: transfer });
-    fireEvent.dragEnd(item("src"), { dataTransfer: transfer });
-    // Into .weaver, and out of it: not even draggable.
-    fireEvent.dragStart(item("README.md"), { dataTransfer: transfer });
-    fireEvent.drop(item(".weaver"), { dataTransfer: transfer });
-    fireEvent.dragEnd(item("README.md"), { dataTransfer: transfer });
-    expect(item(".weaver")).toHaveAttribute("draggable", "false");
-    // Onto a file, and the root for what is already in it.
-    fireEvent.dragStart(item("docs"), { dataTransfer: transfer });
-    fireEvent.drop(item("notes.txt"), { dataTransfer: transfer });
-    fireEvent.drop(view, { dataTransfer: transfer });
+    refused("src", item("src"));
+    refused("src", item("deep"));
+    // Into .weaver; onto a file; and out of it, which is not even a drag.
+    refused("README.md", item(".weaver"));
+    refused("docs", item("notes.txt"));
+    const fromWeaver = press(".weaver");
+    fromWeaver.moveTo(item("docs"));
+    expect(dragLabel()).toBeNull();
+    expect(highlighted()).toEqual([]);
     expect(called("files_move")).toEqual([]);
   });
 
+  it("ends without a change when released elsewhere, with Esc, with pointercancel or when the capture is lost", async () => {
+    renderView();
+    await tree();
+    const elsewhere = press("README.md");
+    elsewhere.moveTo(item("docs"));
+    elsewhere.release(document.body);
+    expect(dragLabel()).toBeNull();
+
+    const escaped = press("README.md");
+    escaped.moveTo(item("docs"));
+    expect(highlighted()).toEqual(["docs"]);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(dragLabel()).toBeNull();
+    expect(highlighted()).toEqual([]);
+    escaped.release(item("docs"));
+
+    const cancelled = press("README.md");
+    cancelled.moveTo(item("docs"));
+    fireEvent.pointerCancel(item("README.md"), { pointerId: 1 });
+    expect(dragLabel()).toBeNull();
+    cancelled.release(item("docs"));
+
+    const lost = press("README.md");
+    lost.moveTo(item("docs"));
+    fireEvent.lostPointerCapture(item("README.md"), { pointerId: 1 });
+    expect(dragLabel()).toBeNull();
+    expect(highlighted()).toEqual([]);
+    lost.release(item("docs"));
+    expect(called("files_move")).toEqual([]);
+  });
+
+  it("shows the reason of a refused move in an error toast and changes nothing", async () => {
+    renderView();
+    await tree();
+    failWith.files_move = 'A file or folder named "README.md" already exists here.';
+    const drag = press("README.md");
+    drag.moveTo(item("docs"));
+    drag.release(item("docs"));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('A file or folder named "README.md" already exists here.'));
+    expect(tabs.moveUnder).not.toHaveBeenCalled();
+  });
+
+  describe("the drag aids", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("expands a collapsed folder that stays under the pointer for a second", async () => {
+      renderView();
+      await tree();
+      vi.useFakeTimers();
+      const drag = press("README.md");
+      drag.moveTo(item("docs"));
+      await act(() => vi.advanceTimersByTimeAsync(999));
+      expect(called("files_expand")).toEqual([]);
+      await act(() => vi.advanceTimersByTimeAsync(1));
+      expect(called("files_expand")).toEqual([{ projectId: PROJECT, path: "docs" }]);
+      drag.release();
+    });
+
+    it("starts the second again when the pointer leaves the folder, and never expands what it holds a file over", async () => {
+      renderView();
+      await tree();
+      vi.useFakeTimers();
+      const drag = press("README.md");
+      drag.moveTo(item("docs"));
+      await act(() => vi.advanceTimersByTimeAsync(600));
+      drag.moveTo(item("notes.txt"));
+      await act(() => vi.advanceTimersByTimeAsync(600));
+      drag.moveTo(item("docs"));
+      await act(() => vi.advanceTimersByTimeAsync(600));
+      expect(called("files_expand")).toEqual([]);
+      drag.moveTo(item("notes.txt"));
+      await act(() => vi.advanceTimersByTimeAsync(5000));
+      expect(called("files_expand")).toEqual([]);
+      drag.release();
+    });
+
+    it("scrolls the tree within 24 px of its top or bottom edge, faster nearer the edge, and stops when the drag ends", async () => {
+      renderView();
+      const view = await tree();
+      const scroll = placeTree(view, 200);
+      vi.useFakeTimers();
+      const drag = press("README.md", 150, 300);
+      const tick = async (ms = 16) => {
+        const before = scroll.scrollTop;
+        await act(() => vi.advanceTimersByTimeAsync(ms));
+        return scroll.scrollTop - before;
+      };
+
+      drag.moveTo(null, { x: 150, y: 110 });
+      const slow = await tick();
+      expect(slow).toBeLessThan(0);
+      drag.moveTo(null, { x: 150, y: 101 });
+      expect(await tick()).toBeLessThan(slow);
+
+      drag.moveTo(null, { x: 150, y: 300 });
+      expect(await tick(160)).toBe(0);
+
+      drag.moveTo(null, { x: 150, y: 490 });
+      const down = await tick();
+      expect(down).toBeGreaterThan(0);
+      drag.moveTo(null, { x: 150, y: 499 });
+      expect(await tick()).toBeGreaterThan(down);
+
+      drag.release();
+      expect(await tick(160)).toBe(0);
+    });
+  });
+});
+
+/** A position of Tauri's drag and drop events, in physical pixels. */
+const at = (x: number, y: number) => ({ x, y }) as unknown as PhysicalPosition;
+
+/** Emits an event of Tauri's drag and drop handler. */
+function emit(payload: DragDropEvent) {
+  act(() => {
+    for (const handler of [...webview.handlers]) handler({ payload });
+  });
+}
+const enter = (x: number, y: number): DragDropEvent => ({ type: "enter", paths: ["/Users/me/a.png"], position: at(x, y) });
+const over = (x: number, y: number): DragDropEvent => ({ type: "over", position: at(x, y) });
+const drop = (x: number, y: number, paths: string[]): DragDropEvent => ({ type: "drop", paths, position: at(x, y) });
+
+/** A promise the test settles by hand. */
+function deferred() {
+  let resolve: () => void = () => {};
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+describe("files dragged in from outside", () => {
+  beforeEach(() => {
+    vi.stubGlobal("devicePixelRatio", 2);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("listens only while the view is shown", async () => {
+    const user = userEvent.setup();
+    renderView();
+    await tree();
+    await waitFor(() => expect(webview.handlers.size).toBe(1));
+    await user.click(screen.getByRole("button", { name: "Board" }));
+    await waitFor(() => expect(webview.handlers.size).toBe(0));
+  });
+
+  it("highlights the folder under the pointer, in CSS pixels, or the tree for its empty space, and nothing elsewhere", async () => {
+    renderView();
+    const view = await tree();
+    await waitFor(() => expect(webview.handlers.size).toBe(1));
+    pointerIsOver(item("docs"));
+    emit(enter(400, 200));
+    expect(document.elementFromPoint).toHaveBeenLastCalledWith(200, 100);
+    expect(highlighted()).toEqual(["docs"]);
+    pointerIsOver(item("notes.txt"));
+    emit(over(402, 210));
+    expect(highlighted()).toEqual([]);
+    pointerIsOver(view);
+    emit(over(404, 220));
+    expect(highlighted()).toEqual(["tree"]);
+    pointerIsOver(item(".weaver"));
+    emit(over(404, 230));
+    expect(highlighted()).toEqual([]);
+    pointerIsOver(item("docs"));
+    emit(over(404, 240));
+    expect(highlighted()).toEqual(["docs"]);
+    emit({ type: "leave" });
+    expect(highlighted()).toEqual([]);
+    pointerIsOver(document.body);
+    emit(over(10, 10));
+    expect(highlighted()).toEqual([]);
+  });
+
+  it("expands a collapsed folder held over for a second and scrolls the tree near its edges, as a row drag does", async () => {
+    renderView();
+    const view = await tree();
+    await waitFor(() => expect(webview.handlers.size).toBe(1));
+    const scroll = placeTree(view, 50);
+    vi.useFakeTimers();
+    pointerIsOver(item("docs"));
+    emit(enter(100, 440));
+    await act(() => vi.advanceTimersByTimeAsync(999));
+    expect(called("files_expand")).toEqual([]);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(called("files_expand")).toEqual([{ projectId: PROJECT, path: "docs" }]);
+    // Physical y 440 is 220 CSS pixels: far from both edges. Near the bottom edge the tree scrolls.
+    expect(scroll.scrollTop).toBe(50);
+    emit(over(100, 980));
+    await act(() => vi.advanceTimersByTimeAsync(160));
+    expect(scroll.scrollTop).toBeGreaterThan(50);
+    emit({ type: "leave" });
+    const stopped = scroll.scrollTop;
+    await act(() => vi.advanceTimersByTimeAsync(160));
+    expect(scroll.scrollTop).toBe(stopped);
+  });
+
+  it("copies a drop on a folder with a progress toast, then expands the folder and selects and reveals the first copied entry", async () => {
+    const revealed = vi.spyOn(Element.prototype, "scrollIntoView");
+    renderView();
+    await tree();
+    await waitFor(() => expect(webview.handlers.size).toBe(1));
+    const gate = deferred();
+    copyGate = gate.promise;
+    copied = ["docs/a.png", "docs/b.png"];
+    pointerIsOver(item("docs"));
+    emit(drop(400, 200, ["/Users/me/b.png", "/Users/me/a.png"]));
+    expect(toast.loading).toHaveBeenCalledWith("Copying 2 items…");
+    expect(called("files_copy_in")).toEqual([{ projectId: PROJECT, target: "docs", paths: ["/Users/me/b.png", "/Users/me/a.png"] }]);
+    expect(highlighted()).toEqual([]);
+    // The rest of the view stays usable meanwhile.
+    fireEvent.click(item("README.md"));
+    expect(tabs.openFile).toHaveBeenCalledWith("README.md");
+    expect(toast.dismiss).not.toHaveBeenCalled();
+    listings.docs = [file("docs/a.png"), file("docs/b.png"), file("docs/guide.md")];
+    gate.resolve();
+    await waitFor(() => expect(toast.dismiss).toHaveBeenCalledWith("copy-toast"));
+    await waitFor(() => expect(called("files_expand")).toEqual([{ projectId: PROJECT, path: "docs" }]));
+    await waitFor(() => expect(names()).toContain("a.png"));
+    expect(item("a.png")).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(revealed.mock.contexts).toContain(item("a.png")));
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("says `Copying 1 item…` for one item and copies to the root for a drop on the empty space", async () => {
+    renderView();
+    const view = await tree();
+    await waitFor(() => expect(webview.handlers.size).toBe(1));
+    copied = ["a.png"];
+    pointerIsOver(view);
+    emit(drop(400, 200, ["/Users/me/a.png"]));
+    expect(toast.loading).toHaveBeenCalledWith("Copying 1 item…");
+    await waitFor(() => expect(called("files_copy_in")).toEqual([{ projectId: PROJECT, target: "", paths: ["/Users/me/a.png"] }]));
+    await waitFor(() => expect(toast.dismiss).toHaveBeenCalled());
+    // The root is open already: nothing to expand.
+    expect(called("files_expand")).toEqual([]);
+  });
+
+  it("does nothing in the File view for a drop outside the tree or on a file", async () => {
+    renderView();
+    await tree();
+    await waitFor(() => expect(webview.handlers.size).toBe(1));
+    pointerIsOver(document.body);
+    emit(drop(10, 10, ["/Users/me/a.png"]));
+    pointerIsOver(item("notes.txt"));
+    emit(drop(10, 10, ["/Users/me/a.png"]));
+    expect(called("files_copy_in")).toEqual([]);
+    expect(toast.loading).not.toHaveBeenCalled();
+    expect(highlighted()).toEqual([]);
+  });
+
+  it("turns the progress toast into the error toast with the reason of a refused drop, and of a failure", async () => {
+    renderView();
+    await tree();
+    await waitFor(() => expect(webview.handlers.size).toBe(1));
+    const refusals = [
+      '"a.png" is already in the project: drag it inside the tree to move it.',
+      'Two dropped items are both named "a.png".',
+      "Another copy is still running in this window.",
+      'A file or folder named "a.png" already exists here.',
+      ".weaver is written by Weaver: read-only here.",
+      'Could not copy "a.png": disk full. Nothing was copied.',
+    ];
+    for (const reason of refusals) {
+      toast.error.mockClear();
+      failWith.files_copy_in = reason;
+      pointerIsOver(item("docs"));
+      emit(drop(10, 10, ["/Users/me/a.png"]));
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith(reason, { id: "copy-toast" }));
+    }
+    expect(toast.dismiss).not.toHaveBeenCalled();
+    expect(called("files_expand")).toEqual([]);
+    expect(names()).toEqual([".weaver", "docs", "src", "README.md", "notes.txt"]);
+  });
+
+  it("closes the toast and leaves the tree alone when the copy ends after the view was left", async () => {
+    const user = userEvent.setup();
+    renderView();
+    await tree();
+    await waitFor(() => expect(webview.handlers.size).toBe(1));
+    const gate = deferred();
+    copyGate = gate.promise;
+    copied = ["docs/a.png"];
+    pointerIsOver(item("docs"));
+    emit(drop(10, 10, ["/Users/me/a.png"]));
+    await user.click(screen.getByRole("button", { name: "Board" }));
+    await waitFor(() => expect(webview.handlers.size).toBe(0));
+    gate.resolve();
+    await waitFor(() => expect(toast.dismiss).toHaveBeenCalledWith("copy-toast"));
+    expect(called("files_expand")).toEqual([]);
+  });
+});
+
+describe("moving with Move to…", () => {
   it("opens Move to… with the folders of the project read one at a time, and moves into the chosen one", async () => {
     const user = userEvent.setup();
     renderView();

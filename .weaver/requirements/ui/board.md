@@ -1,5 +1,5 @@
 ---
-description: "Use when building or changing the Board: columns, cards, ghosts, badges, card controls and details dialogs."
+description: "Use when building or changing the Board: columns, footers, ghosts, notices, Task cards and their details dialogs."
 ---
 # Board
 
@@ -17,8 +17,13 @@ description: "Use when building or changing the Board: columns, cards, ghosts, b
 
 ### Ghosts
 - A ghost sits at the bottom of its target column (Backlog for a Proposal or Drift, Active for a Task), after the real cards and before the footer, in announcement order.
-- Skeleton card: dashed border, 70% opacity, shimmer on its text lines. It shows the kind (`Proposal`, `Task`, `Drift`), the title, a phase line, then the job's latest note in muted text on one line cut with `…` (full text as tooltip).
-- Phase line: `Preparing` until the Draft exists, `Writing` once it exists, `Waiting for your answers` while the job waits for a round or a permission, `Being refined` for a refinement.
+- Skeleton card: dashed border, 70% opacity. Top part, known and still: the kind (`Proposal`, `Task`, `Drift`), the title, a phase line, then the job's latest note in muted text on one line cut with `…` (full text as tooltip). None of these ever shimmers.
+- Phase line: `Preparing` until the Draft exists, `Writing` once it exists, `Waiting for your answers` while the job waits for a round or a permission, `Being refined` for a refinement. Plain muted text, no icon, no animation.
+- Under the known part, always, one block of placeholders for what the ghost does not know yet, in the order of the real card of its kind and with its shape: muted bars and blocks with no text.
+  - Proposal: a short bar for the id, a bar for the files line, a bar for the Tasks line (always shown), then a row of two button-sized blocks for the controls.
+  - Task: a small circle for the status dot next to a short bar for the id, then one button-sized block for `Run`.
+  - Drift: a short bar for the id, then a row of two button-sized blocks for `Resolve` and `Dismiss Drift`.
+- Only the placeholders shimmer: a light band sweeps across them from right to left, once every 2.4 s. Under reduced motion they are still bars.
 - The whole ghost is one button that opens its job's conversation in Jobs. Accessible name `<kind> being prepared by the agent: <title>, <phase>`.
 - When the card arrives, in the same picture the ghost disappears and the card takes its place in creation order.
 
@@ -26,30 +31,6 @@ description: "Use when building or changing the Board: columns, cards, ghosts, b
 - A details dialog follows its card: each new picture updates it in place without moving the focus. When the card leaves the Board (decided, Done, deleted, gathered into a resolution) the dialog closes by itself and the focus goes to the column the card was in.
 - Notices sit at the top of the Board, above both columns, newest first, each an `Alert` with a close button, until closed or the window closes: decisions refused when applied (`Could not delete T4: the agent that filed it is still working.`) and Proposals sent back to Draft while the developer was deciding them.
 - History warnings sit under the notices, above both columns: one amber `Alert` with `TriangleAlert` for each cited Task whose copy in History could not be made (`Could not record T3 in History: <reason>. The Task stays until its copy can be made.`), each with a close button (`X`, accessible name and tooltip `Close`). A closed warning stays hidden while the window stays open, even when the Board changes; it shows again at the next opening of the window if it is still true. A new warning, or one whose text changed, shows at once.
-
-## proposal
-- Card, top to bottom: id, title (at most 3 lines, then `…`) and kind mark; badges; files line; Tasks line; controls.
-- Kind mark: outline badge `setup` or `import`; an ordinary change has none; a resolution is the yellow card below.
-- Badges, in order: `stale` (amber), `refining` (blue, a refinement job works on it), `refinement interrupted`, `blocked` (red), the chosen model (outline, icon `Cpu`). `blocked` is a Popover button listing every blocking reason on its own line; a reason about a required Proposal names it and says `is still being written`, `was rejected`, `was discarded`, `is missing`, `is not approved yet` or `forms a cycle`.
-- Files line: `<n> files` with a muted `+a ~c −r` (added, changed, removed); paths, relative to `.weaver/`, are in the details.
-- Tasks line, only when it carries Tasks: `Creates <n> Tasks` (code-removal Tasks included) and its label as a badge in the label colour (see `task`).
-- Controls: `Approve` (primary), or `Refine` in its place (see below); `Reject`, a split button whose menu has one item, `Rework with feedback…` (absent once reworked); `View requirements`, only when its focus would have at least one step; last, the model control (icon `Settings`, only when it carries Tasks), pushed to the card's right edge, also when the row wraps; the other controls stay on the left.
-- `Approve` disabled reasons, in order: `The agent is still finishing`, `A run is in progress`, `Being refined`, then each blocking reason. When staleness is its only blocker, `Refine` replaces `Approve`, enabled also during a Run, with the tooltip `Refine on the current Model, then approve`. When staleness comes with any other reason, the control stays a disabled `Approve` listing every reason, `stale` included. `Reject` and `Rework with feedback…` are disabled only by `The agent is still finishing` and `Being refined`.
-- `Refine` tells that a click starts the agent: text and accessible name `Refine`, icon `Sparkles`, solid yellow (background `yellow-500` in light and `yellow-400` in dark, one shade darker on hover, text `zinc-950`), no confirmation. It shows wherever the card's controls show, the details dialog included.
-- `Reject` opens a Dialog with an optional `Reason` Textarea and `Reject` (destructive) / `Cancel`. `Rework with feedback…` opens a Dialog with a `Feedback` Textarea and `Rework` / `Cancel`; blank feedback asks `Rework without feedback?` first.
-- The model control opens a Popover with a Select of omp's models (the Settings list), `Use the Settings models` first; a choice applies at once.
-- A Draft left half-way by a refinement keeps its card with the badge `refinement interrupted` and only `Refine` (tooltip `Continue refining, then approve`) and `Discard` (destructive, confirmed). No other Draft has a card.
-- Resolution card: same layout, 3 px yellow left border and light yellow tint, mark `resolution`, then one row per listed Drift: id, title and decision (`Fix the code: option <n>` with the note muted, `Change the Model`, `Let it be`). Rows open the Drift's details. Lines with nothing to say are omitted.
-- Details dialog: id, title, kind, badges, rendered body, `Requires` (each Proposal with its state), files grouped as added, changed and removed, `Tasks it creates` and `Code-removal Tasks`, then the card's controls followed by `Ask more` (see `ask-conversation`), which the card itself never shows.
-- Task lists in the details dialog: one compact row per Task holding only its title; no ref chips and no `technical` badge. Each row of `Tasks it creates` is a button that opens a nested Dialog over the details dialog with the Task's title and its rendered body (`No description.` when blank), no refs and no badges; `Esc` or `Close` closes only the nested Dialog and the focus returns to the row. Code-removal rows use the same list style but are plain text, not controls, and render the reference in their title as inline code, not with literal backticks. When the details dialog closes, the nested Dialog closes with it.
-
-## drift
-- Card: compact, 3 px red left border; id, title (at most 3 lines), badges; then `Resolve` (primary) and `Dismiss Drift` (outline).
-- Badges: `recurring` (tooltip names the earlier Drift), `resolving` (a resolve job works on it or a resolution Draft lists it; tooltip `An agent is resolving this Drift`), `prepared` (valid prepared question; tooltip `Resolve asks the prepared question at once`).
-- `Resolve` disabled reasons, in order: `The agent is still finishing`, `A run is in progress`, `This Drift is being resolved`, `Another resolution is being written`, `Proposal <id> resolving Drifts awaits a decision`.
-- `Dismiss Drift` confirms with `Dismiss <id>? Nothing changes in the code or in the Model.`, `Dismiss` (destructive) / `Cancel`. Disabled reasons: `The agent is still finishing`, `This Drift is in a resolution`.
-- Details dialog, in order: id, title, badges; referenced elements and sections as chips (each opens a single-ref focus); `What happens` and `What should happen` side by side (stacked below 640 px of dialog width); `Fix options`, numbered, the first marked `recommended`; `Where in the code`, one row per file with its line when given and `Open in editor`; the origin Task and the repeated Drift, when known; the attached Proposal, if any, with title, rendered body and files.
-- Fix decision, in the details: a RadioGroup of the fix options (recommended preselected), an optional `Note` Textarea and `Fix the code`. Without options the RadioGroup is replaced by `No code change can respect both the Model and the Requirements.` and there is no `Fix the code`. With an attached Proposal, `Accept Proposal`; disabled with that Proposal's blocking reasons when it cannot be approved. `Resolve`, `Dismiss Drift` and then `Ask more` (see `ask-conversation`) are in the footer. `The agent is still finishing` comes first on every decision control.
 
 ## task
 - Card: status dot, id, title (at most 3 lines), badges; under them the Proposal's label badge when it has one; then `View requirements` (only when its focus would have at least one step) and `Run` (outline).

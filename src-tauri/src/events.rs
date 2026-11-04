@@ -27,6 +27,9 @@ pub enum EventName {
     UsageChanged,
     /// A window is asked to show a view (a notification click, a second launch); see [`crate::windows`].
     ShowRequested,
+    /// A window could not go to the background after `Keep working in background` of the close
+    /// confirmation: it stays shown and shows why; see [`crate::windows`].
+    WindowHideFailed,
     Notice,
     /// The Jobs list of a project changed; carries the whole list (see [`crate::jobs`]).
     JobsChanged,
@@ -76,6 +79,17 @@ pub enum EventName {
     /// System Certificates changed (the Machine `system-certificates`); carries the whole status
     /// (see [`crate::system_certificates`]).
     SystemCertificatesChanged,
+    /// The assets of a project changed (`workspace.ASSETS_CHANGED`); carries the project, a
+    /// generation and the whole list (see [`crate::assets`]).
+    AssetsChanged,
+    /// The notes sheet of a project, or an image in its notes folder, changed on disk by anything
+    /// other than Weaver's own writing (`workspace.NOTES_CHANGED`); carries the project, a
+    /// generation, whether the sheet changed with its hash, and the names of the images (see
+    /// [`crate::notes::changes`]).
+    NotesChanged,
+    /// The window of a project is closing: its Notes view answers with the text still waiting and
+    /// the images to put in the trash (`notes_flushed`); see [`crate::notes`].
+    NotesFlush,
 }
 
 impl EventName {
@@ -88,6 +102,7 @@ impl EventName {
             EventName::OmpChanged => "omp-changed",
             EventName::UsageChanged => "usage-changed",
             EventName::ShowRequested => "show-requested",
+            EventName::WindowHideFailed => "window-hide-failed",
             EventName::Notice => "notice",
             EventName::JobsChanged => "jobs-changed",
             EventName::JobEntries => "job-entries",
@@ -109,6 +124,9 @@ impl EventName {
             EventName::QuestionRoundChanged => "question-round-changed",
             EventName::ProjectState => "project-state",
             EventName::SystemCertificatesChanged => "system-certificates-changed",
+            EventName::AssetsChanged => "assets-changed",
+            EventName::NotesChanged => "notes-changed",
+            EventName::NotesFlush => "notes-flush",
         }
     }
 }

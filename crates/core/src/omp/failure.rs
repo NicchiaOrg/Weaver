@@ -3,18 +3,7 @@
 //! `timed out`. [`classify`] and [`explanation`] tell whether a failure text is a certificate or
 //! an HTTP error that a proxy inspecting HTTPS traffic may cause, and say it in plain words.
 
-use std::time::Duration;
-
-/// A command that did not complete normally.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Failure {
-    /// The program could not be started.
-    NotStarted,
-    /// The limit passed; the process was killed.
-    TimedOut { limit: Duration },
-    /// The process ended with a failure status (`code` is `None` when a signal ended it).
-    Exit { code: Option<i32>, stderr: String },
-}
+use crate::process::timed::Failure;
 
 /// Codes of a certificate error, matched with their capitals. A longer code comes before the one
 /// it starts with, so that the code reported is the exact one.
@@ -297,6 +286,7 @@ impl Failure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn exit(code: i32, stderr: &str) -> Failure {
         Failure::Exit {

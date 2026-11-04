@@ -10,9 +10,6 @@ The developer opens a folder in Weaver, from the welcome window or from a window
 ### CLOSE_WINDOW
 The developer closes the window of a project. When agent jobs of that project are working, or files of its File view have unsaved changes, he confirms first; with unsaved changes he chooses to save them all or to discard them all. When only agent jobs are working, he can also choose to keep them working with the window in the background.
 
-### SEND_TO_BACKGROUND
-The developer sends the window of a project to the background, so that Weaver keeps working in it out of sight.
-
 ### REOPEN_APP
 The developer brings Weaver back: he clicks its icon in the Dock on macOS, launches it again without naming a folder, or chooses to show it from its icon in the tray on Windows and Linux. Every project window in the background comes back and the one used most recently gets the focus; with no project window in the background, the window used most recently comes to the front, and with no project window open, the welcome window.
 
@@ -20,7 +17,7 @@ The developer brings Weaver back: he clicks its icon in the Dock on macOS, launc
 The developer quits Weaver, also from its icon in the tray on Windows and Linux. When agent jobs are working in any project, or files of a File view have unsaved changes, he confirms first; with unsaved changes he chooses, for each window, to save them all or to discard them all.
 
 ### INITIALISE_PROJECT
-The developer turns a folder without a project into a Weaver project, confirming first when agent files Weaver would install already exist with different content.
+The developer turns a folder without a project into a Weaver project, choosing first whether Solo mode is on and in which mode, and confirming first when agent files Weaver would install already exist with different content.
 
 ### UPDATE_SKILLS
 The developer asks Weaver to write again every file it installs for the agent.
@@ -43,6 +40,9 @@ The developer changes one of Weaver's settings.
 ### REFRESH_SYSTEM_CERTIFICATES
 The developer asks Weaver to export the certificate authorities his system trusts again, while System Certificates is on.
 
+### CHANGE_SOLO_MODE
+The developer turns Solo mode of this working copy on, off, or to its other mode, in Settings or from the command line.
+
 ### OPEN_USAGE
 The developer opens Usage from the window of a project, to see how much is left of the usage limits of the connected providers.
 
@@ -56,7 +56,7 @@ The developer closes Usage, also by choosing to open Settings from it.
 The developer starts writing a design request: the setup request when the Model is empty and he chose to start from scratch, an ordinary design request otherwise.
 
 ### SEND_REQUEST
-The developer sends the design request he wrote to the agent.
+The developer sends the design request he wrote to the agent. Every asset the request tags at that moment is passed to the agent as a file to read; the request itself stays as he wrote it.
 
 ### DISCARD_REQUEST
 The developer throws away a design request he never sent.
@@ -97,11 +97,14 @@ The developer decides that the Model and the Requirements are right and the code
 ### ACCEPT_DRIFT_PROPOSAL
 The developer decides that the code is right and accepts the Proposal attached to the Drift.
 
+### REFINE_DRIFT_PROPOSAL
+The developer asks the agent to adapt the stale Proposal attached to an open Drift to the current Model and Requirements, or to continue a refinement of it left half-way, without deciding the Drift.
+
 ### DISMISS_DRIFT
 The developer decides that nothing changes, after a confirmation.
 
 ### SEND_MESSAGE
-The developer writes to the agent in the conversation of a working job, in General or in an Ask more conversation.
+The developer writes to the agent in the conversation of a working job, in General or in an Ask more conversation. Every asset the message tags at that moment is passed to the agent as a file to read; the conversation shows only what he wrote.
 
 ### STOP_AGENT
 The developer stops the agent of a job, of General or of an Ask more conversation, after a confirmation when it is a job.
@@ -145,6 +148,9 @@ The developer gives a new name to a file or a folder of the File view's tree.
 ### MOVE_ENTRY
 The developer moves a file or a folder of the File view's tree into another folder of the project, by dragging it or by choosing the folder.
 
+### DROP_EXTERNAL_ENTRIES
+The developer drags files or folders from outside Weaver, such as the Finder or Explorer, and drops them onto a folder of the File view's tree or onto its empty space for the project's root.
+
 ### DELETE_ENTRY
 The developer deletes a file or a folder of the File view's tree, after a confirmation that says when tabs on it have unsaved changes.
 
@@ -165,3 +171,36 @@ The developer chooses to take the file as it is on disk and lose the unsaved cha
 
 ### OVERWRITE_FILE
 The developer chooses to write the text of a tab over the file on disk, after a save found the file changed on disk or after the agent changed it.
+
+### OPEN_ASSETS_VIEW
+The developer shows the Assets view of a project window.
+
+### LEAVE_ASSETS_VIEW
+Another view of the window takes the place of the Assets view, chosen by the developer or by a link or a notification he clicked.
+
+### DROP_ASSETS
+The developer drags files from outside Weaver, such as the Finder or Explorer, and drops them onto the Assets view.
+
+### RENAME_ASSET
+The developer gives a new name to one asset of the Assets view.
+
+### DELETE_ASSETS
+The developer deletes the assets selected in the Assets view, after a confirmation.
+
+### DRAG_ASSETS_OUT
+The developer drags assets out of the Assets view and drops them in another app, such as the Finder, Explorer, an editor or a browser: the one he drags, or every selected asset when he drags one of them.
+
+### OPEN_NOTES_VIEW
+The developer shows the Notes view of a project window.
+
+### LEAVE_NOTES_VIEW
+Another view of the window takes the place of the Notes view, chosen by the developer or by a link or a notification he clicked.
+
+### EDIT_NOTES
+The developer changes the notes sheet: he writes, formats, pastes text, moves or removes text and images, or undoes and redoes his changes.
+
+### TICK_NOTES_ITEM
+The developer ticks or unticks an item of a checklist in the notes sheet.
+
+### ADD_NOTES_IMAGES
+The developer pastes images into the notes sheet, or drags files from outside Weaver, such as the Finder or Explorer, and drops them onto it.

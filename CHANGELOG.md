@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- A new `Solo mode`, for using Weaver in a git repository where the others do not: while it is on, Weaver's files stay only in this working copy and never go into a commit, because Weaver keeps a block of its own in the repository's local git exclusions (`.git/info/exclude`). It belongs to the working copy (another clone or a linked worktree starts with it off) and keeps out either the whole `.weaver/`, `.agents/skills/` and `.omp/` folders or `.weaver/` and only the files Weaver installs in the other two. Choose it in Get Started before initialising, in Settings → Project, or with `solo` in `weaver project new` and `weaver project edit`; Settings and `weaver project show` list the Weaver files git already tracks, which an exclusion cannot hide, and Weaver writes its block again by itself when a project opens. It needs git, and Weaver's files are then versioned nowhere: losing the working copy loses them.
+- Files and folders dragged from the Finder or Explorer onto the tree in Files are copied into the project: onto a folder, or onto the empty space of the tree for the project's root. Folders are copied with everything inside them and symbolic links stay links; the originals stay where they are. A toast shows the copy while it runs, and when it ends the folder opens and the first copied entry is selected. A drop is refused as a whole, with the reason, when something dropped is already in the project, when a name is taken or repeated, or when the target is `.weaver/`, and a copy that fails part way is removed.
+- A tab in Files on an image (PNG, JPEG, GIF, WebP, BMP or ICO, recognised by its first bytes, up to 10 MB) now shows the image, with its size in pixels and its weight, fitted to the panel; a click, or `Enter` or `Space`, switches to the real size, and the tab reads the image again when the file changes. An image over 10 MB opens as a binary file and says that it is too large. A tab on an SVG file switches between its drawing and its text with `Code` / `Preview`, keeping the cursor and the undo history.
+- A new `Assets` view, after Files in the sidebar, for the files you keep for the agent in `.weaver/assets/`, which is versioned with the project and made when the first asset arrives. Files dragged from the Finder or Explorer onto the grid are copied (a drop is refused as a whole for a folder, a link, a name already used or not valid, or two files with one name); the assets show as icons by kind in name order, are selected with the mouse or the keyboard, renamed (`F2`), deleted to the system's trash after a confirmation, and dragged out to other apps, which receive copies. An asset over 10 MB is copied with a warning and carries a mark.
+- A new `Notes` view, after Assets in the sidebar, with one Notion-style Markdown sheet per project, saved automatically as you write. Markdown shortcuts work as you type (`# ` for a heading, `[ ] ` for a checklist item) and ticked checklist items stay in place, struck through. Images (PNG, JPEG, GIF or WebP, up to 10 MB) are pasted or dragged in from the Finder or Explorer. The notes stay on this computer only, in `.weaver/notes/`: they are not versioned and never shown to the agent.
+- When a window cannot go to the background after `Keep working in background`, it stays as it was and an error toast, `Could not hide the window.`, tells why.
+
+### Changed
+
+- Weaver has a new icon: a "W" woven from pastel ribbons on a cream rounded square.
+- `Refine` now serves every stale Proposal, whatever its kind (change, setup, import or resolution), attached to a Drift or not, whatever else blocks it and also while a Run works. It is refused only while the agent that handed the Proposal over is still finishing and, for a resolution, when none of its Drifts is still open; a half-way refinement continues under the same conditions.
+- A Drift whose attached Proposal is stale and Open now has `Refine` in its details in place of `Accept Proposal` (tooltip `Refine on the current Model`): a refinement job adapts the Proposal to the current Model and Requirements and the Drift stays open, to be decided again once the Proposal is handed over. It is disabled only while the agent that handed the Proposal over is still finishing, also during a Run. When a refinement was left half-way, the details show `Refinement interrupted` with `Refine` (`Continue refining`) and `Discard` instead. While the attached Proposal is `Refining`, `Accept Proposal`, `Fix the code`, `Resolve` and `Dismiss Drift` are disabled with `Being refined`; a resolution being refined counts as one being written, and one left half-way as one waiting for a decision.
+
+### Removed
+
+- The `Hide` entry of the sidebar is gone: a window goes to the background only with `Keep working in background` in the confirmation that appears when you close it while agent jobs work.
+
+### Fixed
+
+- Moving a file or folder by dragging its row in the tree in Files now works in the app: the target folder is highlighted, a collapsed folder held over for a second opens, and the tree scrolls when the pointer is near its top or bottom edge.
+
 ## [0.1.0] - 2026-11-03
 
 ### Added

@@ -1,6 +1,6 @@
 # Weaver
 
-Weaver is a desktop app for macOS, Windows and Linux that works on top of Weaver projects (the `.weaver/` folder of a repository). It shows a project's Model, Requirements and Tasks on a Board, and it drives [omp](https://omp.sh) over the Agent Client Protocol to design, scan and implement them. The same Rust core powers the app and the `weaver` command line. A project window also has a File view, with a tree of the project's files and a tabbed editor with syntax colours, for small changes to the project's files next to your own editor; Weaver never analyses your code (the agent does) and reads or writes a file of it only when you open or change it there.
+Weaver is a desktop app for macOS, Windows and Linux that works on top of Weaver projects (the `.weaver/` folder of a repository). It shows a project's Model, Requirements and Tasks on a Board, and it drives [omp](https://omp.sh) over the Agent Client Protocol to design, scan and implement them. The same Rust core powers the app and the `weaver` command line. A project window also has a File view, with a tree of the project's files and a tabbed editor with syntax colours, for small changes to the project's files next to your own editor, and a Notes view with one Markdown sheet per project for your own notes; Weaver never analyses your code (the agent does) and reads or writes a file of it only when you open or change it there.
 
 ## Install
 
@@ -23,6 +23,15 @@ A corporate proxy that inspects HTTPS traffic (Zscaler, for example) re-signs th
 * **Turned on for Zscaler.** When Zscaler is installed, Weaver turns System Certificates on by itself, once. This happens on macOS and Windows only, and it is never repeated after you turn the setting off.
 * **Explained errors.** Where Weaver shows why omp failed (a certificate error, an HTTP error, a failed installer), it explains in plain words when a corporate proxy is the likely cause, and suggests turning on System Certificates while it is off.
 * **Not covered.** Java's tools and every program that reads a truststore instead of a PEM bundle.
+
+## Solo mode
+
+Solo mode lets you use Weaver in a git repository where the others do not. While it is on, Weaver's files stay only in this working copy and never go into a commit: Weaver adds a block of its own to git's local exclusions of the repository (`.git/info/exclude`, found with `git rev-parse --git-path info/exclude`), which git never commits, and the shared repository sees only the code.
+
+* **It belongs to the working copy, not to you.** The choice is kept in this working copy only, in `.weaver/solo/solo.json`, never in the repository and never in Weaver's settings: another clone of the same repository, or a linked worktree, starts with it off. Choose it in Get Started, before you initialise the project, so that Weaver's files are never seen by git; or turn it on and off later in Settings → Project, or with `solo` in `weaver project new` and `weaver project edit` (`off`, `folders` or `files`). A change applies at once, with no confirmation.
+* **Two modes.** `Whole folders` (the default) keeps out `.weaver/`, the agent's skills folder `.agents/skills/` and omp's folder `.omp/`. `Weaver's files only` keeps out `.weaver/` and just the files Weaver installs in the other two (`weaver-*` skills, `weaver-*` sub-agent definitions and `.omp/WATCHDOG.yml`): use it when your team already keeps its own skills or omp files in those folders.
+* **Files git already tracks are not hidden.** An exclusion never hides a file git tracks, and Weaver never touches git's index and offers no way to stop tracking a file. While Solo mode is on, Settings lists the Weaver files that git still tracks, and warns that their changes still go into commits; `weaver project show` lists them too.
+* **It needs git, and it has a cost.** Every change needs git (found on the `PATH`) and a repository around the project folder; if either is missing Weaver says why and changes nothing. Weaver writes its block again by itself at every opening of the project when it is missing. With Solo mode on, Weaver's files are versioned nowhere: losing the working copy loses them.
 
 ## Branches
 
@@ -60,6 +69,7 @@ A corporate proxy that inspects HTTPS traffic (Zscaler, for example) re-signs th
 | `file_tab::{path, read, save, limit}` | The files open in tabs of the File view: paths relative to the project root checked before any file is touched (no absolute path, no `..`, nothing in `.git`, nothing whose canonical form leaves the root); what a tab keeps of a file (SHA-256 of the raw bytes, byte order mark, line ending, binary and size rules); saving only when the file on disk is still the one the tab read, through the atomic write that keeps permissions and writes the target of a symbolic link; the limit of 10 tabs and what an event of a tab's file means |
 | `file_view::{listing, names, ops, rename, machine}` | The tree of the File view: one folder at a time (names and kinds, `.git` and what git ignores left out), valid names, create, rename, move and delete with every refusal checked when they run, and the Machine `file-view` (Closed, Open, Releasing) |
 | `file_lock` | The Machine `file-lock`: which files open in a tab an agent is changing, from its running tools that change files |
+| `notes::{sheet, images}` | The developer's notes in `.weaver/notes/`: the sheet `notes.md` (LF text, hash of the bytes, atomic write) and its images (naming, accepting, copying in, reading one for display, the trash) |
 
 ### `weaver` (app) modules
 
@@ -81,6 +91,7 @@ A corporate proxy that inspects HTTPS traffic (Zscaler, for example) re-signs th
 | `file_view` | The tree of the File view of each window, in memory only: its listings and its watches (one non-recursive watch per expanded folder, separate from the project's), the actions of the tree, the release 10 s after the view stops being shown, and `files-tree-changed` |
 | `file_tabs` | The tabs of the File view: reading a file when it opens in a tab, its watch (only the files open in tabs), saving with the check against the file on disk, and `file-tab-changed` |
 | `file_lock` | The agent lock of the File view: the live `session/update` notifications of every job, of General and of every Ask more conversation tell which files an agent is changing; `file-lock-changed`. Replayed updates, sub-agents and commands never count |
+| `notes` | The Notes view of each window: the sheet's writes (one at a time, the latest text coalesced), the hash of Weaver's own last write, image commands that take names and never paths, the flush before a window closes, and `notes-changed` |
 
 The bundled `weaver-cli` is a Tauri `externalBin` sidecar. `src-tauri/build.rs` builds it with the app's profile and target into `target/sidecar` and stores it as `src-tauri/binaries/weaver-cli-<target triple>`.
 
@@ -119,6 +130,10 @@ Only in the project's `.weaver/` folder and in the system folders of the identif
 In the local data folder, System Certificates keeps the exported bundle `system-certificates.pem` and the markers of the omp installer in `omp-install/`.
 
 The File view keeps nothing on disk and writes nothing outside the files you change in its tabs, or create, rename, move and delete from its tree (a deletion goes to the system's trash).
+
+`.weaver/assets/` holds the files you keep for the agent (images, documents, examples), flat and versioned by git like the Model; it is made when the first asset is copied in, never at initialisation. The Assets view lists them as icons, copies in the files you drag onto it (the originals stay where they are), renames them, sends them to the system's trash and drags them out to other apps as copies; it reads only their names and sizes, and the File view shows the folder read-only like the rest of `.weaver/`.
+
+`.weaver/notes/` holds `notes.md`, the project's one Markdown sheet, and the images pasted or dropped into it. The folder is local only, with a `.gitignore` of `*`, so another clone starts without notes; it is made when the first note or image is written, never at initialisation, and only the Notes view writes in it. Git ignores its files, so the File view shows the folder empty. The project's watcher gives what happens there to the Notes view alone, as `notes-changed` 150 ms after the last event (a write of Weaver's own sheet excluded): it never reaches the project's picture or `project-changed`. The agent never receives the notes.
 
 ## Releases and updates
 

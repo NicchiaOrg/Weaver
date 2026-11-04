@@ -10,11 +10,12 @@
 //!   over by a job that found the Model empty ([`plan_submit`]); `developer.DISCARD_PROPOSAL`
 //!   ([`plan_discard`]); `developer.APPROVE_PROPOSAL` on a Draft a refinement left half-way →
 //!   `Refining` ([`Approval::Continue`]).
-//! * `Open`: `developer.APPROVE_PROPOSAL` → `Approved` or → `Refining` ([`plan_approve`]);
-//!   `developer.REJECT_PROPOSAL` and `developer.REWORK_PROPOSAL` → `Rejected` ([`plan_reject`]);
-//!   `agent.EDIT_PROPOSAL` → `Draft` (`create::plan_edit`).
-//! * `Refining`: `agent.SUBMIT_PROPOSAL` → `Approved` or `Open` ([`plan_submit`]);
-//!   `job.ENDED` without a hand-over → `Draft` ([`plan_refinement_ended`]).
+//! * `Open`: `developer.APPROVE_PROPOSAL` → `Approved` or, when stale, → `Refining`
+//!   ([`plan_approve`]); `developer.REJECT_PROPOSAL` and `developer.REWORK_PROPOSAL` →
+//!   `Rejected` ([`plan_reject`]); `agent.EDIT_PROPOSAL` → `Draft` (`create::plan_edit`).
+//! * `Refining`: `agent.SUBMIT_PROPOSAL` → `Approved` or `Open` ([`plan_submit`]; always `Open`
+//!   when attached to a Drift); `job.ENDED` without a hand-over → `Draft`
+//!   ([`plan_refinement_ended`], also when attached to a Drift).
 //!
 //! The same functions serve the decisions of a Drift on its attached Proposal
 //! (`drift.PROPOSAL_ACCEPTED`, `CODE_TO_BE_FIXED`, `DISMISSED`): they take a [`Decider`].
@@ -187,8 +188,9 @@ pub enum Approval {
     /// Approved: everything is in the changes. The Requirement skills are generated again when
     /// `requirements_changed`, and Run all starts when `start_run_all`.
     Approve(ApprovalPlan),
-    /// An ordinary change that only staleness blocks: `Refining`. A refinement job adapts it to
-    /// the current Model and Requirements without a new interview: the Jobs start it.
+    /// A stale Proposal of any kind, attached to a Drift or not, whatever else blocks it:
+    /// `Refining`. A refinement job adapts it to the current Model and Requirements without a new
+    /// interview: the Jobs start it.
     Refine(ChangeSet),
     /// A Draft a refinement left half-way: `Refining` again; a new refinement job continues it.
     Continue(ChangeSet),
@@ -215,14 +217,19 @@ fn refining_text(card: &Card) -> String {
     })
 }
 
-/// `developer.APPROVE_PROPOSAL` (and `drift.PROPOSAL_ACCEPTED`, with `Decider::Drift`).
+/// `developer.APPROVE_PROPOSAL` (and, with `Decider::Drift`, the decisions of the Drift on its
+/// attached Proposal: `drift.PROPOSAL_ACCEPTED`, `developer.REFINE_DRIFT_PROPOSAL`).
 ///
 /// * Open, nothing blocks it, the job that handed it over has ended and no Run works: `Approved`.
-/// * Open, an ordinary change not attached to a Drift, blocked by staleness alone (a working Run
-///   does not matter): `Refining`.
-/// * A Draft with `refining: true`: `Refining` again.
+/// * Open and stale, of any kind, whatever else blocks it and also while a Run works: `Refining`
+///   ([`Approval::Refine`]). Refused only while the agent that handed it over is still finishing
+///   and, for a resolution, when none of its Drifts is still open.
+/// * A Draft with `refining: true`: `Refining` again ([`Approval::Continue`]), with the same
+///   refusals.
 ///
-/// Refused otherwise, naming every reason in the order of the control.
+/// A Proposal attached to a Drift is decided through its Drift: the developer's own approval is
+/// refused for it, the Board's `Refine` included. Everything is refused before anything is
+/// written, naming every reason in the order of the control.
 #[allow(clippy::too_many_arguments)]
 pub fn plan_approve(
     image: &ProjectImage,
@@ -241,9 +248,9 @@ pub fn plan_approve(
     }
     match status {
         Some(Status::Draft) if data::refining_flag(card) => {
-            if gate.agent_finishing {
-                return refuse(Reason::AgentFinishing.text(numbers));
-            }
+            let analysis = analysis::analyse(image, folders, numbers, id)
+                .ok_or_else(|| Refusal(vec![format!("no Proposal has the identity {id}")]))?;
+            refinement_refusal(&analysis, gate)?;
             Ok(Approval::Continue(single(&card.path, refining_text(card))))
         }
         Some(Status::Draft) => refuse("the agent is still writing it: nobody can approve a Draft"),
@@ -251,18 +258,32 @@ pub fn plan_approve(
         Some(Status::Open) => {
             let analysis = analysis::analyse(image, folders, numbers, id)
                 .ok_or_else(|| Refusal(vec![format!("no Proposal has the identity {id}")]))?;
+            if !analysis.stale.is_empty() {
+                refinement_refusal(&analysis, gate)?;
+                return Ok(Approval::Refine(single(&card.path, refining_text(card))));
+            }
             let reasons = analysis.approve_reasons(gate);
             if reasons.is_empty() {
                 return plan_approval(image, folders, &analysis, card, now, rng)
                     .map(Approval::Approve);
             }
-            if by == Decider::Developer && analysis.refinable(gate) {
-                return Ok(Approval::Refine(single(&card.path, refining_text(card))));
-            }
             Err(Refusal(texts(&reasons, numbers)))
         }
         Some(done) => refuse(format!("the Proposal is {}", done.as_str())),
         None => refuse("the Proposal has no valid status"),
+    }
+}
+
+/// Refuses a refinement (or the continuation of one) for the reasons of
+/// [`Analysis::refinement_refusals`], every one of them, before anything is written.
+fn refinement_refusal(analysis: &Analysis, gate: Gate) -> Result<(), Refusal> {
+    let refusals = analysis.refinement_refusals(gate);
+    if refusals.is_empty() {
+        Ok(())
+    } else {
+        Err(Refusal(
+            refusals.into_iter().map(|r| r.text().to_owned()).collect(),
+        ))
     }
 }
 
@@ -295,7 +316,8 @@ pub enum Submitted {
     /// Approved at the hand-over: a setup or import of a job that started on an empty Model, or a
     /// refined Proposal that nothing blocks.
     Approved(ApprovalPlan),
-    /// Refined, and only a Run works: it stays Refining. Hand it over again when the Run ends.
+    /// Refined, not attached to a Drift, and only a Run works: it stays Refining. Hand it over
+    /// again when the Run ends.
     WaitsForRun,
 }
 
@@ -351,12 +373,15 @@ pub fn plan_submit(
     let reasons = analysis.approve_reasons(gate);
     let blocking = analysis.blocking();
     let mut changes = ChangeSet::new();
+    // Attached to a Drift, a refined Proposal is always handed over as Open: the developer
+    // accepts it again from the Drift.
+    let to_drift = refined && analysis.attached;
 
-    let outcome = if (automatic || refined) && reasons.is_empty() {
+    let outcome = if !to_drift && (automatic || refined) && reasons.is_empty() {
         let plan = plan_approval(image, folders, &analysis, card, ctx.now, rng)?;
         merge(&mut changes, &plan.changes);
         Submitted::Approved(plan)
-    } else if refined && blocking.is_empty() {
+    } else if !to_drift && refined && blocking.is_empty() {
         return Ok(Submission {
             outcome: Submitted::WaitsForRun,
             changes,
@@ -428,7 +453,8 @@ pub fn plan_submit(
 }
 
 /// `job.ENDED` of a refinement job that did not hand the Proposal over: `Refining` → `Draft`, with
-/// `refining: true`; it stays half-way until the developer approves it again or discards it.
+/// `refining: true`, of any kind and also when attached to a Drift; it stays half-way until the
+/// developer refines it again (from its Drift when it is attached to one) or discards it.
 pub fn plan_refinement_ended(image: &ProjectImage, id: &str) -> ChangeSet {
     let mut changes = ChangeSet::new();
     if let Some(card) = image.card(CardKind::Proposal, id) {

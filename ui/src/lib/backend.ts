@@ -4,7 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
 
 import type { AppError } from "@/bindings/AppError";
 import type { AppInfo } from "@/bindings/AppInfo";
@@ -23,9 +23,12 @@ import type { OmpStatus } from "@/bindings/OmpStatus";
 import type { InitialiseResult } from "@/bindings/InitialiseResult";
 import type { ProjectChanged } from "@/bindings/ProjectChanged";
 import type { ProjectStatus } from "@/bindings/ProjectStatus";
+import type { SoloChange } from "@/bindings/SoloChange";
+import type { SoloMode } from "@/bindings/SoloMode";
 import type { SkillsReport } from "@/bindings/SkillsReport";
 import type { TreeEntry } from "@/bindings/TreeEntry";
 import type { ShowRequest } from "@/bindings/ShowRequest";
+import type { HideFailed } from "@/bindings/HideFailed";
 import type { SettingChange } from "@/bindings/SettingChange";
 import type { SettingsSnapshot } from "@/bindings/SettingsSnapshot";
 import type { ViewSnapshot } from "@/bindings/ViewSnapshot";
@@ -50,6 +53,7 @@ import type { AskRow } from "@/bindings/AskRow";
 import type { AskSnapshot } from "@/bindings/AskSnapshot";
 import type { AsksSnapshot } from "@/bindings/AsksSnapshot";
 import type { AskTarget } from "@/bindings/AskTarget";
+import type { CopyInResult } from "@/bindings/CopyInResult";
 import type { EntryChange } from "@/bindings/EntryChange";
 import type { FileEntry } from "@/bindings/FileEntry";
 import type { TreeChanged } from "@/bindings/TreeChanged";
@@ -64,6 +68,18 @@ import type { FileOpenResult } from "@/bindings/FileOpenResult";
 import type { FileReloadResult } from "@/bindings/FileReloadResult";
 import type { FileSaveResult } from "@/bindings/FileSaveResult";
 import type { FileTabChanged } from "@/bindings/FileTabChanged";
+import type { AssetRenamed } from "@/bindings/AssetRenamed";
+import type { AssetsChanged } from "@/bindings/AssetsChanged";
+import type { AssetsCopied } from "@/bindings/AssetsCopied";
+import type { AssetsDeleted } from "@/bindings/AssetsDeleted";
+import type { AssetsSnapshot } from "@/bindings/AssetsSnapshot";
+import type { NotesChanged } from "@/bindings/NotesChanged";
+import type { NotesFlush } from "@/bindings/NotesFlush";
+import type { NotesImagesAdded } from "@/bindings/NotesImagesAdded";
+import type { NotesSheet } from "@/bindings/NotesSheet";
+import type { NotesTrashed } from "@/bindings/NotesTrashed";
+import type { NotesWritten } from "@/bindings/NotesWritten";
+import type { PastedImage } from "@/bindings/PastedImage";
 
 /** Payload of each event, by name. */
 export interface EventPayloads {
@@ -78,6 +94,8 @@ export interface EventPayloads {
   "usage-changed": UsageStatus;
   /** This window came forward because of a notification or a second launch: what to show. */
   "show-requested": ShowRequest;
+  /** This window could not go to the background after `Keep working in background`: it stays as it was; the reason. */
+  "window-hide-failed": HideFailed;
   /** Something to read at the top of the Board: a refused decision, a Proposal sent back to Draft. */
   notice: Notice;
   /** The Jobs list of a project changed: the whole list. */
@@ -120,6 +138,12 @@ export interface EventPayloads {
   "project-state": ProjectStatus;
   /** The status of System Certificates changed: the whole status, with its revision. */
   "system-certificates-changed": SystemCertificatesStatus;
+  /** The assets of a project changed (`workspace.ASSETS_CHANGED`): the whole list, at a generation. */
+  "assets-changed": AssetsChanged;
+  /** The notes sheet or an image of the notes folder changed on disk by anything but Weaver's own write (`workspace.NOTES_CHANGED`). */
+  "notes-changed": NotesChanged;
+  /** The window is closing: the Notes view answers with `notes_flushed`, with its waiting text and the images to trash. */
+  "notes-flush": NotesFlush;
 }
 
 /** Arguments and result of each command, by name. */
@@ -158,6 +182,10 @@ export interface Commands {
   fix_drift_code: { args: { projectId: string; driftId: string; option: number | null; note: string | null }; result: null };
   /** **Accept Proposal** on a Drift with an attached Proposal. */
   accept_drift_proposal: { args: { projectId: string; driftId: string }; result: null };
+  /** **Refine** on a Drift whose attached Proposal is stale or was left half-way: a refinement job adapts it; the Drift is not decided. */
+  refine_drift_proposal: { args: { projectId: string; driftId: string }; result: null };
+  /** **Discard** on a Drift whose attached Draft a refinement left half-way; the Drift is not decided. */
+  discard_drift_proposal: { args: { projectId: string; driftId: string }; result: null };
   /** **Dismiss Drift**, once confirmed. */
   dismiss_drift: { args: { projectId: string; driftId: string }; result: null };
   /** The whole History of an open project (entries newest first), worked out at one revision. */
@@ -170,8 +198,16 @@ export interface Commands {
   view_snapshot: { args: { projectId: string; overlay: string | null }; result: ViewSnapshot };
   /** The state of the project (Not initialised, Empty Model, Has a Model), what Get Started lists and the opening check. */
   project_status: { args: { projectId: string }; result: ProjectStatus };
-  /** **Initialise**: creates `.weaver` and the agent files; `force` confirms overwriting agent files that differ (else they come back as `conflicts`). */
-  initialise_project: { args: { projectId: string; force: boolean }; result: InitialiseResult };
+  /**
+   * **Initialise**: creates `.weaver` and the agent files; `force` confirms overwriting agent files that differ (else they
+   * come back as `conflicts`); `solo` is the mode of Solo mode chosen first (`off`: git is not called). A Solo mode that
+   * cannot be turned on refuses the initialisation with its reason and nothing is created.
+   */
+  initialise_project: { args: { projectId: string; force: boolean; solo: SoloMode }; result: InitialiseResult };
+  /** **Solo mode** of the working copy: the new state with the tracked files the block excludes, or the reason it could not change. */
+  set_solo_mode: { args: { projectId: string; mode: SoloMode }; result: SoloChange };
+  /** The files git tracks that Solo mode's block excludes, computed now: asked each time Settings is shown. */
+  solo_tracked_files: { args: { projectId: string }; result: string[] };
   /** **Update skills**: the structured report the command line prints too. */
   update_skills: { args: { projectId: string }; result: SkillsReport };
   /** The entries of one folder of the project (`path` relative, empty for the project folder) for the import tree. */
@@ -198,8 +234,6 @@ export interface Commands {
   remove_recent: { args: { path: string }; result: WelcomeState };
   /** `Open in editor`: `file` (absolute, or relative to the project) at `line`; a failure carries the reason. */
   open_in_editor: { args: { file: string; line?: number | null; projectId?: string | null }; result: null };
-  /** `developer.SEND_TO_BACKGROUND`: the backend hides the project's window; nothing is suspended and the webview stays alive. */
-  send_to_background: { args: { projectId: string }; result: null };
   /** The Jobs list of an open project. */
   jobs_snapshot: { args: { projectId: string }; result: JobsSnapshot };
   /** The conversation of a job, with the count of change batches it holds. */
@@ -310,6 +344,8 @@ export interface Commands {
   files_rename: { args: { projectId: string; path: string; name: string }; result: EntryChange };
   /** `developer.MOVE_ENTRY` into the folder `target` (empty: the project root). */
   files_move: { args: { projectId: string; path: string; target: string }; result: EntryChange };
+  /** `developer.DROP_EXTERNAL_ENTRIES`: copies the dropped `paths` (absolute, as Tauri reports them) into the folder `target` (empty: the project root); a refusal or a failure (`refused`) carries the reason, and nothing was copied. */
+  files_copy_in: { args: { projectId: string; target: string; paths: string[] }; result: CopyInResult };
   /** `developer.DELETE_ENTRY`: to the system's trash. */
   files_delete: { args: { projectId: string; path: string }; result: TreeUpdate };
   /** The round presented in the window of a project, when there is one. */
@@ -324,6 +360,30 @@ export interface Commands {
   system_certificates_dismiss_notice: { args: Record<string, never>; result: SystemCertificatesStatus };
   /** Closes the banner of a failed automatic export, in every window. */
   system_certificates_dismiss_failure: { args: Record<string, never>; result: SystemCertificatesStatus };
+  /** The assets of an open project as the backend holds them, at a generation; later changes arrive as `assets-changed`. */
+  assets_list: { args: { projectId: string }; result: AssetsSnapshot };
+  /** `developer.DROP_ASSETS`: copies the dropped `paths` (absolute, as Tauri reports them) into `.weaver/assets/`; a refusal or a failure (`refused`) carries the reason, and nothing was copied. An ignored drop (the project's own assets) copies nothing and answers no names. */
+  assets_copy_in: { args: { projectId: string; paths: string[] }; result: AssetsCopied };
+  /** `developer.RENAME_ASSET`: the asset `name` takes the name `newName`; a refusal (`refused`) carries the reason. */
+  assets_rename: { args: { projectId: string; name: string; newName: string }; result: AssetRenamed };
+  /** `developer.DELETE_ASSETS`: each asset to the system's trash; the ones the trash refused come back with their reasons. */
+  assets_delete: { args: { projectId: string; names: string[] }; result: AssetsDeleted };
+  /** `developer.DRAG_ASSETS_OUT`: starts a native drag of the assets `names` out of this window, as copies; the assets never change. */
+  assets_drag_out: { args: { projectId: string; names: string[] }; result: null };
+  /** The notes sheet as it is on disk (CRLF read as LF), with the SHA-256 of its bytes; no text and no hash when the file is missing. */
+  notes_read: { args: { projectId: string }; result: NotesSheet };
+  /** `developer.EDIT_NOTES`: writes the whole sheet atomically (UTF-8, LF), creating the notes folder first; the new hash. A failure rejects with the reason. */
+  notes_write: { args: { projectId: string; text: string }; result: NotesWritten };
+  /** An image of the notes folder as `data:<mime>;base64,<…>`, from one read; rejects for a name that is not a PNG, JPEG, GIF or WebP file there. */
+  notes_image: { args: { projectId: string; name: string }; result: string };
+  /** `developer.ADD_NOTES_IMAGES`: copies images pasted from the clipboard (bytes in base64, with the file name when there is one); one outcome per file, in order. `localTime` is `YYYY-MM-DDTHH:MM:SS`. */
+  notes_add_pasted: { args: { projectId: string; files: PastedImage[]; localTime: string }; result: NotesImagesAdded };
+  /** `developer.ADD_NOTES_IMAGES`: copies image files dropped on the sheet (absolute paths); one outcome per file, in order. */
+  notes_add_dropped: { args: { projectId: string; paths: string[]; localTime: string }; result: NotesImagesAdded };
+  /** `developer.LEAVE_NOTES_VIEW`: each image `names` to the system's trash, one at a time; the ones the trash refused come back with their reasons. */
+  notes_trash: { args: { projectId: string; names: string[] }; result: NotesTrashed };
+  /** The answer to `notes-flush`: the sheet's waiting text (none when nothing waits) and the images to trash after it is written. */
+  notes_flushed: { args: { projectId: string; text: string | null; trash: string[] }; result: null };
 }
 
 // Compile-time proof that the maps above cover exactly the generated names.
@@ -365,15 +425,24 @@ export function currentWindowLabel(): string {
 }
 
 /**
- * Calls `handler` with the paths of the files dropped on this window (the system drag and drop of
- * the webview; outside Tauri nothing is ever dropped this way). Returns what stops the listening.
+ * Calls `handler` with every event of the system drag and drop of the webview (`enter`, `over`,
+ * `drop`, `leave`; positions in physical pixels). Outside Tauri nothing is ever dragged this way.
+ * Returns what stops the listening.
  */
-export async function onFilesDropped(handler: (paths: string[]) => void): Promise<UnlistenFn> {
+export async function onDragDrop(handler: (event: DragDropEvent) => void): Promise<UnlistenFn> {
   try {
-    return await getCurrentWebview().onDragDropEvent((event) => {
-      if (event.payload.type === "drop") handler(event.payload.paths);
-    });
+    return await getCurrentWebview().onDragDropEvent((event) => handler(event.payload));
   } catch {
     return () => {};
   }
+}
+
+/**
+ * Calls `handler` with the paths of the files dropped on this window (the system drag and drop of
+ * the webview; outside Tauri nothing is ever dropped this way). Returns what stops the listening.
+ */
+export function onFilesDropped(handler: (paths: string[]) => void): Promise<UnlistenFn> {
+  return onDragDrop((event) => {
+    if (event.type === "drop") handler(event.paths);
+  });
 }

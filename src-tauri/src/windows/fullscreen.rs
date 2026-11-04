@@ -1,4 +1,4 @@
-//! Sending a fullscreen window to the background (`developer.SEND_TO_BACKGROUND`).
+//! Sending a fullscreen window to the background (`developer.CLOSE_WINDOW` → In background).
 //!
 //! On macOS a fullscreen window lives in its own Space: hiding it there leaves that Space on the
 //! screen, empty and black. So a fullscreen window first leaves fullscreen and is hidden once

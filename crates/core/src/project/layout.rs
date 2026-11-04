@@ -9,9 +9,12 @@
 //!   tasks/<id>-<slug>.md         live Tasks
 //!   drifts/<id>-<slug>.md        every Drift
 //!   history/<id>-<slug>.md       History entries
+//!   assets/<name>                the developer's assets, flat, files only; versioned, never read as project files
 //!   requests/                    local only
 //!   short-numbers/assigned       local only
 //!   task-images/<task id>/       local only
+//!   notes/                       local only: the developer's notes, `notes.md` and its images
+//!   solo/solo.json               local only: Solo mode of this working copy
 //! ```
 //!
 //! Paths in this crate's project API are relative to `.weaver/` and use `/`, whatever the
@@ -38,11 +41,46 @@ pub const DRIFTS_DIR: &str = "drifts";
 pub const HISTORY_DIR: &str = "history";
 pub const PROPOSAL_FILE: &str = "proposal.md";
 
+/// The developer's assets: flat, files only, versioned with the project, created when the first
+/// asset is copied in. The project image never reads them (`crate::assets` lists them).
+pub const ASSETS_DIR: &str = "assets";
+
+/// Whether the `.weaver/`-relative path `rel` is the assets folder or lies inside it.
+pub fn is_assets_rel(rel: &str) -> bool {
+    rel == ASSETS_DIR
+        || rel
+            .strip_prefix(ASSETS_DIR)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// The developer's notes: `notes.md` and the images pasted in it. Local only, created when the
+/// sheet or an image is first written (never at initialisation). Only the Notes view writes in
+/// it; the project image never reads its files and the watcher sends their events to the view
+/// alone (`crate::notes`).
+pub const NOTES_DIR: &str = "notes";
+
+/// Whether the `.weaver/`-relative path `rel` is the notes folder or lies inside it.
+pub fn is_notes_rel(rel: &str) -> bool {
+    rel == NOTES_DIR
+        || rel
+            .strip_prefix(NOTES_DIR)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Solo mode of this working copy: `solo.json`, local only (`crate::solo_mode`).
+pub const SOLO_DIR: &str = "solo";
+
 /// Local-only folders: each holds its own `.gitignore` containing `*`.
 pub const REQUESTS_DIR: &str = "requests";
 pub const SHORT_NUMBERS_DIR: &str = "short-numbers";
 pub const TASK_IMAGES_DIR: &str = "task-images";
-pub const LOCAL_ONLY_DIRS: [&str; 3] = [REQUESTS_DIR, SHORT_NUMBERS_DIR, TASK_IMAGES_DIR];
+pub const LOCAL_ONLY_DIRS: [&str; 5] = [
+    REQUESTS_DIR,
+    SHORT_NUMBERS_DIR,
+    TASK_IMAGES_DIR,
+    NOTES_DIR,
+    SOLO_DIR,
+];
 
 /// The versioned entries of `.weaver/` that the project image reads.
 pub const VERSIONED_ENTRIES: [&str; 7] = [
@@ -173,6 +211,7 @@ pub fn classify(rel: &str) -> FileClass {
             None => FileClass::Misplaced("a Proposal folder is named `<id>-<slug>`".to_owned()),
         },
         [PROPOSALS_DIR, ..] => FileClass::Ignored,
+        [NOTES_DIR, ..] => FileClass::Ignored,
         _ => FileClass::Ignored,
     }
 }
@@ -395,5 +434,73 @@ mod tests {
         // Nothing else of `.weaver/` is ignored.
         assert!(!weaver_dir(dir.path()).join(".gitignore").exists());
         assert!(!weaver_dir(dir.path()).join("tasks").exists());
+    }
+
+    #[test]
+    fn the_assets_folder_is_versioned_and_never_read_as_project_files() {
+        assert!(!LOCAL_ONLY_DIRS.contains(&ASSETS_DIR));
+        assert!(!VERSIONED_ENTRIES.contains(&ASSETS_DIR));
+        assert!(is_assets_rel("assets"));
+        assert!(is_assets_rel("assets/logo.png"));
+        assert!(!is_assets_rel("assets-old/logo.png"));
+        assert!(!is_assets_rel("tasks/assets"));
+        assert_eq!(classify("assets/notes.md"), FileClass::Ignored);
+    }
+
+    #[test]
+    fn the_notes_folder_is_local_only_and_never_read_as_project_files() {
+        assert!(LOCAL_ONLY_DIRS.contains(&NOTES_DIR));
+        assert!(!VERSIONED_ENTRIES.contains(&NOTES_DIR));
+        assert!(is_notes_rel("notes"));
+        assert!(is_notes_rel("notes/notes.md"));
+        assert!(is_notes_rel("notes/pasted/a.png"));
+        assert!(!is_notes_rel("notes-old/notes.md"));
+        assert!(!is_notes_rel("tasks/notes"));
+        // Whatever its name looks like, a file under `notes/` is not a project file.
+        for rel in [
+            "notes",
+            "notes/notes.md",
+            "notes/specs.yaml",
+            "notes/model/system.md",
+            "notes/requirements/ui/area.md",
+            "notes/tasks/vxdhoylk-core.md",
+            "notes/drifts/vxdhoylk-core.md",
+            "notes/history/vxdhoylk-core.md",
+            "notes/proposals/vxdhoylk-core/proposal.md",
+            "notes/image.png",
+        ] {
+            assert_eq!(classify(rel), FileClass::Ignored, "{rel}");
+        }
+    }
+
+    #[test]
+    fn the_solo_folder_is_local_only_and_never_read_as_project_files() {
+        assert!(LOCAL_ONLY_DIRS.contains(&SOLO_DIR));
+        assert!(!VERSIONED_ENTRIES.contains(&SOLO_DIR));
+        assert_eq!(classify("solo/solo.json"), FileClass::Ignored);
+        let dir = tempfile::tempdir().unwrap();
+        let folder = ensure_local_folder(dir.path(), SOLO_DIR).unwrap();
+        assert_eq!(folder, weaver_dir(dir.path()).join("solo"));
+        let ignore = folder.join(".gitignore");
+        assert_eq!(std::fs::read(&ignore).unwrap(), b"*\n");
+        std::fs::remove_file(&ignore).unwrap();
+        ensure_local_folder(dir.path(), SOLO_DIR).unwrap();
+        assert_eq!(std::fs::read(&ignore).unwrap(), b"*\n");
+    }
+
+    #[test]
+    fn the_notes_folder_and_its_gitignore_come_with_the_first_write_and_again_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        // Nothing makes it before a write: not even the project's `.weaver/`.
+        assert!(!weaver_dir(dir.path()).join(NOTES_DIR).exists());
+
+        let folder = ensure_local_folder(dir.path(), NOTES_DIR).unwrap();
+        assert_eq!(folder, weaver_dir(dir.path()).join("notes"));
+        let ignore = folder.join(".gitignore");
+        assert_eq!(std::fs::read(&ignore).unwrap(), b"*\n");
+
+        std::fs::remove_file(&ignore).unwrap();
+        ensure_local_folder(dir.path(), NOTES_DIR).unwrap();
+        assert_eq!(std::fs::read(&ignore).unwrap(), b"*\n");
     }
 }

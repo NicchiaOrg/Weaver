@@ -13,7 +13,7 @@
 //! | [`protocol`]| CLI↔app messages: framing, size limit, protocol version, secret check |
 //! | [`ipc`]     | Local-socket transport (`interprocess`) and one-request-per-connection serving |
 //! | [`lock`]    | OS advisory project lock shared by the app and the CLI |
-//! | [`process`] | The one function every child process is started with |
+//! | [`process`] | The one function every child process is started with, and the time-limited runner (`process::timed`) |
 //! | [`project`] | Project files under `.weaver/`: parsers, rules, changes, in-memory image |
 //! | [`settings`]| Weaver's settings: typed schema, defaults, validation, `settings.json` store |
 //! | [`agent_files`] | The texts installed for the agent (skills, sub-agent definitions, advisor instructions), embedded |
@@ -29,8 +29,12 @@
 //! | [`file_tab`] | The files open in the tabs of the File view: checked paths, reading, saving, tab rules |
 //! | [`file_lock`] | The Machine `file-lock`: which files open in a tab an agent is changing |
 //! | [`file_view`] | The File view's tree: listing, create / rename / move / delete, the Machine `file-view` |
+//! | [`assets`] | The developer's assets in `.weaver/assets/`: the list, copy in, rename, delete, the paths of a drag out |
+//! | [`notes`] | The developer's notes in `.weaver/notes/`: reading and writing the sheet, naming, copying in, reading and trashing the images, the sheet's hash and the images' names the watcher reports |
+//! | [`solo_mode`] | Solo mode: the state of the working copy, the block in git's local exclusions, the tracked files it cannot hide |
 
 pub mod agent_files;
+pub mod assets;
 pub mod atomic;
 pub mod command;
 pub mod endpoint;
@@ -41,6 +45,7 @@ pub mod ipc;
 pub mod job_instruction;
 pub mod jobs;
 pub mod lock;
+pub mod notes;
 pub mod notification;
 pub mod omp;
 pub mod paths;
@@ -52,4 +57,5 @@ pub mod protocol;
 pub mod question;
 pub mod runtime;
 pub mod settings;
+pub mod solo_mode;
 pub mod system_certificates;

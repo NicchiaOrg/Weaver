@@ -24,6 +24,12 @@ vi.mock("@/hooks/use-omp", () => ({ useOmp: () => ({ status: ompStatus.current }
 
 const PROJECT = "0123456789abcdef";
 
+const ASSETS = vi.hoisted(() => [
+  { name: "logo.png", size: 1 },
+  { name: "spec.pdf", size: 1 },
+]);
+vi.mock("@/components/assets/use-assets", () => ({ useAssets: () => ({ assets: ASSETS, loaded: true, apply: () => {} }) }));
+
 function state(patch: Partial<GeneralState> = {}): GeneralState {
   return { projectId: PROJECT, working: false, starting: false, loading: false, kept: false, ...patch };
 }
@@ -78,7 +84,7 @@ describe("GeneralView", () => {
   it("shows the invitation when the conversation is empty, with the message box enabled and Clear disabled", async () => {
     mount([]);
     expect(await screen.findByText("Talk with omp in this project. Ask it to start a job of Weaver when you want one.")).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Message omp" })).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "Message omp" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Clear" })).toHaveAttribute("aria-disabled", "true");
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
   });
@@ -94,7 +100,7 @@ describe("GeneralView", () => {
     expect(await screen.findByText("Loading conversation…")).toBeInTheDocument();
     expect(screen.queryByText(/Talk with omp/)).toBeNull();
     expect(screen.queryByText("omp is not installed.")).toBeNull();
-    expect(screen.getByRole("textbox", { name: "Message omp" })).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "Message omp" })).toBeEnabled();
     await waitFor(() => expect(screen.getByRole("button", { name: "Clear" })).not.toHaveAttribute("aria-disabled"));
   });
 
@@ -138,7 +144,7 @@ describe("GeneralView", () => {
   it("sends the message with Enter and keeps Shift+Enter for a new line", async () => {
     mount([]);
     const user = userEvent.setup();
-    const box = await screen.findByRole("textbox", { name: "Message omp" });
+    const box = await screen.findByRole("combobox", { name: "Message omp" });
     await user.type(box, "Hello{Shift>}{Enter}{/Shift}omp{Enter}");
     await waitFor(() => expect(call).toHaveBeenCalledWith("general_send_message", { projectId: PROJECT, text: "Hello\nomp" }));
     expect(box).toHaveValue("");
@@ -313,7 +319,7 @@ describe("GeneralView", () => {
       expect(screen.getByRole("button", { name: "Back to Chat" })).toBeInTheDocument();
       // The chat is gone, and nothing can be sent, stopped or answered here.
       expect(screen.queryByText("Chat text")).toBeNull();
-      expect(screen.queryByRole("textbox", { name: "Message omp" })).toBeNull();
+      expect(screen.queryByRole("combobox", { name: "Message omp" })).toBeNull();
       expect(screen.getByRole("textbox", { name: "Message the agent" })).toBeDisabled();
       expect(screen.getByPlaceholderText("Sub-agents take no messages.")).toBeDisabled();
       expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
@@ -340,7 +346,7 @@ describe("GeneralView", () => {
     it("goes back to the chat as it was, with what was typed, the chat's news and the backend told nothing is shown", async () => {
       mount(chat, state(), vi.fn(), sub());
       const user = userEvent.setup();
-      await user.type(await screen.findByRole("textbox", { name: "Message omp" }), "Half a thought");
+      await user.type(await screen.findByRole("combobox", { name: "Message omp" }), "Half a thought");
       await user.click(screen.getByRole("button", { name: /^Lead/ }));
       await screen.findByText("Read the code.");
       // Meanwhile the chat goes on.
@@ -355,7 +361,7 @@ describe("GeneralView", () => {
       await user.click(screen.getByRole("button", { name: "Back to Chat" }));
       expect(await screen.findByText("Chat text")).toBeInTheDocument();
       expect(screen.getByText("Later answer")).toBeInTheDocument();
-      expect(screen.getByRole("textbox", { name: "Message omp" })).toHaveValue("Half a thought");
+      expect(screen.getByRole("combobox", { name: "Message omp" })).toHaveValue("Half a thought");
       expect(screen.queryByRole("heading", { name: /Chat ›/ })).toBeNull();
       await waitFor(() => expect(call).toHaveBeenLastCalledWith("general_sub_agents_view", { projectId: PROJECT, path: null }));
     });
@@ -444,7 +450,7 @@ describe("GeneralView", () => {
       const dialog = await screen.findByRole("alertdialog");
       await user.click(within(dialog).getByRole("button", { name: "Clear" }));
       await waitFor(() => expect(call).toHaveBeenCalledWith("general_clear", { projectId: PROJECT }));
-      expect(await screen.findByRole("textbox", { name: "Message omp" })).toBeInTheDocument();
+      expect(await screen.findByRole("combobox", { name: "Message omp" })).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Back to Chat" })).toBeNull();
     });
   });
@@ -497,5 +503,21 @@ describe("GeneralView", () => {
       Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
       Reflect.deleteProperty(HTMLElement.prototype, "clientHeight");
     }
+  });
+});
+
+describe("the @ tags in the Chat box", () => {
+  it("opens the list of assets, inserts the chosen one, does not send with the list open, and colours the recognised tags", async () => {
+    mount([]);
+    const user = userEvent.setup();
+    const box = await screen.findByRole("combobox", { name: "Message omp" });
+    await user.type(box, "Look at @lo");
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["logo.png"]);
+    await user.keyboard("{Enter}");
+    expect(call).not.toHaveBeenCalledWith("general_send_message", expect.anything());
+    expect(box).toHaveValue("Look at @logo.png ");
+    expect(document.querySelector("[data-tag='logo.png']")?.textContent).toBe("@logo.png");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(call).toHaveBeenCalledWith("general_send_message", { projectId: PROJECT, text: "Look at @logo.png" }));
   });
 });

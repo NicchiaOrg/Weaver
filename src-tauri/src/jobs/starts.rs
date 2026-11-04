@@ -8,11 +8,11 @@
 
 use std::path::Path;
 
-use weaver_core::job_instruction::{Job, ReworkKind};
+use weaver_core::job_instruction::{Job, ProposalKind};
 use weaver_core::jobs::admission::{self, Refusal, StartPlan};
 use weaver_core::jobs::{names, JobKind};
 use weaver_core::project::board;
-use weaver_core::project::cards::CardKind;
+use weaver_core::project::cards::{Card, CardKind};
 use weaver_core::project::image::ProjectImage;
 use weaver_core::project::proposal::data::{self, Kind};
 use weaver_core::project::proposal::models::ProposalModels;
@@ -178,8 +178,13 @@ impl Jobs {
     }
 
     /// `developer.SEND_REQUEST` on a Model that has a Feature or an Actor: a design job on the
-    /// written request.
-    pub fn start_design(&self, ctx: &Ctx, request: &str) -> Result<String, Refusal> {
+    /// written request; `assets` are the assets the request tags.
+    pub fn start_design(
+        &self,
+        ctx: &Ctx,
+        request: &str,
+        assets: Vec<String>,
+    ) -> Result<String, Refusal> {
         self.start(
             ctx,
             Self::plan(
@@ -187,6 +192,7 @@ impl Jobs {
                 names::DESIGN.to_owned(),
                 Job::Design {
                     request: request.to_owned(),
+                    assets,
                 },
                 Some(request.to_owned()),
                 self.max_agents(),
@@ -194,8 +200,14 @@ impl Jobs {
         )
     }
 
-    /// `developer.SEND_REQUEST` on an empty Model: a setup job.
-    pub fn start_setup(&self, ctx: &Ctx, request: &str) -> Result<String, Refusal> {
+    /// `developer.SEND_REQUEST` on an empty Model: a setup job; `assets` are the assets the
+    /// request tags.
+    pub fn start_setup(
+        &self,
+        ctx: &Ctx,
+        request: &str,
+        assets: Vec<String>,
+    ) -> Result<String, Refusal> {
         self.start(
             ctx,
             Self::plan(
@@ -203,6 +215,7 @@ impl Jobs {
                 names::SETUP.to_owned(),
                 Job::Setup {
                     request: request.to_owned(),
+                    assets,
                 },
                 Some(request.to_owned()),
                 self.max_agents(),
@@ -242,21 +255,18 @@ impl Jobs {
         )
     }
 
-    /// `developer.REWORK_PROPOSAL`: a rework job with the skill of the Proposal's kind; for a
-    /// resolution only on its Drifts still open, and none when no Drift is open.
-    pub fn start_rework(&self, ctx: &Ctx, proposal: &str) -> Result<Option<String>, Refusal> {
-        let Some(card) = ctx.image.card(CardKind::Proposal, proposal) else {
-            return Err(Refusal(format!("{proposal} no longer exists")));
-        };
-        let kind = match data::kind_of(card) {
-            Kind::Change => ReworkKind::Change,
+    /// The kind of a Proposal as the instruction needs it, for a rework or a refinement: for a
+    /// resolution, its Drifts still open, `None` when no Drift is.
+    fn proposal_kind(ctx: &Ctx, card: &Card) -> Option<ProposalKind> {
+        Some(match data::kind_of(card) {
+            Kind::Change => ProposalKind::Change,
             Kind::Setup => {
                 let model = ctx.image.model();
-                ReworkKind::Setup {
+                ProposalKind::Setup {
                     model_is_empty: model.features.is_empty() && model.actors.is_empty(),
                 }
             }
-            Kind::Import => ReworkKind::Import,
+            Kind::Import => ProposalKind::Import,
             Kind::Resolution => {
                 let open: Vec<String> = board::resolution_rows(card)
                     .into_iter()
@@ -268,10 +278,21 @@ impl Jobs {
                     .map(|row| row.drift)
                     .collect();
                 if open.is_empty() {
-                    return Ok(None);
+                    return None;
                 }
-                ReworkKind::Resolution { open_drifts: open }
+                ProposalKind::Resolution { open_drifts: open }
             }
+        })
+    }
+
+    /// `developer.REWORK_PROPOSAL`: a rework job with the skill of the Proposal's kind; for a
+    /// resolution only on its Drifts still open, and none when no Drift is open.
+    pub fn start_rework(&self, ctx: &Ctx, proposal: &str) -> Result<Option<String>, Refusal> {
+        let Some(card) = ctx.image.card(CardKind::Proposal, proposal) else {
+            return Err(Refusal(format!("{proposal} no longer exists")));
+        };
+        let Some(kind) = Self::proposal_kind(ctx, card) else {
+            return Ok(None);
         };
         let name = names::rework(&ctx.numbers(), proposal);
         let mut plan = Self::plan(
@@ -291,17 +312,25 @@ impl Jobs {
         self.start(ctx, plan).map(Some)
     }
 
-    /// `developer.APPROVE_PROPOSAL` on a stale Proposal: a refinement job.
+    /// A refinement job on a stale Proposal, with the skill of its kind as for a rework; for a
+    /// resolution only on its Drifts still open. Started by `developer.APPROVE_PROPOSAL` when the
+    /// Proposal approved must be refined first, and by `developer.REFINE_DRIFT_PROPOSAL` on the
+    /// Proposal attached to a Drift. A resolution with no Drift still open is refused (its
+    /// approval is refused before anything is written, so this is only a second check).
     pub fn start_refinement(&self, ctx: &Ctx, proposal: &str) -> Result<String, Refusal> {
-        if ctx.image.card(CardKind::Proposal, proposal).is_none() {
+        let Some(card) = ctx.image.card(CardKind::Proposal, proposal) else {
             return Err(Refusal(format!("{proposal} no longer exists")));
-        }
+        };
+        let Some(kind) = Self::proposal_kind(ctx, card) else {
+            return Err(Refusal("None of its Drifts is still open".to_owned()));
+        };
         let name = names::refine(&ctx.numbers(), proposal);
         let mut plan = Self::plan(
             JobKind::Refinement,
             name,
             Job::Refinement {
                 proposal: proposal.to_owned(),
+                kind,
             },
             Some(proposal.to_owned()),
             self.max_agents(),

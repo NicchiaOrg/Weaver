@@ -53,7 +53,7 @@ function FilesLayout() {
     <div className="flex h-full min-h-0 flex-col">
       <ViewHeader view="files" />
       <div className="flex min-h-0 flex-1">
-        <div className="flex w-72 shrink-0 flex-col overflow-auto border-r">
+        <div className="flex w-72 shrink-0 flex-col overflow-hidden border-r">
           {tree.failure ? (
             <Alert variant="error" className="m-2">
               <TriangleAlert aria-hidden />

@@ -10,7 +10,7 @@
 //! | [`providers`] | The fixed list of providers omp can log in to |
 //! | [`failure`]   | Reasons of a failed command and the explanations of certificate and HTTP errors |
 //! | [`installer`] | The marker where omp's installer leaves its exit code |
-//! | [`run`]       | Shell-free commands with time limits ([`run::Exec`]) |
+//! | [`run`]       | omp commands with time limits ([`run::Exec`], on `process::timed`) |
 //! | [`path_env`]  | The login PATH, the Windows registry PATH, the PATH of a child |
 //! | [`lookup`]    | Where omp is: `ompPath`, PATH, the installer folders |
 //! | [`probe`]     | The check (`--version`, `models --json`), update check, update, logout |
@@ -30,7 +30,6 @@ pub mod terminal;
 pub mod usage;
 pub mod version;
 
-pub use failure::Failure;
 pub use lookup::{find_omp, LookupEnv, Os};
 pub use probe::{OmpModel, ProbeResult};
 pub use providers::{provider, Provider, ProviderRow, PROVIDERS};

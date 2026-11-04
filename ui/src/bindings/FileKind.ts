@@ -3,4 +3,4 @@
 /**
  * What kind of file a tab holds.
  */
-export type FileKind = "text" | "binary";
+export type FileKind = "text" | "binary" | "image";

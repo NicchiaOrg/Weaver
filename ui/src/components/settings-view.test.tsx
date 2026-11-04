@@ -7,9 +7,15 @@ import type { SettingChange } from "@/bindings/SettingChange";
 import type { SettingField } from "@/bindings/SettingField";
 import type { SettingsSnapshot } from "@/bindings/SettingsSnapshot";
 import type { SystemCertificatesStatus } from "@/bindings/SystemCertificatesStatus";
+import type { ProjectStatus } from "@/bindings/ProjectStatus";
+import type { SoloChange } from "@/bindings/SoloChange";
+import type { SoloMode } from "@/bindings/SoloMode";
 import { SettingsView, type ModelCatalog } from "@/components/settings-view";
+import { SoloModeSetting } from "@/components/project/solo-mode";
+import { ProjectStatusProvider } from "@/components/project/use-project-status";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SettingsProvider } from "@/hooks/use-settings";
+import { ViewShownContext } from "@/components/view-shown";
 import { call, on } from "@/lib/backend";
 
 const OFF: SystemCertificatesStatus = { revision: 1, phase: "off", automatic: false, count: null, writtenAt: null, error: null, turnOnNotice: false, failureBanner: false, failureReason: null };
@@ -102,19 +108,49 @@ let current: SettingsSnapshot;
 let saved: SettingChange[];
 let failWrites: string | null;
 let push: (next: SettingsSnapshot) => void;
+let pushStatus: (next: ProjectStatus) => void;
+let project: ProjectStatus;
+let trackedFiles: () => Promise<string[]>;
+let changeSolo: (args: { mode: SoloMode }) => Promise<SoloChange>;
+
+const PROJECT = "0123456789abcdef";
+
+function projectStatus(patch: Partial<ProjectStatus> = {}): ProjectStatus {
+  return {
+    projectId: PROJECT,
+    revision: 1,
+    state: "has-model",
+    files: [],
+    folderHasFiles: false,
+    check: { opening: 1, outcome: { kind: "none" } },
+    solo: { mode: "off" },
+    ...patch,
+  };
+}
 
 /** A backend that validates the two rules the tests exercise and stores what it accepts. */
 function install(initial: SettingsSnapshot) {
   current = initial;
   saved = [];
   failWrites = null;
-  vi.mocked(on).mockImplementation(((name: string, handler: (next: SettingsSnapshot) => void) => {
-    if (name === "settings-changed") push = handler;
+  project = projectStatus();
+  trackedFiles = () => Promise.resolve([]);
+  // The backend of a change that works: the project's mode becomes the one asked for.
+  changeSolo = ({ mode }) => {
+    project = { ...project, revision: project.revision + 1, solo: { mode } };
+    return Promise.resolve({ solo: { mode }, tracked: [] });
+  };
+  vi.mocked(on).mockImplementation(((name: string, handler: (next: never) => void) => {
+    if (name === "settings-changed") push = handler as unknown as typeof push;
+    if (name === "project-state") pushStatus = handler as unknown as typeof pushStatus;
     return Promise.resolve(() => {});
   }) as unknown as typeof on);
   vi.mocked(call).mockImplementation(((name: string, args: { change?: SettingChange }) => {
     if (name === "settings_get") return Promise.resolve(current);
     if (name === "system_certificates_status") return Promise.resolve(OFF);
+    if (name === "project_status") return Promise.resolve(project);
+    if (name === "solo_tracked_files") return trackedFiles();
+    if (name === "set_solo_mode") return changeSolo(args as unknown as { mode: SoloMode });
     const change = args.change!;
     saved.push(change);
     if (change.key === "maxParallelAgents" && !/^[1-9][0-9]*$/.test(change.value)) {
@@ -426,5 +462,237 @@ describe("model roles", () => {
     await user.type(screen.getByLabelText("Scan"), "x/y");
     await user.tab();
     await vi.waitFor(() => expect(saved).toEqual([{ key: "models.scan", value: "x/y" }]));
+  });
+});
+
+/** The Settings view with `Solo mode` first in its Project group, as the project window composes it. */
+async function showSolo(visible = true) {
+  const view = (shown: boolean) => (
+    <TooltipProvider>
+      <SettingsProvider>
+        <ProjectStatusProvider projectId={PROJECT}>
+          <ViewShownContext.Provider value={shown}>
+            <SettingsView
+              projectSlot={
+                <>
+                  <SoloModeSetting />
+                  <p>Update skills box</p>
+                </>
+              }
+            />
+          </ViewShownContext.Provider>
+        </ProjectStatusProvider>
+      </SettingsProvider>
+    </TooltipProvider>
+  );
+  const rendered = render(view(visible));
+  await screen.findByRole("heading", { name: "omp" });
+  await screen.findByRole("radiogroup", { name: "Solo mode" });
+  return { show: (shown: boolean) => rendered.rerender(view(shown)) };
+}
+
+const NOTE = "Applies only to this working copy: other clones start with it off.";
+const VERSIONED_NOWHERE = "Weaver's files are not versioned anywhere: losing this working copy loses them.";
+
+describe("Solo mode in Settings", () => {
+  it("is the first item of the Project group, before Update skills", async () => {
+    await showSolo();
+    const group = screen.getByRole("region", { name: "Project" });
+    const control = within(group).getByRole("radiogroup", { name: "Solo mode" });
+    expect(group.children[1]).toContainElement(control);
+    expect(within(group).getByText("Solo mode")).toBeInTheDocument();
+    expect(control.compareDocumentPosition(within(group).getByText("Update skills box")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("is a segmented control Off / Whole folders / Weaver's files only, a radio group, with the note as its description", async () => {
+    await showSolo();
+    const control = screen.getByRole("radiogroup", { name: "Solo mode" });
+    expect(within(control).getAllByRole("radio").map((radio) => radio.textContent)).toEqual(["Off", "Whole folders", "Weaver's files only"]);
+    expect(screen.getByRole("radio", { name: "Off" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Whole folders" })).not.toBeChecked();
+    expect(control).toHaveAccessibleDescription(NOTE);
+    expect(screen.getByText(NOTE)).toBeInTheDocument();
+    for (const radio of within(control).getAllByRole("radio")) expect(radio).toBeEnabled();
+    expect(screen.queryByText(VERSIONED_NOWHERE)).not.toBeInTheDocument();
+    // Never asked for the tracked files while it is off.
+    expect(call).not.toHaveBeenCalledWith("solo_tracked_files", expect.anything());
+  });
+
+  it("is disabled on Off in a folder that is not a project yet, and says where to choose it", async () => {
+    project = projectStatus({ state: "not-initialised" });
+    await showSolo();
+    const control = screen.getByRole("radiogroup", { name: "Solo mode" });
+    for (const radio of within(control).getAllByRole("radio")) expect(radio).toBeDisabled();
+    expect(screen.getByRole("radio", { name: "Off" })).toBeChecked();
+    expect(screen.getByText("Choose Solo mode when you initialise the project.")).toBeInTheDocument();
+    expect(control).toHaveAccessibleDescription(`${NOTE} Choose Solo mode when you initialise the project.`);
+  });
+
+  it.each([
+    ["git was not found", "Solo mode needs git: git was not found."],
+    ["this folder is not in a git repository", "Solo mode needs git: this folder is not in a git repository."],
+    ["git did not answer within 10 s", "Solo mode needs git: git did not answer within 10 s."],
+  ])("is disabled on Off without git (%s) and gives the reason as its description", async (reason, text) => {
+    project = projectStatus({ solo: { mode: "off", unavailable: reason } });
+    await showSolo();
+    const control = screen.getByRole("radiogroup", { name: "Solo mode" });
+    for (const radio of within(control).getAllByRole("radio")) expect(radio).toBeDisabled();
+    expect(screen.getByRole("radio", { name: "Off" })).toBeChecked();
+    expect(screen.getByText(text)).toBeInTheDocument();
+    expect(control).toHaveAccessibleDescription(`${NOTE} ${text}`);
+  });
+
+  it("is never stored as a setting: choosing writes no settings and asks the backend to change the mode", async () => {
+    const user = userEvent.setup();
+    await showSolo();
+    await user.click(screen.getByRole("radio", { name: "Whole folders" }));
+    await vi.waitFor(() => expect(call).toHaveBeenCalledWith("set_solo_mode", { projectId: PROJECT, mode: "folders" }));
+    await vi.waitFor(() => expect(screen.getByRole("radio", { name: "Whole folders" })).toBeChecked());
+    expect(saved).toEqual([]);
+    expect(vi.mocked(call).mock.calls.some(([name]) => name === "settings_set")).toBe(false);
+    expect(JSON.stringify(snapshot().schema)).not.toMatch(/solo/i);
+  });
+
+  it("changes at once, with no confirmation, is disabled while the change runs and warns once it is on", async () => {
+    const user = userEvent.setup();
+    let finish!: () => void;
+    changeSolo = ({ mode }) =>
+      new Promise((resolve) => {
+        finish = () => {
+          project = { ...project, revision: project.revision + 1, solo: { mode } };
+          resolve({ solo: { mode }, tracked: [".weaver/model/system.md"] });
+        };
+      });
+    await showSolo();
+    await user.click(screen.getByRole("radio", { name: "Weaver's files only" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    await vi.waitFor(() => expect(screen.getByRole("radio", { name: "Off" })).toBeDisabled());
+    expect(screen.getByRole("radio", { name: "Weaver's files only" })).toBeChecked();
+
+    await act(async () => finish());
+    await vi.waitFor(() => expect(screen.getByRole("radio", { name: "Off" })).toBeEnabled());
+    expect(screen.getByRole("radio", { name: "Weaver's files only" })).toBeChecked();
+    const warning = screen.getByText(VERSIONED_NOWHERE);
+    expect(warning.closest("[aria-live]")).toHaveAttribute("aria-live", "polite");
+    expect(screen.getByRole("radiogroup", { name: "Solo mode" })).toHaveAccessibleDescription(`${NOTE} ${VERSIONED_NOWHERE}`);
+    // The answer of the change carries the tracked files.
+    const region = screen.getByRole("region", { name: "Git still tracks 1 of Weaver's files: their changes still go into commits." });
+    expect(within(region).getAllByRole("listitem").map((item) => item.textContent)).toEqual([".weaver/model/system.md"]);
+  });
+
+  it("turns off at once too, and the warning and the list go", async () => {
+    const user = userEvent.setup();
+    project = projectStatus({ solo: { mode: "folders" } });
+    trackedFiles = () => Promise.resolve([".omp/WATCHDOG.yml"]);
+    await showSolo();
+    expect(await screen.findByRole("region", { name: /Git still tracks 1/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Off" }));
+    await vi.waitFor(() => expect(call).toHaveBeenCalledWith("set_solo_mode", { projectId: PROJECT, mode: "off" }));
+    await vi.waitFor(() => expect(screen.getByRole("radio", { name: "Off" })).toBeChecked());
+    expect(screen.queryByText(VERSIONED_NOWHERE)).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /Git still tracks/ })).not.toBeInTheDocument();
+  });
+
+  it("shows `Could not change Solo mode: <reason>.` in the error colour and puts back the project's value", async () => {
+    const user = userEvent.setup();
+    changeSolo = () => Promise.reject({ code: "refused", message: "git was not found" });
+    await showSolo();
+    await user.click(screen.getByRole("radio", { name: "Whole folders" }));
+    const failure = await screen.findByRole("alert");
+    expect(failure).toHaveTextContent("Could not change Solo mode: git was not found.");
+    expect(failure).toHaveClass("text-red-600");
+    await vi.waitFor(() => expect(screen.getByRole("radio", { name: "Off" })).toBeChecked());
+    expect(screen.getByRole("radio", { name: "Whole folders" })).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: "Off" })).toBeEnabled();
+    expect(screen.getByRole("radiogroup", { name: "Solo mode" })).toHaveAccessibleDescription(`${NOTE} Could not change Solo mode: git was not found.`);
+    // The next choice clears it.
+    changeSolo = ({ mode }) => {
+      project = { ...project, revision: project.revision + 1, solo: { mode } };
+      return Promise.resolve({ solo: { mode }, tracked: [] });
+    };
+    await user.click(screen.getByRole("radio", { name: "Whole folders" }));
+    await vi.waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
+  it("works from the keyboard: focus, arrows move, Enter chooses", async () => {
+    const user = userEvent.setup();
+    await showSolo();
+    screen.getByRole("radio", { name: "Off" }).focus();
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("radio", { name: "Whole folders" })).toHaveFocus();
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("radio", { name: "Weaver's files only" })).toHaveFocus();
+    await user.keyboard("{Enter}");
+    await vi.waitFor(() => expect(call).toHaveBeenCalledWith("set_solo_mode", { projectId: PROJECT, mode: "files" }));
+    await vi.waitFor(() => expect(screen.getByRole("radio", { name: "Weaver's files only" })).toBeChecked());
+  });
+
+  it("warns when it is on but the block is not in place, in the warning colour, and stays usable", async () => {
+    await showSolo();
+    act(() => pushStatus(projectStatus({ revision: 2, solo: { mode: "folders", unavailable: "git was not found", problem: "git was not found" } })));
+    const text = "Solo mode is on but cannot exclude Weaver's files: git was not found.";
+    const line = await screen.findByText(text);
+    expect(line).toHaveClass("text-amber-600");
+    expect(line.closest("[aria-live]")).toHaveAttribute("aria-live", "polite");
+    for (const radio of screen.getAllByRole("radio", { name: /Off|Whole folders|Weaver's files only/ })) expect(radio).toBeEnabled();
+    expect(screen.getByRole("radiogroup", { name: "Solo mode" })).toHaveAccessibleDescription(`${NOTE} ${VERSIONED_NOWHERE} ${text}`);
+
+    act(() => pushStatus(projectStatus({ revision: 3, solo: { mode: "folders", unavailable: "this folder is not in a git repository", problem: "this folder is not in a git repository" } })));
+    expect(await screen.findByText("Solo mode is on but cannot exclude Weaver's files: this folder is not in a git repository.")).toBeInTheDocument();
+
+    act(() => pushStatus(projectStatus({ revision: 4, solo: { mode: "files", problem: "could not write /r/.git/info/exclude: Permission denied (os error 13)" } })));
+    expect(
+      await screen.findByText("Weaver's files may not be excluded from git: could not write /r/.git/info/exclude: Permission denied (os error 13)."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/cannot exclude/)).not.toBeInTheDocument();
+
+    // Put in place again at the next opening: the warning goes.
+    act(() => pushStatus(projectStatus({ revision: 5, solo: { mode: "files" } })));
+    await vi.waitFor(() => expect(screen.queryByText(/may not be excluded/)).not.toBeInTheDocument());
+  });
+
+  it("lists the tracked files in a labelled region of monospace paths that scrolls past 8 lines, with no action", async () => {
+    const files = Array.from({ length: 10 }, (_, index) => `.weaver/model/file-${index}.md`);
+    project = projectStatus({ solo: { mode: "folders" } });
+    trackedFiles = () => Promise.resolve(files);
+    await showSolo();
+    const region = await screen.findByRole("region", { name: "Git still tracks 10 of Weaver's files: their changes still go into commits." });
+    expect(region).toHaveClass("border-amber-600");
+    const list = within(region).getByRole("list", { name: "Files git still tracks" });
+    expect(list).toHaveClass("font-mono", "overflow-auto", "max-h-[12rem]");
+    expect(within(list).getAllByRole("listitem").map((item) => item.textContent)).toEqual(files);
+    expect(within(region).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("asks for the tracked files each time the view is shown, and the earlier list stays while it loads", async () => {
+    project = projectStatus({ solo: { mode: "folders" } });
+    let calls = 0;
+    let release!: (files: string[]) => void;
+    trackedFiles = () => {
+      calls += 1;
+      if (calls === 1) return Promise.resolve(["a.md"]);
+      return new Promise((resolve) => {
+        release = resolve;
+      });
+    };
+    const view = await showSolo();
+    await screen.findByRole("region", { name: /Git still tracks 1 of/ });
+    expect(calls).toBe(1);
+
+    view.show(false);
+    expect(calls).toBe(1);
+    view.show(true);
+    await vi.waitFor(() => expect(calls).toBe(2));
+    expect(screen.getByRole("region", { name: /Git still tracks 1 of/ })).toBeInTheDocument();
+    await act(async () => release(["a.md", "b.md"]));
+    expect(await screen.findByRole("region", { name: /Git still tracks 2 of/ })).toBeInTheDocument();
+  });
+
+  it("shows nothing about tracked files while the list is empty", async () => {
+    project = projectStatus({ solo: { mode: "files" } });
+    await showSolo();
+    await vi.waitFor(() => expect(call).toHaveBeenCalledWith("solo_tracked_files", { projectId: PROJECT }));
+    expect(screen.queryByRole("region", { name: /Git still tracks/ })).not.toBeInTheDocument();
+    expect(screen.getByText(VERSIONED_NOWHERE)).toBeInTheDocument();
   });
 });

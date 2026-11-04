@@ -14,6 +14,7 @@ use std::collections::{BTreeSet, HashMap};
 use serde::Serialize;
 use serde_json::Value;
 use ts_rs::TS;
+use weaver_core::assets::tags;
 use weaver_core::jobs::ask;
 use weaver_core::jobs::machine::{MessageId, RequestId, RESUME_PROMPT};
 use weaver_core::jobs::subagents::{self, SubAgent, SubAgentState};
@@ -607,10 +608,11 @@ impl Conversation {
         {
             self.instruction(text);
         } else {
+            // What Weaver appended for the tagged assets is never shown, live or replayed.
             let text = if self.ask {
                 ask::shown_message(text)
             } else {
-                text
+                tags::without_block(text)
             };
             self.developer_message(0, text, Delivery::Delivered);
         }
@@ -1231,6 +1233,33 @@ mod tests {
                 .any(|e| matches!(e, Entry::Instruction { .. })),
             "the instruction is never an entry"
         );
+    }
+
+    #[test]
+    fn the_replayed_history_never_shows_the_block_of_tagged_assets() {
+        let sent = |text: &str| tags::with_block(text, &["logo.png".to_owned()]);
+        let mut job = Conversation::new();
+        job.apply_update(&chunk("user_message_chunk", "Use the weaver-scan skill."));
+        job.apply_update(&chunk("user_message_chunk", &sent("Look at @logo.png")));
+        assert!(matches!(
+            &job.entries()[1],
+            Entry::Developer { text, .. } if text == "Look at @logo.png"
+        ));
+        let mut chat = Conversation::general();
+        chat.apply_update(&chunk("user_message_chunk", &sent("Look at @logo.png")));
+        assert!(matches!(
+            &chat.entries()[0],
+            Entry::Developer { text, .. } if text == "Look at @logo.png"
+        ));
+        let mut ask = Conversation::ask();
+        ask.apply_update(&chunk(
+            "user_message_chunk",
+            &ask::first_prompt("Weaver: Ask more\n\nrules\n", &sent("Why @logo.png?")),
+        ));
+        assert!(matches!(
+            &ask.entries()[0],
+            Entry::Developer { text, .. } if text == "Why @logo.png?"
+        ));
     }
 
     #[test]

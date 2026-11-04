@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-notes-flushed"
+description = "Enables the notes_flushed command without any pre-configured scope."
+commands.allow = ["notes_flushed"]
+
+[[permission]]
+identifier = "deny-notes-flushed"
+description = "Denies the notes_flushed command without any pre-configured scope."
+commands.deny = ["notes_flushed"]

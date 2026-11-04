@@ -6,14 +6,16 @@
 //! with `/` on every system; they are the same text the import job receives as excluded paths.
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::mpsc;
 
 use serde::Serialize;
 use ts_rs::TS;
 
 use crate::process;
+use crate::solo_mode::GIT_LIMIT;
 
 /// One entry of a folder.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -89,8 +91,8 @@ fn git_ignored(root: &Path, entries: &[TreeEntry]) -> Vec<String> {
 }
 
 /// The paths among `paths` (relative to `root`, with `/`) that git ignores, with one
-/// `git check-ignore -z --stdin`; none when git cannot say (not a repository, no git). Also what
-/// the File view's listing leaves out.
+/// `git check-ignore -z --stdin`; none when git cannot say (not a repository, no git). What the
+/// tree of `Import from Code` leaves out, Solo mode blocks included.
 pub(crate) fn git_ignored_paths(root: &Path, paths: &[&str]) -> Vec<String> {
     if paths.is_empty() {
         return Vec::new();
@@ -129,6 +131,88 @@ pub(crate) fn git_ignored_paths(root: &Path, paths: &[&str]) -> Vec<String> {
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// A path git ignores and the line of the rule that decided it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IgnoredBy {
+    pub path: String,
+    /// The file the rule is in, as git prints it: absolute, or relative to the repository's root.
+    pub source: String,
+    /// The 1-based line of the rule in `source`.
+    pub line: usize,
+}
+
+/// The paths among `paths` (relative to `root`, with `/`) that git ignores, each with the file and
+/// line of the rule that decided it, with one `git check-ignore -v -z --stdin`; none when git
+/// cannot say (not a repository, no git). What the File view's listing starts from.
+pub(crate) fn git_ignored_by(root: &Path, paths: &[&str]) -> Vec<IgnoredBy> {
+    let Some(stdout) = check_ignore(root, &["check-ignore", "-v", "-z", "--stdin"], paths) else {
+        return Vec::new();
+    };
+    let mut fields: Vec<&[u8]> = stdout.split(|byte| *byte == 0).collect();
+    // Every field ends with a NUL, so the last piece is empty.
+    fields.pop();
+    fields
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter_map(|[source, line, pattern, path]| {
+            // A negated pattern is reported too, but it says the path is not ignored.
+            if pattern.starts_with(b"!") {
+                return None;
+            }
+            Some(IgnoredBy {
+                path: String::from_utf8(path.to_vec()).ok()?,
+                source: String::from_utf8(source.to_vec()).ok()?,
+                line: std::str::from_utf8(line).ok()?.parse().ok()?,
+            })
+        })
+        .collect()
+}
+
+/// Runs `git` with `args` (a `check-ignore` taking its paths from stdin) in `root`, with the paths
+/// one after the other, each ended by a NUL, and returns what it printed. `None` when git cannot
+/// say: no git, not a repository (exit 128), a failure or the limit of [`GIT_LIMIT`] passing (the
+/// process is then killed). Exit 0 and 1 (some path ignored or none) both answer.
+fn check_ignore(root: &Path, args: &[&str], paths: &[&str]) -> Option<Vec<u8>> {
+    if paths.is_empty() {
+        return None;
+    }
+    let mut input: Vec<u8> = Vec::new();
+    for path in paths {
+        input.extend_from_slice(path.as_bytes());
+        input.push(0);
+    }
+    let mut child = process::command("git", args.iter().copied())
+        .current_dir(root)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdin = child.stdin.take()?;
+    let mut stdout = child.stdout.take()?;
+    // Written and read on their own threads: a long list must not fill a pipe while the other one
+    // is not being served.
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(&input);
+    });
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        let _ = sender.send(bytes);
+    });
+    let Ok(bytes) = receiver.recv_timeout(GIT_LIMIT) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    };
+    let status = child.wait().ok();
+    let _ = writer.join();
+    matches!(status?.code(), Some(0 | 1)).then_some(bytes)
 }
 
 #[cfg(test)]
@@ -243,6 +327,61 @@ mod tests {
             names(&list(dir.path(), "build").unwrap()),
             [("keep.txt", false)]
         );
+    }
+
+    #[test]
+    fn what_a_solo_mode_block_ignores_is_still_left_out_of_the_import_tree() {
+        if !git_is_available() {
+            eprintln!("skipped: git is not installed");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        assert!(process::command("git", ["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap()
+            .success());
+        let exclude = dir.path().join(".git/info/exclude");
+        let mut text = fs::read_to_string(&exclude).unwrap_or_default();
+        text.push_str(
+            "# >>> weaver solo mode: /elsewhere\n/generated/\n# <<< weaver solo mode: /elsewhere\n",
+        );
+        fs::write(&exclude, text).unwrap();
+        put(dir.path(), "generated/out.txt");
+        put(dir.path(), "src/main.rs");
+        assert_eq!(names(&list(dir.path(), "").unwrap()), [("src", true)]);
+    }
+
+    #[test]
+    fn the_verbose_check_names_the_file_and_line_of_each_rule_and_skips_negations() {
+        if !git_is_available() {
+            eprintln!("skipped: git is not installed");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        assert!(process::command("git", ["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap()
+            .success());
+        fs::write(
+            dir.path().join(".gitignore"),
+            "# comment\n*.log\n!keep.log\n",
+        )
+        .unwrap();
+        put(dir.path(), "a.log");
+        put(dir.path(), "keep.log");
+        put(dir.path(), "src/main.rs");
+        let found = git_ignored_by(dir.path(), &["a.log", "keep.log", "src"]);
+        assert_eq!(
+            found,
+            [IgnoredBy {
+                path: "a.log".to_owned(),
+                source: ".gitignore".to_owned(),
+                line: 2,
+            }]
+        );
+        assert!(git_ignored_by(dir.path(), &[]).is_empty());
     }
 
     #[test]

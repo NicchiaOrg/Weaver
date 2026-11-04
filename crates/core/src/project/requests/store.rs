@@ -86,15 +86,18 @@ pub enum SendPlan {
     Start(Job),
 }
 
-/// The job a request starts: a setup job when the Model is empty, a design job otherwise.
-pub fn job_for(request: &str, model_is_empty: bool) -> Job {
+/// The job a request starts: a setup job when the Model is empty, a design job otherwise; `assets`
+/// are the names of the assets the request tags.
+pub fn job_for(request: &str, model_is_empty: bool, assets: Vec<String>) -> Job {
     if model_is_empty {
         Job::Setup {
             request: request.to_owned(),
+            assets,
         }
     } else {
         Job::Design {
             request: request.to_owned(),
+            assets,
         }
     }
 }
@@ -321,6 +324,17 @@ impl RequestStore {
     /// `developer.SEND_REQUEST`: what sending request `id` comes to. An empty request is not
     /// sent; a request that was sent, or whose file is gone, is refused.
     pub fn plan_send(&self, id: &str, model_is_empty: bool) -> Result<SendPlan, RequestError> {
+        self.plan_send_tagged(id, model_is_empty, &|_| Vec::new())
+    }
+
+    /// [`Self::plan_send`] for a project with assets: `tagged` gives the names of the assets the
+    /// text of the request tags, from the one read of the file. The request file is never changed.
+    pub fn plan_send_tagged(
+        &self,
+        id: &str,
+        model_is_empty: bool,
+        tagged: &dyn Fn(&str) -> Vec<String>,
+    ) -> Result<SendPlan, RequestError> {
         self.checked(id)?;
         self.require_writing(id)?;
         let content = self.read(id)?;
@@ -331,7 +345,7 @@ impl RequestStore {
             },
         );
         Ok(match outcome.effect {
-            Effect::StartJob => SendPlan::Start(job_for(id, model_is_empty)),
+            Effect::StartJob => SendPlan::Start(job_for(id, model_is_empty, tagged(&content))),
             _ => SendPlan::Nothing,
         })
     }
@@ -719,13 +733,15 @@ mod tests {
         assert_eq!(
             store.plan_send(&id, true).unwrap(),
             SendPlan::Start(Job::Setup {
-                request: id.clone()
+                request: id.clone(),
+                assets: vec![],
             })
         );
         assert_eq!(
             store.plan_send(&id, false).unwrap(),
             SendPlan::Start(Job::Design {
-                request: id.clone()
+                request: id.clone(),
+                assets: vec![],
             })
         );
         // Planning does not send: only recording the job does.
@@ -736,6 +752,30 @@ mod tests {
             store.state().unwrap().sent.get(&id).map(String::as_str),
             Some("jjjjjjjj")
         );
+    }
+
+    #[test]
+    fn the_assets_the_text_tags_go_with_the_job_and_the_file_is_not_changed() {
+        use crate::assets::tags;
+        let (_dir, store) = store();
+        let id = written(
+            &store,
+            9,
+            "Use @logo.png and @missing.png and @logo.png again",
+        );
+        let before = store.read(&id).unwrap();
+        let assets = ["logo.png".to_owned(), "spec.pdf".to_owned()];
+        let plan = store
+            .plan_send_tagged(&id, false, &|text| tags::tagged(text, &assets))
+            .unwrap();
+        assert_eq!(
+            plan,
+            SendPlan::Start(Job::Design {
+                request: id.clone(),
+                assets: vec!["logo.png".to_owned()],
+            })
+        );
+        assert_eq!(store.read(&id).unwrap(), before);
     }
 
     #[test]

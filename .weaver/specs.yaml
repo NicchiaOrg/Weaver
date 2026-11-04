@@ -28,7 +28,11 @@ frameworks:
   - name: pulldown-cmark
     chosenByAgent: Markdown parsing of Model and Requirement files in the core
   - name: trash
-    chosenByAgent: moves what the File view deletes to the system's trash on macOS, Windows and Linux
+    chosenByAgent: moves what the File view and the Assets view delete to the system's trash on macOS, Windows and Linux
+  - name: drag
+    version: "2"
+    note: CrabNebula's crate, called from the backend only, never through `tauri-plugin-drag`
+    chosenByAgent: starts a native drag of files out of a window on macOS, Windows and Linux, so that assets can be dropped as copies into other apps
   - name: fd-lock
     chosenByAgent: OS file locks that serialise writes of the app and of command line processes
   - name: rustls-native-certs
@@ -65,6 +69,9 @@ frameworks:
   - name: CodeMirror
     version: "6"
     note: the File view's editor, with `@codemirror/language-data` for syntax colours, each language loaded on first use; no WASM, no completion, no lint, no language server
+  - name: TipTap
+    version: "3"
+    note: the Notes view's WYSIWYG editor on ProseMirror, with `@tiptap/markdown` to read and write the sheet as Markdown; loaded on demand when the view first opens; no WASM
 data:
   - name: Project files
     note: Markdown and YAML under `.weaver/` in the developer's repository; no database

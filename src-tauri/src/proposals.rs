@@ -10,7 +10,7 @@
 //!
 //! Contract with the jobs:
 //!
-//! * `Approve` on a stale change, or on a Draft a refinement left half-way, writes `Refining` and
+//! * `Approve` on a stale Proposal of any kind, or on a Draft a refinement left half-way, writes `Refining` and
 //!   then calls [`ProposalJobs::start_refinement`]; the job's agent rewrites the Proposal on the
 //!   current Model (`weaver proposal edit <id> {rebase: true, …}`) and hands it over again. When the
 //!   job ends without handing it over, the jobs call
@@ -139,8 +139,8 @@ fn prune_models(state: &AppState, project_id: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-/// `Approve`: `Approved`, or `Refining` for a stale change, or `Refining` again for a Draft left
-/// half-way. Returns the new revision.
+/// `Approve`: `Approved`, or `Refining` for a stale Proposal of any kind, or `Refining` again for
+/// a Draft left half-way. Returns the new revision.
 pub async fn approve(
     state: &AppState,
     project_id: &str,
@@ -378,7 +378,7 @@ fn label(call: &Call, id: &str) -> String {
 }
 
 /// `weaver proposal move <id> approved` inside the app: it can start the refinement job a stale
-/// change needs. Runs in the project's queue; the facts are the app's.
+/// Proposal of any kind needs. Runs in the project's queue; the facts are the app's.
 fn approve_from_cli(
     call: &Call,
     jobs: &dyn ProposalJobs,
@@ -647,25 +647,87 @@ mod tests {
         assert!(f.jobs.calls().is_empty());
     }
 
-    #[tokio::test]
-    async fn approving_a_stale_change_writes_refining_and_starts_the_refinement() {
-        let f = fixture().await;
+    fn proposal_file(f: &Fixture) -> std::path::PathBuf {
+        f.project
+            .path()
+            .join(".weaver/proposals/pppppppp-t/proposal.md")
+    }
+
+    /// Turns the Open change `pppppppp` of the fixture into a Proposal of `kind`.
+    fn into_kind(f: &Fixture, kind: &str) {
+        let mut text = fs::read_to_string(proposal_file(f))
+            .unwrap()
+            .replace("kind: change", &format!("kind: {kind}"));
+        if kind == "import" || kind == "resolution" {
+            let task = ".weaver/proposals/pppppppp-t/tasks/tttttttt-pay.md";
+            fs::remove_file(f.project.path().join(task)).unwrap();
+        }
+        if kind == "resolution" {
+            text = text.replacen(
+                "base:",
+                "drifts:\n  - drift: dddddddd\n    decision: dismissed\nbase:",
+                1,
+            );
+        }
+        fs::write(proposal_file(f), text).unwrap();
+    }
+
+    fn drift(f: &Fixture, status: &str) {
+        let text = format!("---\nstatus: {status}\nrefs:\n  - order/Paid\ncreated: 2026-11-02T06:00:00.000Z\n---\n# The code ships twice\n\n## What happens\n\nIt ships twice.\n\n## What should happen\n\nIt ships once.\n\n## Where in the code\n\n`src/ship.rs`\n");
+        put(f.project.path(), "drifts/dddddddd-d.md", &text);
+    }
+
+    fn make_stale(f: &Fixture) {
         put(
             f.project.path(),
             "model/shop/order.md",
             &ORDER.replace("Choosing.", "Browsing."),
         );
-        approve(&f.state, &f.id, "pppppppp").await.unwrap();
-        assert_eq!(status(&f, "pppppppp"), "refining");
-        assert_eq!(f.jobs.calls(), ["refine pppppppp"]);
-        assert!(
-            !f.project.path().join(".weaver/tasks").exists(),
-            "nothing is approved yet"
-        );
-        // Being refined: Approve is refused now.
+    }
+
+    #[tokio::test]
+    async fn approving_a_stale_proposal_of_any_kind_writes_refining_and_starts_the_refinement() {
+        for kind in ["change", "setup", "import", "resolution"] {
+            let f = fixture().await;
+            into_kind(&f, kind);
+            drift(&f, "open");
+            make_stale(&f);
+            // Whatever else blocks it (here a missing required Proposal), it is refined.
+            let text = fs::read_to_string(proposal_file(&f)).unwrap();
+            let text = text.replacen("---\n", "---\nrequires:\n  - zzzzzzzz\n", 1);
+            fs::write(proposal_file(&f), text).unwrap();
+            approve(&f.state, &f.id, "pppppppp").await.unwrap();
+            assert_eq!(status(&f, "pppppppp"), "refining", "{kind}");
+            assert_eq!(f.jobs.calls(), ["refine pppppppp"], "{kind}");
+            assert!(
+                !f.project.path().join(".weaver/tasks").exists(),
+                "nothing is approved yet"
+            );
+            // Being refined: Approve is refused now.
+            let error = approve(&f.state, &f.id, "pppppppp").await.unwrap_err();
+            assert_eq!(error.code, ErrorCode::Refused);
+            assert_eq!(error.message, "Could not approve P1: Being refined.");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stale_resolution_with_no_open_drift_is_refused_before_anything_is_written() {
+        let f = fixture().await;
+        into_kind(&f, "resolution");
+        drift(&f, "dismissed");
+        make_stale(&f);
+        let before = fs::read_to_string(proposal_file(&f)).unwrap();
         let error = approve(&f.state, &f.id, "pppppppp").await.unwrap_err();
-        assert_eq!(error.code, ErrorCode::Refused);
-        assert_eq!(error.message, "Could not approve P1: Being refined.");
+        assert_eq!(
+            (error.code, error.message.as_str()),
+            (
+                ErrorCode::Refused,
+                "Could not approve P1: None of its Drifts is still open."
+            )
+        );
+        assert_eq!(status(&f, "pppppppp"), "open");
+        assert_eq!(fs::read_to_string(proposal_file(&f)).unwrap(), before);
+        assert!(f.jobs.calls().is_empty());
     }
 
     #[tokio::test]

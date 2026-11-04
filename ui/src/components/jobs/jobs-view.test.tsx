@@ -22,6 +22,12 @@ vi.mock("@/lib/backend", () => ({
 
 const PROJECT = "0123456789abcdef";
 
+const ASSETS = vi.hoisted(() => [
+  { name: "logo.png", size: 1 },
+  { name: "spec.pdf", size: 1 },
+]);
+vi.mock("@/components/assets/use-assets", () => ({ useAssets: () => ({ assets: ASSETS, loaded: true, apply: () => {} }) }));
+
 function job(id: string, state: JobRow["state"], patch: Partial<JobRow> = {}): JobRow {
   return { id, kind: "run", name: `Run ${id}`, state, reason: null, created: "2026-11-02T07:00:00.000Z", started: null, ended: null, note: null, target: null, ...patch };
 }
@@ -266,5 +272,26 @@ describe("JobsView", () => {
       const list = screen.getByRole("list", { name: "Sub-agents" });
       expect(within(list).getByRole("button", { name: /^Lead/ })).toHaveAttribute("aria-current", "true");
     });
+  });
+});
+
+describe("the @ tags in the reply box of a job", () => {
+  it("opens the list of assets, inserts the chosen one, does not send with the list open, and colours the recognised tags", async () => {
+    mount([job("aaaaaaaa", "running")], { jobId: "aaaaaaaa", seq: 0, entries: [], notes: [] });
+    const user = userEvent.setup();
+    const box = await screen.findByPlaceholderText("Message the agent…");
+    await user.type(box, "Say @nothing and @lo");
+    // A tag that names no asset keeps the normal colour.
+    expect(document.querySelectorAll("[data-tag]")).toHaveLength(0);
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["logo.png"]);
+    await user.keyboard("{Enter}");
+    expect(call).not.toHaveBeenCalledWith("job_send_message", expect.anything());
+    expect(box).toHaveValue("Say @nothing and @logo.png ");
+    expect(document.querySelector("[data-tag='logo.png']")?.textContent).toBe("@logo.png");
+    expect(document.querySelectorAll("[data-tag]")).toHaveLength(1);
+    await user.keyboard("{Enter}");
+    await waitFor(() =>
+      expect(call).toHaveBeenCalledWith("job_send_message", { projectId: PROJECT, jobId: "aaaaaaaa", text: "Say @nothing and @logo.png" }),
+    );
   });
 });

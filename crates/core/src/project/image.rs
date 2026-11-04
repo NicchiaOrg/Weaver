@@ -146,15 +146,17 @@ impl ProjectImage {
     }
 
     /// Re-reads only the given paths (absolute, inside `.weaver/`): a file is read again, a
-    /// removed file or folder is forgotten, a folder is scanned again. Paths outside `.weaver/`
-    /// and hidden ones are ignored.
+    /// removed file or folder is forgotten, a folder is scanned again. Paths outside `.weaver/`,
+    /// hidden ones, the assets (`.weaver/assets/`) and the notes (`.weaver/notes/`), which the
+    /// image never reads, are ignored.
     pub fn refresh(&mut self, paths: &[PathBuf]) {
         let mut touched = false;
         for path in paths {
             let Some(rel) = layout::rel_key(&self.root, path) else {
                 continue;
             };
-            if layout::is_hidden(&rel) {
+            if layout::is_hidden(&rel) || layout::is_assets_rel(&rel) || layout::is_notes_rel(&rel)
+            {
                 continue;
             }
             touched = true;
@@ -643,6 +645,44 @@ mod tests {
             .diagnostics()
             .iter()
             .all(|d| d.path == "model/shop/order.md"));
+    }
+
+    #[test]
+    fn the_notes_folder_never_reaches_the_image() {
+        let dir = tempfile::tempdir().unwrap();
+        sample(dir.path());
+        // Files that would be cards, Model files or Specs anywhere else.
+        for rel in [
+            "notes/notes.md",
+            "notes/tasks/vxdhoylk-a-task.md",
+            "notes/model/system.md",
+            "notes/specs.yaml",
+        ] {
+            put(dir.path(), rel, "garbage");
+        }
+        let mut image = ProjectImage::load(dir.path());
+        let loaded = image.parse_count();
+        assert!(image.paths().all(|p| !p.starts_with("notes")));
+        assert!(image
+            .diagnostics()
+            .iter()
+            .all(|d| d.path == "model/shop/order.md"));
+
+        // Events under `notes/` change nothing: not a parse, not an entry, not a diagnostic.
+        let diagnostics = image.diagnostics().len();
+        let notes = layout::weaver_dir(dir.path()).join("notes");
+        fs::write(notes.join("notes.md"), "other garbage").unwrap();
+        image.refresh(&[
+            notes.clone(),
+            notes.join("notes.md"),
+            notes.join("tasks/vxdhoylk-a-task.md"),
+            notes.join("gone.png"),
+        ]);
+        assert_eq!(image.parse_count(), loaded);
+        assert!(image.paths().all(|p| !p.starts_with("notes")));
+        assert_eq!(image.diagnostics().len(), diagnostics);
+        image.refresh_all();
+        assert_eq!(image.parse_count(), loaded);
     }
 
     #[test]

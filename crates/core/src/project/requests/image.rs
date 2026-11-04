@@ -4,13 +4,17 @@
 /// At most this many bytes per image.
 pub const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 
-/// The accepted image types.
+/// The image types Weaver recognises by their first bytes. The ones a design request accepts are
+/// PNG, JPEG, GIF and WebP ([`ImageKind::is_request_format`]); BMP and ICO are only shown by the
+/// File view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageKind {
     Png,
     Jpeg,
     Gif,
     Webp,
+    Bmp,
+    Ico,
 }
 
 impl ImageKind {
@@ -21,6 +25,8 @@ impl ImageKind {
             ImageKind::Jpeg => "jpg",
             ImageKind::Gif => "gif",
             ImageKind::Webp => "webp",
+            ImageKind::Bmp => "bmp",
+            ImageKind::Ico => "ico",
         }
     }
 
@@ -30,7 +36,14 @@ impl ImageKind {
             ImageKind::Jpeg => "image/jpeg",
             ImageKind::Gif => "image/gif",
             ImageKind::Webp => "image/webp",
+            ImageKind::Bmp => "image/bmp",
+            ImageKind::Ico => "image/x-icon",
         }
+    }
+
+    /// Whether a design request accepts this type: PNG, JPEG, GIF and WebP only.
+    pub fn is_request_format(self) -> bool {
+        !matches!(self, ImageKind::Bmp | ImageKind::Ico)
     }
 
     /// The type a file extension names (case-insensitive), `None` when it is not accepted.
@@ -54,6 +67,10 @@ impl ImageKind {
             Some(ImageKind::Gif)
         } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
             Some(ImageKind::Webp)
+        } else if bytes.starts_with(b"BM") {
+            Some(ImageKind::Bmp)
+        } else if bytes.starts_with(&[0x00, 0x00, 0x01, 0x00]) {
+            Some(ImageKind::Ico)
         } else {
             None
         }
@@ -67,12 +84,14 @@ pub enum ImageError {
     NotAccepted,
 }
 
-/// Checks size and type of an image's content.
+/// Checks size and type of an image's content for a design request: PNG, JPEG, GIF or WebP.
 pub fn check(bytes: &[u8]) -> Result<ImageKind, ImageError> {
     if bytes.len() > MAX_IMAGE_BYTES {
         return Err(ImageError::NotAccepted);
     }
-    ImageKind::detect(bytes).ok_or(ImageError::NotAccepted)
+    ImageKind::detect(bytes)
+        .filter(|kind| kind.is_request_format())
+        .ok_or(ImageError::NotAccepted)
 }
 
 /// `image-<n>.<ext>`: the name of the saved image.
@@ -210,6 +229,30 @@ mod tests {
         assert_eq!(ImageKind::from_extension("jpg"), Some(ImageKind::Jpeg));
         assert_eq!(ImageKind::from_extension("svg"), None);
         assert_eq!(ImageKind::from_extension(""), None);
+    }
+
+    #[test]
+    fn bmp_and_ico_are_recognised_by_content_but_no_request_accepts_them() {
+        assert_eq!(ImageKind::detect(b"BM\x36\x00"), Some(ImageKind::Bmp));
+        assert_eq!(ImageKind::detect(b"BA\x36\x00"), None);
+        assert_eq!(
+            ImageKind::detect(&[0x00, 0x00, 0x01, 0x00, 0x01]),
+            Some(ImageKind::Ico)
+        );
+        assert_eq!(ImageKind::detect(&[0x00, 0x00, 0x02, 0x00]), None);
+        assert_eq!(ImageKind::Bmp.mime(), "image/bmp");
+        assert_eq!(ImageKind::Ico.mime(), "image/x-icon");
+        assert!(!ImageKind::Bmp.is_request_format());
+        assert!(!ImageKind::Ico.is_request_format());
+        assert!(ImageKind::Webp.is_request_format());
+        assert_eq!(check(b"BM\x36\x00"), Err(ImageError::NotAccepted));
+        assert_eq!(
+            check(&[0x00, 0x00, 0x01, 0x00, 0x01]),
+            Err(ImageError::NotAccepted)
+        );
+        // A name never picks them either.
+        assert_eq!(ImageKind::from_extension("bmp"), None);
+        assert_eq!(ImageKind::from_extension("ico"), None);
     }
 
     #[test]

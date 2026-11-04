@@ -2,7 +2,7 @@
 //! reasons, the transitions) live in `weaver_core::project::proposal`; this file reads the input,
 //! applies the changes and prints.
 //!
-//! A decision that starts a job (approving a stale change, a rework) needs the running app: the
+//! A decision that starts a job (approving a stale Proposal, a rework) needs the running app: the
 //! app answers it itself before it reaches the handler, and a handler that meets one means no app
 //! answered.
 
@@ -88,7 +88,7 @@ pub fn commands() -> Vec<Command> {
         Command::new("proposal", "edit", "Edits a Proposal: makes files editable, records Drift decisions and images.", edit)
             .notes(&[
                 "Every call, even without input, sends an Open Proposal back to Draft and says so.",
-                "`edit` makes paths editable (`model/...`, `requirements/<area>/<fragment>.md`, `specs.yaml`, `tasks/<slug>.md`), copying the current content and recording `base` the first time, and prints the path to write for each. A new Task gets its identity here; Task paths are refused in `import` and `resolution`. `delete` is refused for a path the Proposal holds. `drifts` and `removeDrifts` apply only to a resolution; `option` and `note` go only with `fix-code`. `images` copies files into `.weaver/task-images/<task>/`. `rebase` records `base` again and sets `refining`; only a `change` not attached to a Drift.",
+                "`edit` makes paths editable (`model/...`, `requirements/<area>/<fragment>.md`, `specs.yaml`, `tasks/<slug>.md`), copying the current content and recording `base` the first time, and prints the path to write for each. A new Task gets its identity here; Task paths are refused in `import` and `resolution`. `delete` is refused for a path the Proposal holds. `drifts` and `removeDrifts` apply only to a resolution; `option` and `note` go only with `fix-code`. `images` copies files into `.weaver/task-images/<task>/`. `rebase: true`, for any kind, attached to a Drift or not, drops broken `requires` and, in a resolution, the rows of Drifts no longer open, then records `base` again and sets `refining`; it prints what it dropped.",
             ])
             .arg(Arg::Card(CardKind::Proposal))
             .input(vec![
@@ -104,18 +104,20 @@ pub fn commands() -> Vec<Command> {
                 opt("removeDrifts", list(line()), "Drifts to take out of the resolution."),
                 opt("images", list(object(vec![req("task", line(), "The Task."), req("path", line(), "The image file.")])), "Images to copy for Tasks."),
                 opt("removeImages", list(object(vec![req("task", line(), "The Task."), req("name", line(), "The image name.")])), "Images to remove."),
-                opt("rebase", boolean(), "Record `base` again and set `refining`."),
+                opt("rebase", boolean(), "Record `base` again and set `refining`; drops broken `requires` and, in a resolution, the rows of Drifts no longer open."),
             ])
             .output(card_with(vec![
                 req("status", line(), "The status after the call."),
                 req("sentBackToDraft", boolean(), "Whether an Open Proposal went back to Draft."),
+                req("droppedRequires", list(line()), "What a `rebase` dropped from `requires`, one line per Proposal."),
+                req("droppedDrifts", list(line()), "What a `rebase` dropped from the rows of a resolution, one line per Drift."),
                 req("files", list(object(vec![req("path", line(), "The path in `.weaver/`."), req("file", line(), "The file to write.")])), "The files made editable."),
             ]))
             .place(written)
             .example(r#"weaver proposal edit p3 --input '{"edit":["model/checkout/order.md"]}'"#),
         Command::new("proposal", "move", "Hands a Proposal over, or decides it.", move_proposal)
             .notes(&[
-                "`open` hands the Proposal over and prints the warnings and the `show` text. `approved`, `rejected` and `discarded` are the developer's decisions: the agent runs them only when the developer explicitly asked for that decision in the conversation. `rejected` takes `feedback` and `rework`; `rework: true`, and approving a stale `change`, need Weaver to be running.",
+                "`open` hands the Proposal over and prints the warnings and the `show` text. `approved`, `rejected` and `discarded` are the developer's decisions: the agent runs them only when the developer explicitly asked for that decision in the conversation. `rejected` takes `feedback` and `rework`; `rework: true`, and approving a stale Proposal (of any kind), need Weaver to be running.",
             ])
             .arg(Arg::Card(CardKind::Proposal))
             .states(&["open", "approved", "rejected", "discarded"])
@@ -776,6 +778,43 @@ fn edit(call: &Call) -> Result<CommandReply, Failure> {
         markdown.push_str(&format!("- `{}`: `{absolute}`\n", file.path));
         files_json.push(json!({ "path": file.path, "file": absolute }));
     }
+    // What a rebase dropped: every requirement and every row.
+    let dropped_requires: Vec<String> = edited
+        .dropped_requires
+        .iter()
+        .filter_map(|required| {
+            required.problem.map(|problem| {
+                format!(
+                    "Proposal {} {}",
+                    name(&numbers, CardKind::Proposal, &required.id),
+                    problem.text()
+                )
+            })
+        })
+        .collect();
+    let dropped_drifts: Vec<String> = edited
+        .dropped_drifts
+        .iter()
+        .map(|row| {
+            format!(
+                "Drift {} ({}) is no longer open",
+                name(&numbers, CardKind::Drift, &row.drift),
+                row.decision
+            )
+        })
+        .collect();
+    if !dropped_requires.is_empty() {
+        markdown.push_str("\nDropped from `requires`:\n\n");
+        for line in &dropped_requires {
+            markdown.push_str(&format!("- {line}\n"));
+        }
+    }
+    if !dropped_drifts.is_empty() {
+        markdown.push_str("\nDropped decisions of the resolution:\n\n");
+        for line in &dropped_drifts {
+            markdown.push_str(&format!("- {line}\n"));
+        }
+    }
     if !images.copies.is_empty() {
         markdown.push_str(&format!("\n{} image(s) copied.\n", images.copies.len()));
     }
@@ -791,6 +830,8 @@ fn edit(call: &Call) -> Result<CommandReply, Failure> {
     json["status"] = json!(edited.status.as_str());
     json["sentBackToDraft"] = json!(edited.sent_back_to_draft);
     json["files"] = json!(files_json);
+    json["droppedRequires"] = json!(dropped_requires);
+    json["droppedDrifts"] = json!(dropped_drifts);
     Ok(reply(markdown, json))
 }
 
@@ -917,7 +958,8 @@ fn approve(call: &Call) -> Result<CommandReply, Failure> {
     let numbers = shortnum::peek(call.root, call.image.cards());
     let label = name(&numbers, CardKind::Proposal, id);
     let created = now()?;
-    // Approving a stale change, or a Draft a refinement left half-way, starts a refinement job.
+    // Approving a stale Proposal of any kind, or a Draft a refinement left half-way, starts a
+    // refinement job.
     let folders = files::read_folders(call.root, call.image);
     let gate = proposal(call, id).map(|card| transitions::gate_of(&call.caller.agent, card))?;
     match transitions::plan_approve(
@@ -936,9 +978,14 @@ fn approve(call: &Call) -> Result<CommandReply, Failure> {
             )))
         }
         Ok(Approval::Approve(_)) => {}
-        Ok(Approval::Refine(_) | Approval::Continue(_)) => {
+        Ok(Approval::Refine(_)) => {
             return Err(needs_the_app(&format!(
-                "Approving {label} on the current Model (it is stale)"
+                "Refining {label} on the current Model (it is stale)"
+            )));
+        }
+        Ok(Approval::Continue(_)) => {
+            return Err(needs_the_app(&format!(
+                "Continuing the refinement of {label}"
             )));
         }
     }

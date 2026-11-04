@@ -7,13 +7,14 @@ Before its job ends, the agent that filed it prepares the question with which th
 ## States
 
 ### Open (initial)
-Waiting for the developer's decision. It blocks the Tasks that concern the same thing.
+Waiting for the developer's decision. It blocks the Tasks that concern the same thing. While its attached Proposal is being refined, the developer can neither resolve it nor decide it. A resolution being refined counts as one being written, one whose refinement was left half-way as one waiting for a decision.
 - `agent.PREPARE_DRIFT_QUESTION` → Open: the prepared question is kept with the Drift.
-- `developer.RESOLVE_DRIFT` → Open: with a prepared question still valid, Weaver asks it itself as a question round, with no agent; otherwise a resolve job asks it. Refused while a Run works, while another resolution is being written or waits for a decision, or while the job that filed it is still working.
+- `developer.RESOLVE_DRIFT` → Open: with a prepared question still valid, Weaver asks it itself as a question round, with no agent; otherwise a resolve job asks it. Refused while a Run works, while its attached Proposal is being refined, while another resolution is being written or waits for a decision, or while the job that filed it is still working.
 - `question-round.ANSWERED` → Open: only the prepared question of this Drift; Weaver writes and hands over the resolution Proposal from the answer by itself; a skipped question leaves the Drift as it is; a free answer next to a choice other than a code fix starts a resolve job with the answer already given.
-- `developer.FIX_DRIFT_CODE` → Code to be fixed: an option is required when the Drift offers some; references that no longer exist are replaced by their nearest container, and it is refused when no Model element is left. A fix Task is created with both sides, the option, the note and where in the code.
+- `developer.REFINE_DRIFT_PROPOSAL` → Open: only when its attached Proposal is stale, or was left half-way by a refinement; a refinement job adapts that Proposal, and the Drift waits for the developer's decision again once it is handed over.
+- `developer.FIX_DRIFT_CODE` → Code to be fixed: an option is required when the Drift offers some; refused while its attached Proposal is being refined; references that no longer exist are replaced by their nearest container, and it is refused when no Model element is left. A fix Task is created with both sides, the option, the note and where in the code.
 - `developer.ACCEPT_DRIFT_PROPOSAL` → Proposal accepted: only with an attached Proposal that could be approved.
-- `developer.DISMISS_DRIFT` → Dismissed: refused while the Drift is in a resolution being written or waiting for a decision.
+- `developer.DISMISS_DRIFT` → Dismissed: refused while its attached Proposal is being refined, or while the Drift is in a resolution being written or waiting for a decision.
 - `proposal.APPROVED` → Code to be fixed: a resolution that records a code fix for it; the fix Task is created as above.
 - `proposal.APPROVED` → Proposal accepted: a resolution that records adapting the Model for it.
 - `proposal.APPROVED` → Dismissed: a resolution that records letting it be.

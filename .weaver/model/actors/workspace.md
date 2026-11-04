@@ -11,7 +11,7 @@ The `.weaver` folder of the project disappeared.
 A `.weaver` folder appeared in a folder that was not a project.
 
 ### FILES_CHANGED
-Files of the project's Model, Requirements, Specs or cards changed outside Weaver. Files of the code never count.
+Files of the project's Model, Requirements, Specs or cards changed outside Weaver. Files of the code, assets and notes never count.
 
 ### REQUEST_DELETED
 The file of a design request was deleted outside Weaver.
@@ -24,3 +24,9 @@ A file open in a tab of the File view changed on disk, or appeared again after i
 
 ### OPEN_FILE_DELETED
 A file open in a tab of the File view disappeared from disk, deleted or moved by anything other than the File view itself.
+
+### ASSETS_CHANGED
+An asset appeared in, disappeared from, was renamed in or changed size in the assets folder of the project, by anyone, Weaver included.
+
+### NOTES_CHANGED
+The notes sheet of the project, or an image in its notes folder, changed, appeared or disappeared on disk, by anything other than Weaver's own writing.

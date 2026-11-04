@@ -160,8 +160,8 @@ impl Registry {
         self.open.len() == 1 && self.project(id).is_some()
     }
 
-    /// `developer.SEND_TO_BACKGROUND`: the window of `id` is now in the background. `false` when the
-    /// project is not open or its window already is in the background.
+    /// `developer.CLOSE_WINDOW` → In background: the window of `id` is now in the background.
+    /// `false` when the project is not open or its window already is in the background.
     pub fn send_to_background(&mut self, id: &str) -> bool {
         self.project(id).is_some() && self.background.insert(id.to_owned())
     }

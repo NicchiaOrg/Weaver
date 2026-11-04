@@ -51,6 +51,16 @@ export interface FileTree {
   rename: (path: string, name: string) => Promise<boolean>;
   move: (path: string, target: string) => Promise<boolean>;
   remove: (path: string) => Promise<boolean>;
+  /**
+   * `developer.DROP_EXTERNAL_ENTRIES`: copies the dropped `paths` into the folder `target` (empty:
+   * the root). A loading toast says `Copying <n> items…` until the copy ends; a refusal or a
+   * failure turns it into the error toast. When it worked and the view is still shown, the folder
+   * expands if it was collapsed and the first copied entry is selected and revealed.
+   */
+  copyIn: (target: string, paths: string[]) => Promise<void>;
+  /** The path of an entry to scroll into view once its row is on screen. */
+  reveal: string | null;
+  clearReveal: () => void;
 }
 
 /**
@@ -69,6 +79,7 @@ export function useFileTree(projectId: string): FileTree {
   const [failure, setFailure] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing>(null);
+  const [reveal, setReveal] = useState<string | null>(null);
   const alive = useRef(true);
   const expanding = useRef(new Set<string>());
 
@@ -200,6 +211,28 @@ export function useFileTree(projectId: string): FileTree {
     [projectId, apply],
   );
 
+  const copyIn = useCallback(
+    async (target: string, paths: string[]) => {
+      const toastId = toast.loading(`Copying ${paths.length} ${paths.length === 1 ? "item" : "items"}…`);
+      try {
+        const done = await call("files_copy_in", { projectId, target, paths });
+        toast.dismiss(toastId);
+        // The copy goes to its end even when the view was left; what follows is for a view still shown.
+        if (!alive.current) return;
+        apply(done.update);
+        if (target !== ROOT && !foldersRef.current[target]) expand(target);
+        const first = done.paths[0];
+        if (first !== undefined) {
+          setSelected(first);
+          setReveal(first);
+        }
+      } catch (error) {
+        toast.error(reasonOf(error, "The dropped items could not be copied."), { id: toastId });
+      }
+    },
+    [projectId, apply, expand],
+  );
+
   const startCreate = useCallback(
     (parent: string, folder: boolean) => {
       expand(parent);
@@ -228,5 +261,8 @@ export function useFileTree(projectId: string): FileTree {
     rename,
     move,
     remove,
+    copyIn,
+    reveal,
+    clearReveal: () => setReveal(null),
   };
 }

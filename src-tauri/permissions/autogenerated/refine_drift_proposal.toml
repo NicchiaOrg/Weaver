@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-refine-drift-proposal"
+description = "Enables the refine_drift_proposal command without any pre-configured scope."
+commands.allow = ["refine_drift_proposal"]
+
+[[permission]]
+identifier = "deny-refine-drift-proposal"
+description = "Denies the refine_drift_proposal command without any pre-configured scope."
+commands.deny = ["refine_drift_proposal"]

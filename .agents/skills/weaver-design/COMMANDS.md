@@ -64,29 +64,38 @@ Initialises `.weaver/` in the folder and installs the agent files.
 
 Creates `.weaver/` with the System and the starting Requirement Areas, and writes the agent files (skills, sub-agent definitions, advisor instructions) in the project. It is refused, creating nothing, when `.weaver/` exists, or when an agent file to install exists with other content: every such file is listed, and `force` overwrites them.
 
+`solo` turns Solo mode on while initialising (`folders`: the whole folders of Weaver, the agent's skills and omp; `files`: only the files Weaver installs in them): Weaver's files then stay out of git in this working copy. It needs git and a repository: otherwise the command is refused with the reason and nothing is created. The default is `off`, and git is not called then.
+
 Input:
 
 - `force`, boolean, optional: Overwrite the agent files that differ from the ones to install.
+- `solo`, `off` | `folders` | `files`, optional: Solo mode of this working copy: `off` (default), `folders` or `files`.
 
-Output with `--json`: `root`, `files`, `areas`, `agentFiles`. `--help` gives their types.
+Output with `--json`: `root`, `files`, `areas`, `agentFiles`, `solo`. `--help` gives their types.
 
-Example: `weaver project new --input '{}'`
+Example: `weaver project new --input '{"solo":"folders"}'`
 
 ### `weaver project edit [--input <json>|-] [--root <dir>] [--json]`
 
-Updates the installed skills.
+Updates the installed skills, or changes Solo mode.
 
-Update skills: writes again every installed file that differs from the one this version of Weaver carries, creates the starting Requirement Areas when the Requirements are missing, and generates the Requirement skills again. It always reports what it changed, or the error.
+Without input, Update skills: writes again every installed file that differs from the one this version of Weaver carries, creates the starting Requirement Areas when the Requirements are missing, and generates the Requirement skills again. It always reports what it changed, or the error.
 
-Output with `--json`: `changed`, `areas`, `generated`. `--help` gives their types.
+With `solo`, only Solo mode changes: `off`, `folders` or `files`. Weaver writes or removes its block in git's local exclusions at once and prints `solo`. A change that fails (no git, not in a repository, exclusions not writable) changes nothing and says why. Files git already tracks are not hidden: they are listed in `solo.tracked`.
 
-Example: `weaver project edit`
+Input:
+
+- `solo`, `off` | `folders` | `files`, optional: Change only Solo mode of this working copy: `off`, `folders` or `files`. Without it, Update skills runs.
+
+Output with `--json`: `changed`, `areas`, `generated`, `solo`. `--help` gives their types.
+
+Example: `weaver project edit --input '{"solo":"files"}'`
 
 ### `weaver project show [--input <json>|-] [--root <dir>] [--json]`
 
-Prints the Board.
+Prints the Board and Solo mode.
 
-Output with `--json`: `toDecide`, `inWriting`, `todo`, `doing`. `--help` gives their types.
+Output with `--json`: `toDecide`, `inWriting`, `todo`, `doing`, `solo`. `--help` gives their types.
 
 Example: `weaver project show`
 
@@ -147,7 +156,7 @@ Edits a Proposal: makes files editable, records Drift decisions and images.
 
 Every call, even without input, sends an Open Proposal back to Draft and says so.
 
-`edit` makes paths editable (`model/...`, `requirements/<area>/<fragment>.md`, `specs.yaml`, `tasks/<slug>.md`), copying the current content and recording `base` the first time, and prints the path to write for each. A new Task gets its identity here; Task paths are refused in `import` and `resolution`. `delete` is refused for a path the Proposal holds. `drifts` and `removeDrifts` apply only to a resolution; `option` and `note` go only with `fix-code`. `images` copies files into `.weaver/task-images/<task>/`. `rebase` records `base` again and sets `refining`; only a `change` not attached to a Drift.
+`edit` makes paths editable (`model/...`, `requirements/<area>/<fragment>.md`, `specs.yaml`, `tasks/<slug>.md`), copying the current content and recording `base` the first time, and prints the path to write for each. A new Task gets its identity here; Task paths are refused in `import` and `resolution`. `delete` is refused for a path the Proposal holds. `drifts` and `removeDrifts` apply only to a resolution; `option` and `note` go only with `fix-code`. `images` copies files into `.weaver/task-images/<task>/`. `rebase: true`, for any kind, attached to a Drift or not, drops broken `requires` and, in a resolution, the rows of Drifts no longer open, then records `base` again and sets `refining`; it prints what it dropped.
 
 - Argument `<id>`: the card, by identity, unique identity prefix or short number (`P3`, `t3`: a letter and digits is always a short number, and its letter must match the type).
 
@@ -168,9 +177,9 @@ Input:
 - `removeImages`, list of object, optional: Images to remove.
   - `task`, string (not blank, one line), required: The Task.
   - `name`, string (not blank, one line), required: The image name.
-- `rebase`, boolean, optional: Record `base` again and set `refining`.
+- `rebase`, boolean, optional: Record `base` again and set `refining`; drops broken `requires` and, in a resolution, the rows of Drifts no longer open.
 
-Output with `--json`: `id`, `number`, `title`, `status`, `sentBackToDraft`, `files`. `--help` gives their types.
+Output with `--json`: `id`, `number`, `title`, `status`, `sentBackToDraft`, `droppedRequires`, `droppedDrifts`, `files`. `--help` gives their types.
 
 Example: `weaver proposal edit p3 --input '{"edit":["model/checkout/order.md"]}'`
 
@@ -178,7 +187,7 @@ Example: `weaver proposal edit p3 --input '{"edit":["model/checkout/order.md"]}'
 
 Hands a Proposal over, or decides it.
 
-`open` hands the Proposal over and prints the warnings and the `show` text. `approved`, `rejected` and `discarded` are the developer's decisions: the agent runs them only when the developer explicitly asked for that decision in the conversation. `rejected` takes `feedback` and `rework`; `rework: true`, and approving a stale `change`, need Weaver to be running.
+`open` hands the Proposal over and prints the warnings and the `show` text. `approved`, `rejected` and `discarded` are the developer's decisions: the agent runs them only when the developer explicitly asked for that decision in the conversation. `rejected` takes `feedback` and `rework`; `rework: true`, and approving a stale Proposal (of any kind), need Weaver to be running.
 
 - Argument `<id>`: the card, by identity, unique identity prefix or short number (`P3`, `t3`: a letter and digits is always a short number, and its letter must match the type).
 - Argument `open|approved|rejected|discarded`: the state to move to: `open`, `approved`, `rejected`, `discarded`.

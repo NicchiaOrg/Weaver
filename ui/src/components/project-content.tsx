@@ -1,5 +1,7 @@
 import { AskViewSwitch } from "@/components/ask/ask-view-switch";
 import { AsksProvider } from "@/components/ask/use-asks";
+import { AssetsView } from "@/components/assets/assets-view";
+import { AssetsProvider } from "@/components/assets/use-assets";
 import { BoardProvider, useBoard } from "@/components/board/board-state";
 import { BoardView } from "@/components/board/board-view";
 import { FilesView } from "@/components/files/files-view";
@@ -8,12 +10,15 @@ import { HistoryView } from "@/components/history/history-view";
 import { JobsBoardActions } from "@/components/jobs/board-actions";
 import { JobsView } from "@/components/jobs/jobs-view";
 import { JobsProvider, useJobs } from "@/components/jobs/use-jobs";
+import { NotesView } from "@/components/notes/notes-view";
+import { NotesProvider } from "@/components/notes/use-notes";
 import { ConnectedSettingsView } from "@/components/omp-status";
 import { ProjectWindow } from "@/components/project-window";
 import { QuestionRoundLayer } from "@/components/questions/question-overlay";
 import { RequestsBoardActions, RequestsLayer } from "@/components/requests/requests-layer";
 import { SetupLayer } from "@/components/project/empty-model";
 import { ProjectGate } from "@/components/project/project-gate";
+import { SoloModeSetting } from "@/components/project/solo-mode";
 import { OpeningCheckToast, SkillsBanner, UpdateSkills } from "@/components/project/update-skills";
 import { ProjectStatusProvider } from "@/components/project/use-project-status";
 import { RequestsProvider } from "@/components/requests/use-requests";
@@ -62,13 +67,32 @@ function ProjectShell({ projectId }: { projectId: string }) {
             <FilesView />
           </ProjectGate>
         ),
+        assets: (
+          <ProjectGate view="assets">
+            <AssetsView />
+          </ProjectGate>
+        ),
+        notes: (
+          <ProjectGate view="notes">
+            <NotesView />
+          </ProjectGate>
+        ),
         general: (
           <ProjectGate view="general">
             <GeneralView />
           </ProjectGate>
         ),
         // Settings is the one view that works without a project.
-        settings: <ConnectedSettingsView projectSlot={<UpdateSkills />} />,
+        settings: (
+          <ConnectedSettingsView
+            projectSlot={
+              <>
+                <SoloModeSetting />
+                <UpdateSkills />
+              </>
+            }
+          />
+        ),
       }}
       // What the check of the agent files says when the window opens: a toast, or a banner with Retry.
       banners={
@@ -98,18 +122,23 @@ function ProjectShell({ projectId }: { projectId: string }) {
 export function ProjectContent({ projectId }: { projectId: string }) {
   return (
     <ProjectStatusProvider projectId={projectId}>
-      <BoardProvider projectId={projectId}>
-        <JobsProvider projectId={projectId}>
-          <RequestsProvider projectId={projectId}>
-            {/* The round the agent (or Weaver, for a Drift) asks: a modal overlay over every view. */}
-            <AsksProvider projectId={projectId}>
-              <QuestionRoundLayer projectId={projectId}>
-                <ProjectShell projectId={projectId} />
-              </QuestionRoundLayer>
-            </AsksProvider>
-          </RequestsProvider>
-        </JobsProvider>
-      </BoardProvider>
+      {/* The assets of the project, for every view and every message box that recognises `@` tags. */}
+      <AssetsProvider projectId={projectId}>
+        <NotesProvider projectId={projectId}>
+          <BoardProvider projectId={projectId}>
+            <JobsProvider projectId={projectId}>
+              <RequestsProvider projectId={projectId}>
+                {/* The round the agent (or Weaver, for a Drift) asks: a modal overlay over every view. */}
+                <AsksProvider projectId={projectId}>
+                  <QuestionRoundLayer projectId={projectId}>
+                    <ProjectShell projectId={projectId} />
+                  </QuestionRoundLayer>
+                </AsksProvider>
+              </RequestsProvider>
+            </JobsProvider>
+          </BoardProvider>
+        </NotesProvider>
+      </AssetsProvider>
     </ProjectStatusProvider>
   );
 }

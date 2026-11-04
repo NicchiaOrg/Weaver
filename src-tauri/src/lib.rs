@@ -37,12 +37,15 @@
 //! | [`system_certificates`] | The Machine `system-certificates`: the export of the certificates the system trusts, the status the windows show, the variables of omp processes |
 //! | [`file_tabs`] | The Machine `file-tab`: the files open in the tabs of the File view, what each read, its watch, its saving; the events of the tabs and of the agent lock |
 //! | [`file_lock`] | The Machine `file-lock`: which files open in a tab an agent of the project is changing, from the live updates of its conversations |
+//! | [`assets`]    | The Assets view: the name and size of each open project's assets, the commands that copy in, rename, delete and drag them out |
+//! | [`notes`]     | The Notes view: the project's Markdown sheet and its images, the commands that read, write, copy in and trash them, the flush before a window closes, the watcher's events |
 //!
 //! Folders, protocol, locks and process spawning come from `weaver-core`, so the app and the
 //! `weaver` command line agree on them.
 
 pub mod agent_work;
 pub mod ask;
+pub mod assets;
 pub mod bindings;
 pub mod blocking;
 pub mod board;
@@ -61,6 +64,7 @@ pub mod history;
 pub mod jobs;
 pub mod logging;
 pub mod mutations;
+pub mod notes;
 pub mod notifications;
 pub mod omp;
 pub mod pictures;
@@ -137,12 +141,16 @@ pub fn run() {
             drifts::resolve_drift,
             drifts::fix_drift_code,
             drifts::accept_drift_proposal,
+            drifts::refine_drift_proposal,
+            drifts::discard_drift_proposal,
             drifts::dismiss_drift,
             history::history_snapshot,
             project_view::view_snapshot,
             project_setup::project_status,
             project_setup::initialise_project,
             project_setup::update_skills,
+            project_setup::set_solo_mode,
+            project_setup::solo_tracked_files,
             project_setup::project_folder,
             project_setup::import_code,
             omp::omp_status,
@@ -159,7 +167,6 @@ pub fn run() {
             windows::commands::open_folder,
             windows::commands::remove_recent,
             windows::commands::open_in_editor,
-            windows::commands::send_to_background,
             jobs::commands::jobs_snapshot,
             jobs::commands::job_conversation,
             jobs::commands::job_send_message,
@@ -206,6 +213,18 @@ pub fn run() {
             file_tabs::commands::file_reload,
             file_tabs::commands::file_save,
             file_tabs::commands::file_close,
+            assets::commands::assets_list,
+            assets::commands::assets_copy_in,
+            assets::commands::assets_rename,
+            assets::commands::assets_delete,
+            assets::commands::assets_drag_out,
+            notes::commands::notes_read,
+            notes::commands::notes_write,
+            notes::commands::notes_image,
+            notes::commands::notes_add_pasted,
+            notes::commands::notes_add_dropped,
+            notes::commands::notes_trash,
+            notes::commands::notes_flushed,
             file_view::commands::files_open_view,
             file_view::commands::files_expand,
             file_view::commands::files_collapse,
@@ -214,6 +233,7 @@ pub fn run() {
             file_view::commands::files_create,
             file_view::commands::files_rename,
             file_view::commands::files_move,
+            file_view::commands::files_copy_in,
             file_view::commands::files_delete,
             windows::unsaved::files_close_key,
             rounds::commands::question_round_get,
@@ -253,6 +273,16 @@ pub fn run() {
                 .state::<AppState>()
                 .file_view
                 .attach(file_view::emitter(handle.clone()));
+            // The assets of a project tell its window when their list changes.
+            handle
+                .state::<AppState>()
+                .assets
+                .attach(assets::emitter(handle.clone()));
+            // The notes of a project tell its window when they change on disk (not by Weaver).
+            handle
+                .state::<AppState>()
+                .notes_changes
+                .attach(notes::changes::emitter(handle.clone()));
             // The jobs of the agent: before the windows and the CLI socket, which use them.
             let jobs = jobs::install(&handle);
             requests::install(&handle, &jobs);
@@ -372,6 +402,14 @@ fn on_exit_or_destroyed(app: &AppHandle, event: RunEvent) {
                 app.state::<AppState>().pictures.close(project_id);
                 // `window.CLOSED`: the File view's listings and watches go at once.
                 app.state::<AppState>().file_view.close_project(project_id);
+                // The list of the assets goes with the window; a copy still running goes on to its end.
+                app.state::<AppState>().assets.close_project(project_id);
+                // Nothing of the notes events is kept for the project.
+                app.state::<AppState>()
+                    .notes_changes
+                    .close_project(project_id);
+                // The notes' remembered hash goes with the window; a write still running goes on to its end.
+                app.state::<AppState>().notes.close_project(project_id);
             }
         }
         _ => {}

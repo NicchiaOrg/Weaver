@@ -10,8 +10,10 @@
 //! |----------------------|-------|
 //! | `developer.INITIALISE_PROJECT` | [`ProjectSetup::initialise`] |
 //! | `developer.UPDATE_SKILLS` | [`ProjectSetup::update_skills`] |
-//! | window opens in `Has a Model` | [`ProjectHooks::window_opened`]: the check runs in the background |
-//! | `workspace.FILES_CHANGED`, `PROJECT_FOLDER_APPEARED`, `PROJECT_FOLDER_REMOVED` | [`ProjectHooks::batch_applied`] |
+//! | window opens, with or without a Model | [`ProjectHooks::window_opened`]: the repair of Solo mode's block runs in the background, with the check of the files when there is a Model |
+//! | `developer.CHANGE_SOLO_MODE` | [`ProjectSetup::set_solo_mode`] |
+//! | `workspace.FILES_CHANGED`, `PROJECT_FOLDER_APPEARED` | [`ProjectHooks::batch_applied`] |
+//! | `workspace.PROJECT_FOLDER_REMOVED` | the watcher removes Solo mode's block first (`windows::watch`), then [`ProjectHooks::batch_applied`] |
 //! | `proposal.APPROVED` | the approval regenerates the Requirement skills itself (`transitions::approve_with`) |
 //!
 //! The state is never stored apart from the files: it is worked out from whether `.weaver/` exists
@@ -27,10 +29,11 @@ use tokio::sync::oneshot;
 use ts_rs::TS;
 use weaver_core::project::image::ProjectImage;
 use weaver_core::project_files::folder_tree::{self, TreeEntry};
-use weaver_core::project_files::schedule::{Runs, Want};
+use weaver_core::project_files::schedule::{Run, Runs, Want};
 use weaver_core::project_files::{
     self, has_weaver, InitialiseError, ProjectState, SyncOptions, SyncReport,
 };
+use weaver_core::solo_mode::{self, Git, Mode, Opening};
 
 use crate::blocking;
 use crate::error::{AppError, ErrorCode};
@@ -80,6 +83,8 @@ impl SkillsCheck {
     /// What the check says after a run of `want` ended with `result`.
     fn after(&self, want: Want, result: &Result<SyncReport, String>) -> SkillsCheck {
         match want {
+            // The repair of Solo mode alone never changes what the check says.
+            Want::NoFiles => self.clone(),
             Want::OpeningCheck => SkillsCheck {
                 opening: self.opening + 1,
                 outcome: match result {
@@ -102,7 +107,8 @@ impl SkillsCheck {
     }
 }
 
-/// What the window knows of the project: the state, the files to install and the opening check.
+/// What the window knows of the project: the state, the files to install, the opening check and
+/// Solo mode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectStatus {
@@ -116,6 +122,46 @@ pub struct ProjectStatus {
     /// The folder holds names not starting with a dot (the warning of `Start from Scratch`).
     pub folder_has_files: bool,
     pub check: SkillsCheck,
+    pub solo: SoloStatus,
+}
+
+/// Solo mode of the working copy as the window shows it (`requirements/tech#solo-mode`). The tracked
+/// files are not here: they come from `solo_tracked_files` and from the answer of every change.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SoloStatus {
+    pub mode: Mode,
+    /// The reason Solo mode cannot be changed; absent when it can.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub unavailable: Option<String>,
+    /// Why the block of Solo mode was not put in place at the last opening (or after the last
+    /// change); absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub problem: Option<String>,
+}
+
+impl SoloStatus {
+    /// Takes what an opening found about git and the block; whether the status changed. The mode
+    /// stays: it is the one remembered in the folder.
+    fn follow(&mut self, opening: &Opening) -> bool {
+        let unavailable = opening.unavailable.as_ref().map(ToString::to_string);
+        let problem = opening.problem.as_ref().map(ToString::to_string);
+        let changed = self.unavailable != unavailable || self.problem != problem;
+        self.unavailable = unavailable;
+        self.problem = problem;
+        changed
+    }
+}
+
+/// What a change of Solo mode answers: the new state and the tracked files the block excludes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SoloChange {
+    pub solo: SoloStatus,
+    /// Relative to the project folder, with `/`, sorted; empty when Solo mode is off.
+    pub tracked: Vec<String>,
 }
 
 /// What `Initialise` answered.
@@ -167,6 +213,7 @@ struct Entry {
     state: ProjectState,
     folder_has_files: bool,
     check: SkillsCheck,
+    solo: SoloStatus,
     runs: Runs,
     /// Requests waiting for the next run, and those the running one serves.
     waiting: Vec<Waiter>,
@@ -184,6 +231,7 @@ impl Entry {
             files: project_files::initialise::installed_paths(),
             folder_has_files: self.folder_has_files,
             check: self.check.clone(),
+            solo: self.solo.clone(),
         }
     }
 }
@@ -197,31 +245,75 @@ fn folder_has_files(root: &Path) -> bool {
     })
 }
 
-/// The state of the folder and whether it holds files of its own, from the disk and the picture.
-fn measure(root: &Path, image: &ProjectImage) -> (ProjectState, bool) {
-    (
-        ProjectState::of(has_weaver(root), image.model()),
-        folder_has_files(root),
-    )
+/// What the disk and the picture say of a folder: its state, whether it holds files of its own and
+/// the mode of Solo mode remembered in `.weaver/solo/solo.json` (no git is called).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Measured {
+    state: ProjectState,
+    folder_has_files: bool,
+    solo: Mode,
 }
 
-/// What a run of `want` does to the project at `root`, in the project's queue.
-fn run_work(root: &Path, want: Want) -> Result<SyncReport, String> {
-    if !has_weaver(root) {
-        return Err("the folder is not a project yet: initialise it first".to_owned());
+fn measure(root: &Path, image: &ProjectImage) -> Measured {
+    let state = ProjectState::of(has_weaver(root), image.model());
+    let solo = read_solo_mode(root, state);
+    Measured {
+        state,
+        folder_has_files: folder_has_files(root),
+        solo,
     }
-    let options = match want {
-        Want::RequirementSkills => SyncOptions::requirement_skills(),
-        Want::OpeningCheck => SyncOptions::everything(),
-        Want::UpdateSkills => SyncOptions::update_skills(),
+}
+
+/// The mode remembered in the folder; a file that cannot be read counts as off and is logged.
+fn read_solo_mode(root: &Path, state: ProjectState) -> Mode {
+    if !state.is_initialised() {
+        return Mode::Off;
+    }
+    let read = solo_mode::read_state(root);
+    if let Some(diagnostic) = &read.diagnostic {
+        log_warn!(
+            "{} counts as Solo mode off: {}",
+            diagnostic.path,
+            diagnostic.message
+        );
+    }
+    read.mode
+}
+
+/// What one run did: the installed files (`None` when the run only repairs Solo mode) and the
+/// repair of Solo mode's block (`None` when the run does not repair it).
+struct Worked {
+    files: Option<Result<SyncReport, String>>,
+    solo: Option<Opening>,
+}
+
+/// What `run` does to the project at `root`, in the project's queue. The repair of Solo mode never
+/// changes the outcome for the installed files: they are separate results.
+fn run_work(root: &Path, run: Run, git: &Git) -> Worked {
+    if !has_weaver(root) {
+        return Worked {
+            files: Some(Err(
+                "the folder is not a project yet: initialise it first".to_owned()
+            )),
+            solo: None,
+        };
+    }
+    let options = match run.want {
+        Want::NoFiles => None,
+        Want::RequirementSkills => Some(SyncOptions::requirement_skills()),
+        Want::OpeningCheck => Some(SyncOptions::everything()),
+        Want::UpdateSkills => Some(SyncOptions::update_skills()),
     };
-    project_files::sync(root, options).map_err(|error| error.0)
+    let files = options.map(|options| project_files::sync(root, options).map_err(|error| error.0));
+    let solo = run.solo.then(|| solo_mode::open(git, root));
+    Worked { files, solo }
 }
 
 /// The record of each open project.
 pub struct ProjectSetup {
     env: Arc<dyn Environment>,
     delay: Duration,
+    git: Git,
     entries: Mutex<std::collections::HashMap<String, Entry>>,
     me: Weak<ProjectSetup>,
 }
@@ -233,9 +325,15 @@ impl ProjectSetup {
 
     /// [`ProjectSetup::new`] with another delay for the regeneration after a change of the Requirements (tests).
     pub fn with_delay(env: Arc<dyn Environment>, delay: Duration) -> Arc<Self> {
+        Self::with_git(env, delay, Git::system())
+    }
+
+    /// [`ProjectSetup::with_delay`] with another way to start git (tests).
+    pub fn with_git(env: Arc<dyn Environment>, delay: Duration, git: Git) -> Arc<Self> {
         Arc::new_cyclic(|me| Self {
             env,
             delay,
+            git,
             entries: Mutex::new(Default::default()),
             me: me.clone(),
         })
@@ -266,13 +364,17 @@ impl ProjectSetup {
             .env
             .picture(project_id)
             .ok_or_else(|| Self::not_open(project_id))?;
-        let (state, folder_has_files) = blocking::disk(move || measure(&root, &image)).await?;
+        let measured = blocking::disk(move || measure(&root, &image)).await?;
         let entry = Entry {
             root: PathBuf::new(),
             revision: 0,
-            state,
-            folder_has_files,
+            state: measured.state,
+            folder_has_files: measured.folder_has_files,
             check: SkillsCheck::none(),
+            solo: SoloStatus {
+                mode: measured.solo,
+                ..SoloStatus::default()
+            },
             runs: Runs::default(),
             waiting: Vec::new(),
             serving: Vec::new(),
@@ -281,12 +383,14 @@ impl ProjectSetup {
         Ok(entry.status(project_id))
     }
 
-    /// The state and the folder look again after a batch; the window is told when they differ.
+    /// The state, the folder and Solo mode's mode look again after a batch; the window is told when
+    /// they differ. A mode that changed (the command line, an initialisation) was changed by a
+    /// step that worked: what was said of git and of the block before no longer holds.
     async fn refresh(&self, project_id: &str) {
         let Some((root, image)) = self.env.picture(project_id) else {
             return;
         };
-        let Ok((state, has_files)) = blocking::disk(move || measure(&root, &image)).await else {
+        let Ok(measured) = blocking::disk(move || measure(&root, &image)).await else {
             return;
         };
         let status = {
@@ -294,11 +398,20 @@ impl ProjectSetup {
             let Some(entry) = entries.get_mut(project_id) else {
                 return;
             };
-            if entry.state == state && entry.folder_has_files == has_files {
+            if entry.state == measured.state
+                && entry.folder_has_files == measured.folder_has_files
+                && entry.solo.mode == measured.solo
+            {
                 return;
             }
-            entry.state = state;
-            entry.folder_has_files = has_files;
+            entry.state = measured.state;
+            entry.folder_has_files = measured.folder_has_files;
+            if entry.solo.mode != measured.solo {
+                entry.solo = SoloStatus {
+                    mode: measured.solo,
+                    ..SoloStatus::default()
+                };
+            }
             entry.revision += 1;
             entry.status(project_id)
         };
@@ -310,7 +423,7 @@ impl ProjectSetup {
     fn request(
         &self,
         project_id: &str,
-        want: Want,
+        wanted: Run,
         waited: bool,
     ) -> Option<oneshot::Receiver<Result<SyncReport, String>>> {
         let (send, receive) = oneshot::channel();
@@ -320,7 +433,7 @@ impl ProjectSetup {
             if waited {
                 entry.waiting.push(send);
             }
-            let start = entry.runs.request(want);
+            let start = entry.runs.request(wanted);
             if start.is_some() {
                 entry.serving = std::mem::take(&mut entry.waiting);
             }
@@ -334,9 +447,9 @@ impl ProjectSetup {
     }
 
     /// Runs the check, then the one more run that the requests made meanwhile coalesced into.
-    async fn serve(self: Arc<Self>, project_id: String, first: Want) {
+    async fn serve(self: Arc<Self>, project_id: String, first: Run) {
         let mut current = Some(first);
-        while let Some(want) = current.take() {
+        while let Some(run) = current.take() {
             let Some(root) = self
                 .entries()
                 .get(&project_id)
@@ -344,20 +457,34 @@ impl ProjectSetup {
             else {
                 return;
             };
-            let result = match locked(self.env.as_ref(), &project_id, move || {
-                run_work(&root, want)
+            let git = self.git.clone();
+            let worked = match locked(self.env.as_ref(), &project_id, move || {
+                run_work(&root, run, &git)
             })
             .await
             {
-                Ok(result) => result,
-                Err(reason) => Err(reason),
+                Ok(worked) => worked,
+                Err(reason) => Worked {
+                    files: (run.want != Want::NoFiles).then_some(Err(reason)),
+                    solo: None,
+                },
             };
-            match &result {
-                Ok(report) if !report.is_unchanged() => {
+            match &worked.files {
+                Some(Ok(report)) if !report.is_unchanged() => {
                     log_info!("{} installed files written", report.changes.len())
                 }
-                Ok(_) => {}
-                Err(reason) => log_warn!("the installed files could not be written: {reason}"),
+                Some(Err(reason)) => {
+                    log_warn!("the installed files could not be written: {reason}")
+                }
+                _ => {}
+            }
+            if let Some(opening) = &worked.solo {
+                if opening.rewritten {
+                    log_info!("the block of Solo mode was written again");
+                }
+                if let Some(problem) = &opening.problem {
+                    log_warn!("Solo mode is on but its block is not in place: {problem}");
+                }
             }
             let (waiters, status, next) = {
                 let mut entries = self.entries();
@@ -366,9 +493,18 @@ impl ProjectSetup {
                     return;
                 };
                 let waiters = std::mem::take(&mut entry.serving);
-                let check = entry.check.after(want, &result);
-                let status = (check != entry.check).then(|| {
-                    entry.check = check;
+                let mut changed = false;
+                if let Some(files) = &worked.files {
+                    let check = entry.check.after(run.want, files);
+                    if check != entry.check {
+                        entry.check = check;
+                        changed = true;
+                    }
+                }
+                if let Some(opening) = &worked.solo {
+                    changed |= entry.solo.follow(opening);
+                }
+                let status = changed.then(|| {
                     entry.revision += 1;
                     entry.status(&project_id)
                 });
@@ -378,8 +514,11 @@ impl ProjectSetup {
                 }
                 (waiters, status, next)
             };
+            let answer = worked
+                .files
+                .unwrap_or_else(|| Err("no installed file was checked".to_owned()));
             for waiter in waiters {
-                let _ = waiter.send(result.clone());
+                let _ = waiter.send(answer.clone());
             }
             if let Some(status) = status {
                 self.env.emit(&status);
@@ -392,7 +531,7 @@ impl ProjectSetup {
     /// starting Areas when the Requirements are missing, and reports what it did.
     pub async fn update_skills(&self, project_id: &str) -> Result<SyncReport, AppError> {
         let receive = self
-            .request(project_id, Want::UpdateSkills, true)
+            .request(project_id, Run::new(Want::UpdateSkills, false), true)
             .ok_or_else(|| Self::not_open(project_id))?;
         match receive.await {
             Ok(Ok(report)) => Ok(report),
@@ -401,18 +540,22 @@ impl ProjectSetup {
         }
     }
 
-    /// `developer.INITIALISE_PROJECT`. Conflicts are an answer, not an error: nothing was created.
+    /// `developer.INITIALISE_PROJECT`, with the mode of Solo mode the developer chose (`Off`: git is
+    /// not called). Conflicts are an answer, not an error: nothing was created. A Solo mode that
+    /// cannot be turned on refuses the initialisation with its reason: nothing was created either.
     pub async fn initialise(
         &self,
         project_id: &str,
         force: bool,
+        solo: Mode,
     ) -> Result<InitialiseResult, AppError> {
         let (root, _) = self
             .env
             .picture(project_id)
             .ok_or_else(|| Self::not_open(project_id))?;
+        let git = self.git.clone();
         let outcome = locked(self.env.as_ref(), project_id, move || {
-            project_files::initialise(&root, force)
+            project_files::initialise(&root, force, solo, &git)
         })
         .await
         .map_err(|reason| AppError::new(ErrorCode::ProjectBusy, reason))?;
@@ -437,8 +580,86 @@ impl ProjectSetup {
                     "the folder is already a project",
                 ))
             }
+            Err(InitialiseError::Solo(reason)) => Err(AppError::new(ErrorCode::Refused, reason)),
             Err(InitialiseError::Failed(reason)) => Err(AppError::new(ErrorCode::Internal, reason)),
         }
+    }
+
+    /// `developer.CHANGE_SOLO_MODE`: in the project's queue, under the project lock, like the other
+    /// writes. A change that fails changes nothing: the reason comes back as the error, and when it
+    /// says git cannot do its part it also becomes the `unavailable` of the status.
+    pub async fn set_solo_mode(
+        &self,
+        project_id: &str,
+        mode: Mode,
+    ) -> Result<SoloChange, AppError> {
+        let (root, _) = self
+            .env
+            .picture(project_id)
+            .ok_or_else(|| Self::not_open(project_id))?;
+        let git = self.git.clone();
+        let outcome = locked(self.env.as_ref(), project_id, move || {
+            solo_mode::set_mode(&git, &root, mode)
+        })
+        .await
+        .map_err(|reason| AppError::new(ErrorCode::ProjectBusy, reason))?;
+        match outcome {
+            Ok(inspection) => {
+                let solo = SoloStatus {
+                    mode: inspection.mode,
+                    unavailable: None,
+                    problem: inspection.problem.as_ref().map(ToString::to_string),
+                };
+                self.follow_solo(project_id, &solo);
+                log_info!("Solo mode is now {}", inspection.mode.as_str());
+                Ok(SoloChange {
+                    solo,
+                    tracked: inspection.tracked,
+                })
+            }
+            Err(reason) => {
+                if reason.is_unavailable() {
+                    let mut solo = self
+                        .entries()
+                        .get(project_id)
+                        .map(|entry| entry.solo.clone())
+                        .unwrap_or_default();
+                    solo.unavailable = Some(reason.to_string());
+                    self.follow_solo(project_id, &solo);
+                }
+                Err(AppError::new(ErrorCode::Refused, reason.to_string()))
+            }
+        }
+    }
+
+    /// The files git tracks that the block excludes, computed now (the Settings view is shown); never
+    /// otherwise. Empty, with no git call, when Solo mode is off.
+    pub async fn solo_tracked_files(&self, project_id: &str) -> Result<Vec<String>, AppError> {
+        let (root, _) = self
+            .env
+            .picture(project_id)
+            .ok_or_else(|| Self::not_open(project_id))?;
+        let git = self.git.clone();
+        blocking::disk(move || solo_mode::tracked_files(&git, &root))
+            .await?
+            .map_err(|reason| AppError::new(ErrorCode::Refused, reason.to_string()))
+    }
+
+    /// Records Solo mode's status after a change and tells the window when it differs.
+    fn follow_solo(&self, project_id: &str, solo: &SoloStatus) {
+        let status = {
+            let mut entries = self.entries();
+            let Some(entry) = entries.get_mut(project_id) else {
+                return;
+            };
+            if &entry.solo == solo {
+                return;
+            }
+            entry.solo = solo.clone();
+            entry.revision += 1;
+            entry.status(project_id)
+        };
+        self.env.emit(&status);
     }
 
     /// The Requirements changed: the Requirement skills are generated again 1 s after the last change.
@@ -459,7 +680,7 @@ impl ProjectSetup {
                 entry.regeneration == generation && entry.state != ProjectState::NotInitialised
             });
             if current {
-                me.request(&id, Want::RequirementSkills, false);
+                me.request(&id, Run::new(Want::RequirementSkills, false), false);
             }
         });
     }
@@ -469,18 +690,21 @@ impl ProjectSetup {
             return;
         };
         let measuring = root.clone();
-        let Ok((state, has_files)) = blocking::disk(move || measure(&measuring, &image)).await
-        else {
+        let Ok(measured) = blocking::disk(move || measure(&measuring, &image)).await else {
             return;
         };
         let status = {
             let mut entries = self.entries();
             let entry = Entry {
-                root,
+                root: root.clone(),
                 revision: 1,
-                state,
-                folder_has_files: has_files,
+                state: measured.state,
+                folder_has_files: measured.folder_has_files,
                 check: SkillsCheck::none(),
+                solo: SoloStatus {
+                    mode: measured.solo,
+                    ..SoloStatus::default()
+                },
                 runs: Runs::default(),
                 waiting: Vec::new(),
                 serving: Vec::new(),
@@ -491,8 +715,35 @@ impl ProjectSetup {
             status
         };
         self.env.emit(&status);
-        if state == ProjectState::HasModel {
-            self.request(&project_id, Want::OpeningCheck, false);
+        match measured.state {
+            // The check of the installed files and the repair of Solo mode's block, in one run.
+            ProjectState::HasModel => {
+                self.request(&project_id, Run::new(Want::OpeningCheck, true), false);
+            }
+            // An Empty Model is not checked, but its block is repaired all the same.
+            ProjectState::EmptyModel => {
+                self.request(&project_id, Run::new(Want::NoFiles, true), false);
+            }
+            // No project yet: only whether Solo mode can be chosen, for Get Started.
+            ProjectState::NotInitialised => {
+                let git = self.git.clone();
+                let Ok(opening) = blocking::disk(move || solo_mode::open(&git, &root)).await else {
+                    return;
+                };
+                let status = {
+                    let mut entries = self.entries();
+                    let Some(entry) = entries.get_mut(&project_id) else {
+                        return;
+                    };
+                    entry.solo.follow(&opening).then(|| {
+                        entry.revision += 1;
+                        entry.status(&project_id)
+                    })
+                };
+                if let Some(status) = status {
+                    self.env.emit(&status);
+                }
+            }
         }
     }
 
@@ -620,15 +871,40 @@ pub async fn project_status(
     setup.status(&project_id).await
 }
 
-/// `developer.INITIALISE_PROJECT`; `force` confirms the overwrite of agent files that differ.
+/// `developer.INITIALISE_PROJECT`; `force` confirms the overwrite of agent files that differ; `solo`
+/// is the mode of Solo mode chosen in Get Started (`off`: git is not called).
 #[tauri::command]
 pub async fn initialise_project(
     setup: State<'_, Arc<ProjectSetup>>,
     project_id: String,
     force: bool,
+    solo: Mode,
 ) -> Result<InitialiseResult, AppError> {
     let setup = setup.inner().clone();
-    setup.initialise(&project_id, force).await
+    setup.initialise(&project_id, force, solo).await
+}
+
+/// `developer.CHANGE_SOLO_MODE`: the new state with the tracked files the block excludes, or the
+/// reason it could not change.
+#[tauri::command]
+pub async fn set_solo_mode(
+    setup: State<'_, Arc<ProjectSetup>>,
+    project_id: String,
+    mode: Mode,
+) -> Result<SoloChange, AppError> {
+    let setup = setup.inner().clone();
+    setup.set_solo_mode(&project_id, mode).await
+}
+
+/// The tracked files Solo mode's block excludes, computed now: the Settings view calls it each time
+/// it is shown.
+#[tauri::command]
+pub async fn solo_tracked_files(
+    setup: State<'_, Arc<ProjectSetup>>,
+    project_id: String,
+) -> Result<Vec<String>, AppError> {
+    let setup = setup.inner().clone();
+    setup.solo_tracked_files(&project_id).await
 }
 
 /// `developer.UPDATE_SKILLS`: the same structured report the command line prints.
@@ -773,7 +1049,7 @@ mod tests {
     }
 
     fn project_with_a_model(root: &Path) {
-        initialise(root, false).unwrap();
+        initialise(root, false, Mode::Off, &Git::system()).unwrap();
         feature(root);
     }
 
@@ -801,7 +1077,7 @@ mod tests {
         assert_eq!(first.files, initialise::installed_paths());
         assert!(first.files.contains(&".omp/WATCHDOG.yml".to_owned()));
 
-        let done = setup.initialise(ID, false).await.unwrap();
+        let done = setup.initialise(ID, false, Mode::Off).await.unwrap();
         assert!(done.conflicts.is_empty());
         until(&env, |all| {
             all.last()
@@ -835,7 +1111,7 @@ mod tests {
         assert!(setup.update_skills(ID).await.is_err());
         assert!(!dir.path().join(".weaver").exists());
 
-        setup.initialise(ID, false).await.unwrap();
+        setup.initialise(ID, false, Mode::Off).await.unwrap();
         until(&env, |all| {
             all.last()
                 .is_some_and(|s| s.state == ProjectState::EmptyModel)
@@ -856,7 +1132,11 @@ mod tests {
         fs::write(dir.path().join(".trama/model/system.md"), "no title here\n").unwrap();
         let image = ProjectImage::load(dir.path());
         assert!(image.diagnostics().is_empty(), "{:?}", image.diagnostics());
-        assert_eq!(measure(dir.path(), &image), (ProjectState::HasModel, false));
+        let measured = measure(dir.path(), &image);
+        assert_eq!(
+            (measured.state, measured.folder_has_files),
+            (ProjectState::HasModel, false)
+        );
     }
 
     #[tokio::test]
@@ -870,7 +1150,7 @@ mod tests {
         open(&setup, dir.path());
         until(&env, |all| !all.is_empty()).await;
 
-        let answer = setup.initialise(ID, false).await.unwrap();
+        let answer = setup.initialise(ID, false, Mode::Off).await.unwrap();
         assert_eq!(answer.conflicts, [".omp/WATCHDOG.yml"]);
         assert!(!dir.path().join(".weaver").exists());
         assert_eq!(
@@ -880,7 +1160,7 @@ mod tests {
         assert_eq!(env.last().unwrap().state, ProjectState::NotInitialised);
 
         assert!(setup
-            .initialise(ID, true)
+            .initialise(ID, true, Mode::Off)
             .await
             .unwrap()
             .conflicts
@@ -1105,6 +1385,372 @@ mod tests {
                 opening: 2,
                 outcome: CheckOutcome::None
             }
+        );
+    }
+
+    // --- Solo mode ---------------------------------------------------------------------------
+
+    use weaver_core::solo_mode::{self, locate, read_state};
+
+    /// A temporary git repository (real git, no global or system config); its root is canonical.
+    fn git_repo() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = weaver_core::paths::canonical_root(dir.path()).unwrap();
+        let status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        (dir, root)
+    }
+
+    fn with_git(env: &Arc<FakeEnvironment>, git: Git) -> Arc<ProjectSetup> {
+        ProjectSetup::with_git(env.clone(), Duration::from_millis(20), git)
+    }
+
+    fn no_git() -> Git {
+        Git::system().with_search_path("")
+    }
+
+    fn block_in_place(root: &Path, mode: Mode) -> bool {
+        locate(&Git::system(), root)
+            .unwrap()
+            .block_in_place(mode)
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_folder_that_is_not_a_project_says_whether_solo_mode_can_be_chosen() {
+        let (_dir, root) = git_repo();
+        let env = FakeEnvironment::new(&root);
+        let setup = setup(&env);
+        open(&setup, &root);
+        until(&env, |all| !all.is_empty()).await;
+        // A repository: nothing to say, and the mode is off.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let status = env.last().unwrap();
+        assert_eq!(status.solo, SoloStatus::default());
+        assert_eq!(status.state, ProjectState::NotInitialised);
+
+        // Outside a repository, or without git, it says why.
+        let plain = tempfile::tempdir().unwrap();
+        let env = FakeEnvironment::new(plain.path());
+        let setup = setup_with_open(&env, plain.path(), Git::system());
+        until(&env, |all| {
+            all.last().is_some_and(|s| s.solo.unavailable.is_some())
+        })
+        .await;
+        assert_eq!(
+            env.last().unwrap().solo,
+            SoloStatus {
+                mode: Mode::Off,
+                unavailable: Some("this folder is not in a git repository".to_owned()),
+                problem: None
+            }
+        );
+        drop(setup);
+
+        let env = FakeEnvironment::new(&root);
+        let _setup = setup_with_open(&env, &root, no_git());
+        until(&env, |all| {
+            all.last().is_some_and(|s| s.solo.unavailable.is_some())
+        })
+        .await;
+        assert_eq!(
+            env.last().unwrap().solo.unavailable.as_deref(),
+            Some("git was not found")
+        );
+    }
+
+    fn setup_with_open(env: &Arc<FakeEnvironment>, root: &Path, git: Git) -> Arc<ProjectSetup> {
+        let setup = with_git(env, git);
+        open(&setup, root);
+        setup
+    }
+
+    #[tokio::test]
+    async fn initialising_with_a_mode_turns_solo_mode_on_before_the_project_exists() {
+        let (_dir, root) = git_repo();
+        let env = FakeEnvironment::new(&root);
+        let setup = setup(&env);
+        open(&setup, &root);
+        until(&env, |all| !all.is_empty()).await;
+
+        let done = setup.initialise(ID, false, Mode::Files).await.unwrap();
+        assert!(done.conflicts.is_empty());
+        until(&env, |all| {
+            all.last()
+                .is_some_and(|s| s.state == ProjectState::EmptyModel && s.solo.mode == Mode::Files)
+        })
+        .await;
+        assert_eq!(read_state(&root).mode, Mode::Files);
+        assert!(block_in_place(&root, Mode::Files));
+        assert_eq!(env.last().unwrap().solo.problem, None);
+    }
+
+    #[tokio::test]
+    async fn a_solo_mode_that_cannot_be_turned_on_refuses_the_initialisation_and_creates_nothing() {
+        let plain = tempfile::tempdir().unwrap();
+        let env = FakeEnvironment::new(plain.path());
+        let setup = setup(&env);
+        open(&setup, plain.path());
+        until(&env, |all| !all.is_empty()).await;
+
+        let error = setup
+            .initialise(ID, false, Mode::Folders)
+            .await
+            .unwrap_err();
+        assert_eq!(error.message, "this folder is not in a git repository");
+        assert!(fs::read_dir(plain.path()).unwrap().next().is_none());
+        assert_eq!(env.last().unwrap().state, ProjectState::NotInitialised);
+    }
+
+    #[tokio::test]
+    async fn opening_with_an_empty_model_repairs_the_block_silently_and_checks_no_file() {
+        let (_dir, root) = git_repo();
+        initialise(&root, false, Mode::Folders, &Git::system()).unwrap();
+        // A file of the agent edited by hand: an Empty Model is not checked, so it stays.
+        fs::write(root.join(".omp/WATCHDOG.yml"), "edited").unwrap();
+        locate(&Git::system(), &root)
+            .unwrap()
+            .remove_block()
+            .unwrap();
+        assert!(!block_in_place(&root, Mode::Folders));
+
+        let env = FakeEnvironment::new(&root);
+        let setup = setup(&env);
+        open(&setup, &root);
+        until(&env, |_| block_in_place(&root, Mode::Folders)).await;
+
+        let status = env.last().unwrap();
+        assert_eq!(status.state, ProjectState::EmptyModel);
+        assert_eq!(status.check, SkillsCheck::none());
+        assert_eq!(
+            status.solo,
+            SoloStatus {
+                mode: Mode::Folders,
+                ..SoloStatus::default()
+            }
+        );
+        assert_eq!(
+            fs::read_to_string(root.join(".omp/WATCHDOG.yml")).unwrap(),
+            "edited"
+        );
+    }
+
+    #[tokio::test]
+    async fn opening_with_a_model_repairs_the_block_in_the_run_of_the_check_without_changing_its_outcome(
+    ) {
+        let (_dir, root) = git_repo();
+        initialise(&root, false, Mode::Files, &Git::system()).unwrap();
+        feature(&root);
+        fs::write(root.join(".omp/WATCHDOG.yml"), "edited").unwrap();
+        locate(&Git::system(), &root)
+            .unwrap()
+            .remove_block()
+            .unwrap();
+
+        let env = FakeEnvironment::new(&root);
+        let setup = setup(&env);
+        open(&setup, &root);
+        until(&env, |all| all.last().is_some_and(|s| s.check.opening == 1)).await;
+
+        let status = env.last().unwrap();
+        assert_eq!(
+            (status.state, status.check.outcome.clone()),
+            (ProjectState::HasModel, CheckOutcome::Updated { files: 1 })
+        );
+        assert!(block_in_place(&root, Mode::Files));
+        assert_eq!(status.solo.problem, None);
+        // The repair wrote only what was missing: another opening finds nothing to do.
+        let before = fs::read_to_string(root.join(".git/info/exclude")).unwrap();
+        setup.window_closed(ID);
+        let env = FakeEnvironment::new(&root);
+        let setup = self::setup(&env);
+        open(&setup, &root);
+        until(&env, |all| all.last().is_some_and(|s| s.check.opening == 1)).await;
+        assert_eq!(env.last().unwrap().check.outcome, CheckOutcome::None);
+        assert_eq!(
+            fs::read_to_string(root.join(".git/info/exclude")).unwrap(),
+            before
+        );
+    }
+
+    #[tokio::test]
+    async fn without_git_solo_mode_stays_on_with_its_problem_and_the_check_is_untouched() {
+        let (_dir, root) = git_repo();
+        initialise(&root, false, Mode::Folders, &Git::system()).unwrap();
+        feature(&root);
+        let env = FakeEnvironment::new(&root);
+        let _setup = setup_with_open(&env, &root, no_git());
+        until(&env, |all| all.last().is_some_and(|s| s.check.opening == 1)).await;
+
+        let status = env.last().unwrap();
+        assert_eq!(status.check.outcome, CheckOutcome::None);
+        assert_eq!(
+            status.solo,
+            SoloStatus {
+                mode: Mode::Folders,
+                unavailable: Some("git was not found".to_owned()),
+                problem: Some("git was not found".to_owned()),
+            }
+        );
+        assert_eq!(read_state(&root).mode, Mode::Folders);
+    }
+
+    #[tokio::test]
+    async fn a_block_that_cannot_be_written_again_is_a_problem_until_the_next_opening_writes_it() {
+        let (_dir, root) = git_repo();
+        initialise(&root, false, Mode::Folders, &Git::system()).unwrap();
+        let exclude = root.join(".git/info/exclude");
+        let text = fs::read_to_string(&exclude).unwrap();
+        fs::remove_file(&exclude).unwrap();
+        fs::create_dir(&exclude).unwrap();
+
+        let env = FakeEnvironment::new(&root);
+        let setup = setup(&env);
+        open(&setup, &root);
+        until(&env, |all| {
+            all.last().is_some_and(|s| s.solo.problem.is_some())
+        })
+        .await;
+        let solo = env.last().unwrap().solo;
+        assert_eq!(solo.mode, Mode::Folders);
+        assert_eq!(solo.unavailable, None);
+        assert!(solo.problem.unwrap().starts_with("could not write "));
+
+        // Opened again with the file writable: written, the problem is gone.
+        setup.window_closed(ID);
+        fs::remove_dir(&exclude).unwrap();
+        fs::write(&exclude, &text).unwrap();
+        locate(&Git::system(), &root)
+            .unwrap()
+            .remove_block()
+            .unwrap();
+        let env = FakeEnvironment::new(&root);
+        let setup = self::setup(&env);
+        open(&setup, &root);
+        until(&env, |_| block_in_place(&root, Mode::Folders)).await;
+        assert_eq!(env.last().unwrap().solo.problem, None);
+        drop(setup);
+    }
+
+    #[tokio::test]
+    async fn a_change_of_solo_mode_runs_in_the_queue_and_answers_with_the_state_and_the_tracked_files(
+    ) {
+        let (_dir, root) = git_repo();
+        initialise(&root, false, Mode::Off, &Git::system()).unwrap();
+        let tracked = ".weaver/model/system.md";
+        let added = std::process::Command::new("git")
+            .args(["add", "-f", tracked])
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        assert!(added.success());
+        let env = FakeEnvironment::new(&root);
+        let setup = setup(&env);
+        open(&setup, &root);
+        until(&env, |all| !all.is_empty()).await;
+
+        let on = setup.set_solo_mode(ID, Mode::Folders).await.unwrap();
+        assert_eq!(
+            on.solo,
+            SoloStatus {
+                mode: Mode::Folders,
+                ..SoloStatus::default()
+            }
+        );
+        assert_eq!(on.tracked, [tracked]);
+        assert_eq!(env.last().unwrap().solo.mode, Mode::Folders);
+        assert_eq!(setup.solo_tracked_files(ID).await.unwrap(), [tracked]);
+
+        let other = setup.set_solo_mode(ID, Mode::Files).await.unwrap();
+        assert_eq!(other.solo.mode, Mode::Files);
+        assert_eq!(env.last().unwrap().solo.mode, Mode::Files);
+
+        let off = setup.set_solo_mode(ID, Mode::Off).await.unwrap();
+        assert_eq!((off.solo.mode, off.tracked.clone()), (Mode::Off, vec![]));
+        assert!(!root.join(".weaver/solo").exists());
+        assert_eq!(env.last().unwrap().solo.mode, Mode::Off);
+        assert_eq!(
+            setup.solo_tracked_files(ID).await.unwrap(),
+            Vec::<String>::new()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_change_that_fails_changes_nothing_says_why_and_marks_solo_mode_unavailable() {
+        let (_dir, root) = git_repo();
+        initialise(&root, false, Mode::Off, &Git::system()).unwrap();
+        let env = FakeEnvironment::new(&root);
+        let setup = with_git(&env, no_git());
+        open(&setup, &root);
+        until(&env, |all| {
+            all.last().is_some_and(|s| s.solo.unavailable.is_some())
+        })
+        .await;
+
+        let error = setup.set_solo_mode(ID, Mode::Folders).await.unwrap_err();
+        assert_eq!(error.message, "git was not found");
+        assert!(!root.join(".weaver/solo").exists());
+        assert_eq!(
+            env.last().unwrap().solo,
+            SoloStatus {
+                mode: Mode::Off,
+                unavailable: Some("git was not found".to_owned()),
+                problem: None
+            }
+        );
+        // Off: the tracked files need no git at all.
+        assert_eq!(
+            setup.solo_tracked_files(ID).await.unwrap(),
+            Vec::<String>::new()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_change_made_elsewhere_shows_in_the_status_after_the_next_batch() {
+        let (_dir, root) = git_repo();
+        initialise(&root, false, Mode::Off, &Git::system()).unwrap();
+        let env = FakeEnvironment::new(&root);
+        let setup = setup(&env);
+        open(&setup, &root);
+        until(&env, |all| !all.is_empty()).await;
+        assert_eq!(env.last().unwrap().solo.mode, Mode::Off);
+
+        // The command line turned it on while the window was open.
+        solo_mode::set_mode(&Git::system(), &root, Mode::Files).unwrap();
+        setup.batch_applied(ID, None);
+        until(&env, |all| {
+            all.last().is_some_and(|s| s.solo.mode == Mode::Files)
+        })
+        .await;
+        assert_eq!(
+            env.last().unwrap().solo,
+            SoloStatus {
+                mode: Mode::Files,
+                ..SoloStatus::default()
+            }
+        );
+    }
+
+    #[test]
+    fn the_status_names_its_solo_fields_in_camel_case_and_leaves_absent_ones_out() {
+        let status = SoloStatus {
+            mode: Mode::Files,
+            unavailable: None,
+            problem: Some("because".to_owned()),
+        };
+        assert_eq!(
+            serde_json::to_value(&status).unwrap(),
+            serde_json::json!({ "mode": "files", "problem": "because" })
+        );
+        assert_eq!(
+            serde_json::to_value(SoloStatus::default()).unwrap(),
+            serde_json::json!({ "mode": "off" })
         );
     }
 }

@@ -1,6 +1,6 @@
 # Design request
 
-A Markdown document in which the developer asks for a design: what to add or change, as long and structured as he wants, possibly with images. He writes it inside Weaver and it is saved as a file of the project while he writes. The setup request is the same document, written when the Model is empty, and it leads to the setup Proposal. The agent receives an instruction that names the request instead of containing it.
+A Markdown document in which the developer asks for a design: what to add or change, as long and structured as he wants, possibly with images and with tags of assets. He writes it inside Weaver and it is saved as a file of the project while he writes. The setup request is the same document, written when the Model is empty, and it leads to the setup Proposal. The agent receives an instruction that names the request instead of containing it.
 
 ## States
 
@@ -10,7 +10,7 @@ No request exists yet.
 
 ### Writing
 The developer writes it; every change is saved at once.
-- `developer.SEND_REQUEST` → Sent: only when it is not empty; Weaver starts a design job on it, or a setup job when the Model is empty. Sending something empty does nothing.
+- `developer.SEND_REQUEST` → Sent: only when it is not empty; Weaver starts a design job on it, or a setup job when the Model is empty, whose instruction also tells the agent to read every asset the request tags at that moment. Sending something empty does nothing.
 - `developer.DISCARD_REQUEST` → Discarded: its file and images are deleted.
 - `workspace.REQUEST_DELETED` → Discarded: nothing is ever sent afterwards, even if Weaver still showed it.
 

@@ -322,9 +322,9 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::omp::failure::Failure;
     use crate::omp::probe::fake::FakeOmp;
     use crate::omp::providers::provider;
+    use crate::process::timed::Failure;
 
     /// The shape of the output of omp 18.16.0, with made-up identities.
     const SAMPLE: &str = r#"{

@@ -6,7 +6,8 @@
 //! decision is applied.
 
 use crate::project::board::{
-    resolution_rows, AgentFacts, REASON_AGENT_FINISHING, REASON_RUN_IN_PROGRESS,
+    is_being_written, resolution_rows, AgentFacts, REASON_AGENT_FINISHING, REASON_BEING_REFINED,
+    REASON_RUN_IN_PROGRESS,
 };
 use crate::project::cards::{Card, CardKind};
 use crate::project::concerns::{key_lists_concern, key_of};
@@ -21,7 +22,7 @@ pub const REASON_BEING_RESOLVED: &str = "This Drift is being resolved";
 pub const REASON_ANOTHER_BEING_WRITTEN: &str = "Another resolution is being written";
 pub const REASON_IN_RESOLUTION: &str = "This Drift is in a resolution";
 
-/// The resolutions in Draft or Open that list `drift`.
+/// The resolutions that list `drift`: being written or refined, or waiting for a decision.
 pub fn resolutions_listing<'a>(image: &'a ProjectImage, drift: &str) -> Vec<&'a Card> {
     resolutions(image)
         .filter(|resolution| {
@@ -32,35 +33,45 @@ pub fn resolutions_listing<'a>(image: &'a ProjectImage, drift: &str) -> Vec<&'a 
         .collect()
 }
 
-/// Every resolution being written (Draft) or waiting for a decision (Open).
+/// Every resolution being written (a Draft no refinement left half-way, or Refining) or waiting
+/// for a decision (Open, or a Draft a refinement left half-way).
 fn resolutions(image: &ProjectImage) -> impl Iterator<Item = &Card> {
     image.cards_of(CardKind::Proposal).filter(|p| {
         data::kind_of(p) == Kind::Resolution
-            && matches!(data::status_of(p), Some(Status::Draft | Status::Open))
+            && matches!(
+                data::status_of(p),
+                Some(Status::Draft | Status::Open | Status::Refining)
+            )
     })
 }
 
-fn is_draft(resolution: &Card) -> bool {
-    data::status_of(resolution) == Some(Status::Draft)
-}
-
-/// The Drift is in a resolution being written or waiting for a decision.
+/// The Drift is in a resolution being written, being refined or waiting for a decision.
 pub fn in_resolution(image: &ProjectImage, drift: &str) -> bool {
     !resolutions_listing(image, drift).is_empty()
 }
 
-/// The `resolving` badge: a resolve job works on the Drift, or a resolution Draft lists it.
+/// The `resolving` badge: a resolve job works on the Drift, or a resolution being written or
+/// refined lists it.
 pub fn is_resolving(image: &ProjectImage, facts: &AgentFacts, drift: &Card) -> bool {
     facts.resolving_drifts.contains(&drift.id)
         || resolutions_listing(image, &drift.id)
             .iter()
-            .any(|r| is_draft(r))
+            .any(|r| is_being_written(r))
+}
+
+/// The Proposal attached to `drift` is being refined (Refining).
+pub fn attached_being_refined(image: &ProjectImage, drift: &Card) -> bool {
+    drift
+        .str_key("proposal")
+        .and_then(|id| image.card(CardKind::Proposal, id))
+        .is_some_and(|p| data::status_of(p) == Some(Status::Refining))
 }
 
 /// Why `Resolve` is disabled, in order: `The agent is still finishing`, `A run is in progress`,
-/// `This Drift is being resolved`, `Another resolution is being written`, and one
-/// `Proposal <id> resolving Drifts awaits a decision` for each resolution waiting for a decision.
-/// `name` shows a Proposal (`P3`, or its permanent id).
+/// `Being refined` (its attached Proposal is Refining), `This Drift is being resolved`,
+/// `Another resolution is being written`, and one `Proposal <id> resolving Drifts awaits a
+/// decision` for each resolution waiting for a decision. `name` shows a Proposal (`P3`, or its
+/// permanent id).
 pub fn resolve_reasons(
     image: &ProjectImage,
     facts: &AgentFacts,
@@ -74,6 +85,9 @@ pub fn resolve_reasons(
     if facts.run_in_progress {
         reasons.push(REASON_RUN_IN_PROGRESS.to_owned());
     }
+    if attached_being_refined(image, drift) {
+        reasons.push(REASON_BEING_REFINED.to_owned());
+    }
     if is_resolving(image, facts, drift) {
         reasons.push(REASON_BEING_RESOLVED.to_owned());
     }
@@ -81,10 +95,10 @@ pub fn resolve_reasons(
         .iter()
         .map(|r| r.id.as_str())
         .collect();
-    if resolutions(image).any(|r| is_draft(r) && !listing.contains(&r.id.as_str())) {
+    if resolutions(image).any(|r| is_being_written(r) && !listing.contains(&r.id.as_str())) {
         reasons.push(REASON_ANOTHER_BEING_WRITTEN.to_owned());
     }
-    for resolution in resolutions(image).filter(|r| !is_draft(r)) {
+    for resolution in resolutions(image).filter(|r| !is_being_written(r)) {
         reasons.push(format!(
             "Proposal {} resolving Drifts awaits a decision",
             name(CardKind::Proposal, &resolution.id)
@@ -93,15 +107,28 @@ pub fn resolve_reasons(
     reasons
 }
 
-/// Why `Dismiss Drift` is disabled, in order: `The agent is still finishing`, `This Drift is in a
-/// resolution`.
+/// Why `Dismiss Drift` is disabled, in order: `The agent is still finishing`, `Being refined` (its
+/// attached Proposal is Refining), `This Drift is in a resolution`.
 pub fn dismiss_reasons(image: &ProjectImage, facts: &AgentFacts, drift: &Card) -> Vec<String> {
     let mut reasons = Vec::new();
     if facts.is_finishing(drift) {
         reasons.push(REASON_AGENT_FINISHING.to_owned());
     }
+    if attached_being_refined(image, drift) {
+        reasons.push(REASON_BEING_REFINED.to_owned());
+    }
     if in_resolution(image, &drift.id) {
         reasons.push(REASON_IN_RESOLUTION.to_owned());
+    }
+    reasons
+}
+
+/// Why `Fix the code` is disabled besides the agent still finishing: `Being refined` (its attached
+/// Proposal is Refining).
+pub fn fix_reasons(image: &ProjectImage, drift: &Card) -> Vec<String> {
+    let mut reasons = Vec::new();
+    if attached_being_refined(image, drift) {
+        reasons.push(REASON_BEING_REFINED.to_owned());
     }
     reasons
 }

@@ -16,14 +16,16 @@ pub mod commands;
 pub mod watch;
 
 use std::collections::HashMap;
+use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::Serialize;
 use ts_rs::TS;
 use weaver_core::file_view::machine::{FileView, State, TreeSnapshot, TreeUpdate};
-use weaver_core::file_view::{ops, FolderListing, Refusal};
+use weaver_core::file_view::{copy_in, ops, FolderListing, Refusal};
 use weaver_core::project::clock::{Clock, SystemClock};
 
 use self::watch::{FolderSink, FolderWatcher};
@@ -91,6 +93,34 @@ pub struct EntryChange {
     pub update: TreeUpdate,
 }
 
+/// What a copy in did: the paths of the entries it made (relative to the project root, in the
+/// tree's order, so the first one is the one to select), and what the tree must change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyInResult {
+    pub paths: Vec<String>,
+    pub update: TreeUpdate,
+}
+
+/// The one copy a window may run: held from the start of a drop's copy to its end, and gone with
+/// the window.
+struct CopyGuard<'a>(&'a AtomicBool);
+
+impl<'a> CopyGuard<'a> {
+    fn start(copying: &'a AtomicBool) -> Result<Self, Refusal> {
+        copying
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| Self(copying))
+            .map_err(|_| Refusal::new("Another copy is still running in this window."))
+    }
+}
+
+impl Drop for CopyGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
 /// Receives what changed in a listed folder of a window; the app sends it to the UI.
 pub type TreeSink = Arc<dyn Fn(TreeChanged) + Send + Sync>;
 
@@ -112,6 +142,8 @@ pub fn emitter(app: tauri::AppHandle) -> TreeSink {
 /// One window's view.
 struct Window {
     view: Mutex<FileView<FolderWatcher>>,
+    /// A drop from outside is being copied.
+    copying: AtomicBool,
 }
 
 /// The File view of every open project window.
@@ -193,6 +225,7 @@ impl FileViewService {
                     self.clock.clone(),
                     FolderWatcher::new(self.quiet, on_folders),
                 )),
+                copying: AtomicBool::new(false),
             }
         });
         windows.insert(project_id.to_owned(), window.clone());
@@ -391,6 +424,41 @@ impl FileViewService {
             &[parent_of(old), parent_of(&path)],
         );
         Ok(EntryChange { path, update })
+    }
+
+    /// `developer.DROP_EXTERNAL_ENTRIES`: copies the dropped `sources` (absolute paths, as Tauri
+    /// reports them) into the folder `target` (empty: the root). One copy at a time per window;
+    /// the copy runs to its end even when the view is left or the window closes.
+    pub fn copy_in(
+        &self,
+        project_id: &str,
+        target: &str,
+        sources: &[PathBuf],
+    ) -> Result<CopyInResult, Refusal> {
+        self.copy_in_with(project_id, target, sources, &|_| Ok(()))
+    }
+
+    /// [`Self::copy_in`] with `step` told each destination before it is made (see
+    /// [`copy_in::copy_in_with`]), for the tests.
+    pub fn copy_in_with(
+        &self,
+        project_id: &str,
+        target: &str,
+        sources: &[PathBuf],
+        step: &dyn Fn(&Path) -> io::Result<()>,
+    ) -> Result<CopyInResult, Refusal> {
+        let window = self.open_window(project_id)?;
+        let _running = CopyGuard::start(&window.copying)?;
+        let root = Self::root_of(&window);
+        let paths = copy_in::copy_in_with(&root, target, sources, step)
+            .map_err(|error| Refusal::new(error.to_string()))?;
+        let touched: Vec<&str> = paths
+            .first()
+            .map(|path| parent_of(path))
+            .into_iter()
+            .collect();
+        let update = self.change(&window, None, None, &touched);
+        Ok(CopyInResult { paths, update })
     }
 
     /// `developer.DELETE_ENTRY`: to the system's trash, through `trash`.

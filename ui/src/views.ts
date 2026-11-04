@@ -1,6 +1,6 @@
-import { Bot, EyeOff, FolderTree, Gauge, History, ListChecks, MessageSquare, Package, Settings, SquareKanban, type LucideIcon } from "lucide-react";
+import { Bot, FolderTree, Gauge, History, ListChecks, MessageSquare, NotebookPen, Package, Paperclip, Settings, SquareKanban, type LucideIcon } from "lucide-react";
 
-export type ViewId = "board" | "requirements" | "specs" | "history" | "jobs" | "files" | "general" | "settings";
+export type ViewId = "board" | "requirements" | "specs" | "history" | "jobs" | "files" | "assets" | "notes" | "general" | "settings";
 
 export interface ViewEntry {
   id: ViewId;
@@ -17,6 +17,8 @@ export const VIEWS: readonly ViewEntry[] = [
   { id: "general", label: "Chat", icon: MessageSquare, group: "top" },
   { id: "jobs", label: "Jobs", icon: Bot, group: "top" },
   { id: "files", label: "Files", icon: FolderTree, group: "top" },
+  { id: "assets", label: "Assets", icon: Paperclip, group: "top" },
+  { id: "notes", label: "Notes", icon: NotebookPen, group: "top" },
   { id: "requirements", label: "Requirements", icon: ListChecks, group: "top" },
   { id: "specs", label: "Specs", icon: Package, group: "top" },
   { id: "history", label: "History", icon: History, group: "top" },
@@ -29,13 +31,6 @@ export const VIEWS: readonly ViewEntry[] = [
  * `aria-current`.
  */
 export const USAGE_ENTRY = { id: "usage", label: "Usage", icon: Gauge } as const;
-
-/**
- * The entry `Hide` of the bottom group, above Usage. It is not a view: a click sends the
- * window to the background at once (`developer.SEND_TO_BACKGROUND`), so it is never in `ViewId` or
- * `VIEWS`, never the selected entry and never has `aria-current`.
- */
-export const BACKGROUND_ENTRY = { id: "background", label: "Hide", icon: EyeOff } as const;
 
 /** The numbers the sidebar shows next to Board and Jobs; the backend holds them. */
 export interface ShellCounts {

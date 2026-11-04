@@ -1,6 +1,6 @@
 # Window
 
-The window of one project. A project has at most one window; when no project window is open, Weaver shows a welcome window with the recent projects and a way to open a folder. A click on the System Certificates notification with no project window open brings the welcome window to the front. The developer can send a project window to the background: it leaves the screen while Weaver keeps working in it, and it still counts as open.
+The window of one project. A project has at most one window; when no project window is open, Weaver shows a welcome window with the recent projects and a way to open a folder. A click on the System Certificates notification with no project window open brings the welcome window to the front. When the developer closes a project window while its agent jobs are working, he can send it to the background instead: it leaves the screen while Weaver keeps working in it, and it still counts as open.
 
 ## States
 
@@ -20,8 +20,8 @@ The project is open; its jobs, General and question rounds live in it, whether i
 
 #### Shown (initial)
 The window is on the screen, also when minimised.
-- `developer.SEND_TO_BACKGROUND` → In background: the window leaves the screen and, on Windows and Linux, the taskbar; nothing is suspended: its jobs, General, Ask more conversations and question rounds go on, and system notifications treat it as being in the background.
-- `developer.CLOSE_WINDOW` → In background: only when agent jobs of the project are working, its File view has no unsaved changes, and the developer chose to keep them working in the background instead of suspending them; nothing is suspended and the project stays open.
+- `developer.CLOSE_WINDOW` → In background: only when agent jobs of the project are working, its File view has no unsaved changes, and the developer chose to keep them working in the background instead of suspending them; the window leaves the screen and, on Windows and Linux, the taskbar; nothing is suspended: the project stays open, its jobs, General, Ask more conversations and question rounds go on, and system notifications treat it as being in the background.
+- `developer.CLOSE_WINDOW` → Shown: when the developer chose to keep the jobs working in the background and the window could not leave the screen; nothing is suspended, and the window stays as it was and says why.
 
 #### In background
 The window is open but not on the screen, nor in the taskbar on Windows and Linux; Weaver keeps working in it.

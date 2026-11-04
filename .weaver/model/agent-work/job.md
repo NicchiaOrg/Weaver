@@ -15,7 +15,8 @@ No job exists yet. Only one Run works at a time in a project, Run all counting a
 - `developer.RESOLVE_DRIFT` → Queued: a resolve job on that Drift, when it has no valid prepared question.
 - `question-round.ANSWERED` → Queued: a resolve job, when the answer to a prepared Drift question needs the agent.
 - `developer.REWORK_PROPOSAL` → Queued: a rework job with the skill of the Proposal's kind and the feedback; for a resolution, only on its Drifts still open, and none when no Drift is open.
-- `developer.APPROVE_PROPOSAL` → Queued: a refinement job, when the Proposal approved must be refined first.
+- `developer.APPROVE_PROPOSAL` → Queued: a refinement job, when the Proposal approved must be refined first, with the skill of the Proposal's kind as for a rework; for a resolution, only on its Drifts still open.
+- `developer.REFINE_DRIFT_PROPOSAL` → Queued: a refinement job on the Proposal attached to that Drift, with the skill of its kind as for a rework.
 - `agent.START_JOB` → Queued: the job the agent of General or of an Ask more conversation asked for on the developer's explicit request, with the same refusals as when the developer asks for it.
 
 ### Queued

@@ -372,6 +372,39 @@ async fn a_steer_that_needs_a_prompt_starts_a_new_turn_when_the_turn_ends() {
 }
 
 #[tokio::test]
+async fn a_message_that_tags_assets_goes_to_omp_with_the_block_and_the_conversation_shows_only_the_text(
+) {
+    let (host, jobs, _dir, project) = one_task().await;
+    *host.assets.lock().unwrap() = vec!["logo.png".to_owned(), "my notes.txt".to_owned()];
+    host.script(json!({ "log": host.received_log(), "steering": ["injected"], "prompts": [[agent("Start"), { "wait_steer": 1 }, agent("Got it")]] }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Running).await;
+    until("the first words", LIMIT, || {
+        entries(&jobs, &project, &id)
+            .iter()
+            .any(|e| matches!(e, Entry::Agent { text, .. } if text == "Start"))
+    })
+    .await;
+    let written = "Use @my notes.txt, and @logo.png; not @missing.png";
+    jobs.send_message(&project.id, &id, written).unwrap();
+    state_of(&host, &project, &id, JobState::Done).await;
+
+    let steer = host
+        .received()
+        .into_iter()
+        .find(|m| m["method"] == "_session/steering")
+        .unwrap();
+    assert_eq!(
+        steer["params"]["prompt"][0]["text"],
+        format!("{written}\n\nAssets tagged by the developer (added by Weaver, not written by the developer):\nRead the file `.weaver/assets/my notes.txt`.\nRead the file `.weaver/assets/logo.png`.")
+    );
+    assert!(entries(&jobs, &project, &id).iter().any(|e| matches!(
+        e,
+        Entry::Developer { text, delivery: Delivery::Delivered, .. } if text == written
+    )));
+}
+
+#[tokio::test]
 async fn yolo_answers_a_permission_that_still_arrives_with_the_first_allow_always() {
     let (host, jobs, _dir, project) = one_task().await;
     host.script(

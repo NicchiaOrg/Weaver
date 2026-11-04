@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use serde_json::Value;
 use tokio::sync::{mpsc, watch};
+use weaver_core::assets::tags;
 use weaver_core::jobs::ask;
 use weaver_core::jobs::general::{
     self as machine, Effect, GeneralMachine, GeneralRecord, GeneralStore, State,
@@ -483,9 +484,14 @@ impl General {
             .get_mut(key)
             .filter(|slot| slot.ready)
             .ok_or_else(not_open)?;
+        // The assets the message tags are the ones that exist now, never recognised again later.
+        let tagged = tags::tagged(text, &self.host.asset_names(slot.project(key)));
         let message = slot.next_message;
         slot.next_message += 1;
-        slot.texts.insert(message, text.to_owned());
+        // What goes to omp has the block of tagged assets, after the message (and so after the
+        // instruction in the first message of an Ask more conversation); the conversation shows
+        // what the developer wrote.
+        slot.texts.insert(message, tags::with_block(text, &tagged));
         slot.conversation
             .developer_message(message, text, Delivery::Queued);
         self.apply(key, slot, machine::Event::SendMessage(message));

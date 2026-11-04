@@ -1,11 +1,17 @@
 //! When the installed files are checked: at most one check per project at a time, and requests
 //! made meanwhile coalesce into one more run (`requirements/tech#project`).
 //!
+//! The repair of Solo mode's block at the opening of a project rides on the same runs: it is
+//! coalesced like the check of the installed files and happens in the same run when both are due
+//! (`requirements/tech#solo-mode`).
+//!
 //! [`Runs`] is the pure rule; the app owns one per open project and starts the work it names.
 
-/// What a run looks at, from the least to the most.
+/// What a run does to the installed files, from the least to the most.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Want {
+    /// None: the run is only the repair of Solo mode (a project with an empty Model, at its opening).
+    NoFiles,
     /// The Requirement skills only (an approval, a change of the Requirements).
     RequirementSkills,
     /// Every installed file and the Requirement skills (the opening check).
@@ -14,10 +20,25 @@ pub enum Want {
     UpdateSkills,
 }
 
-impl Want {
+/// One run: what it does to the installed files and whether it also repairs Solo mode's block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Run {
+    pub want: Want,
+    pub solo: bool,
+}
+
+impl Run {
+    /// A run of `want` that also repairs Solo mode's block when `solo`.
+    pub fn new(want: Want, solo: bool) -> Self {
+        Self { want, solo }
+    }
+
     /// The one run that covers both.
-    fn merged(self, other: Want) -> Want {
-        self.max(other)
+    fn merged(self, other: Run) -> Run {
+        Run {
+            want: self.want.max(other.want),
+            solo: self.solo || other.solo,
+        }
     }
 }
 
@@ -25,25 +46,25 @@ impl Want {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Runs {
     running: bool,
-    queued: Option<Want>,
+    queued: Option<Run>,
 }
 
 impl Runs {
-    /// A run is asked for. `Some(want)` says it starts now; `None` says one is running and this
+    /// A run is asked for. `Some(run)` says it starts now; `None` says one is running and this
     /// request will be served by one more run when it ends.
-    pub fn request(&mut self, want: Want) -> Option<Want> {
+    pub fn request(&mut self, wanted: Run) -> Option<Run> {
         if self.running {
-            self.queued = Some(self.queued.map_or(want, |queued| queued.merged(want)));
+            self.queued = Some(self.queued.map_or(wanted, |queued| queued.merged(wanted)));
             None
         } else {
             self.running = true;
-            Some(want)
+            Some(wanted)
         }
     }
 
-    /// The running one ended. `Some(want)` is the one run that serves every request made meanwhile
+    /// The running one ended. `Some(run)` is the one run that serves every request made meanwhile
     /// and starts now.
-    pub fn finished(&mut self) -> Option<Want> {
+    pub fn finished(&mut self) -> Option<Run> {
         match self.queued.take() {
             Some(next) => Some(next),
             None => {
@@ -62,10 +83,17 @@ impl Runs {
 mod tests {
     use super::*;
 
+    fn files(want: Want) -> Run {
+        Run::new(want, false)
+    }
+
     #[test]
     fn a_request_with_nothing_running_starts_at_once() {
         let mut runs = Runs::default();
-        assert_eq!(runs.request(Want::OpeningCheck), Some(Want::OpeningCheck));
+        assert_eq!(
+            runs.request(files(Want::OpeningCheck)),
+            Some(files(Want::OpeningCheck))
+        );
         assert!(runs.is_running());
         assert_eq!(runs.finished(), None);
         assert!(!runs.is_running());
@@ -75,27 +103,55 @@ mod tests {
     fn requests_made_while_one_runs_coalesce_into_one_more_run_of_the_widest_kind() {
         let mut runs = Runs::default();
         assert_eq!(
-            runs.request(Want::RequirementSkills),
-            Some(Want::RequirementSkills)
+            runs.request(files(Want::RequirementSkills)),
+            Some(files(Want::RequirementSkills))
         );
-        assert_eq!(runs.request(Want::RequirementSkills), None);
-        assert_eq!(runs.request(Want::UpdateSkills), None);
-        assert_eq!(runs.request(Want::OpeningCheck), None);
-        assert_eq!(runs.request(Want::RequirementSkills), None);
-        assert_eq!(runs.finished(), Some(Want::UpdateSkills));
+        assert_eq!(runs.request(files(Want::RequirementSkills)), None);
+        assert_eq!(runs.request(files(Want::UpdateSkills)), None);
+        assert_eq!(runs.request(files(Want::OpeningCheck)), None);
+        assert_eq!(runs.request(files(Want::RequirementSkills)), None);
+        assert_eq!(runs.finished(), Some(files(Want::UpdateSkills)));
         // The extra run is the one running now; nothing else is waiting.
         assert!(runs.is_running());
         assert_eq!(runs.finished(), None);
         assert_eq!(
-            runs.request(Want::RequirementSkills),
-            Some(Want::RequirementSkills)
+            runs.request(files(Want::RequirementSkills)),
+            Some(files(Want::RequirementSkills))
         );
     }
 
     #[test]
     fn the_runs_of_two_projects_never_meet() {
         let (mut one, mut two) = (Runs::default(), Runs::default());
-        assert!(one.request(Want::OpeningCheck).is_some());
-        assert!(two.request(Want::OpeningCheck).is_some());
+        assert!(one.request(files(Want::OpeningCheck)).is_some());
+        assert!(two.request(files(Want::OpeningCheck)).is_some());
+    }
+
+    #[test]
+    fn the_repair_of_solo_mode_rides_on_the_run_that_is_due_and_is_never_lost() {
+        let mut runs = Runs::default();
+        // Alone it is a run of its own, with no installed file touched.
+        assert_eq!(
+            runs.request(Run::new(Want::NoFiles, true)),
+            Some(Run::new(Want::NoFiles, true))
+        );
+        // Asked while it runs, together with a wider run: one more run does both.
+        assert_eq!(runs.request(files(Want::RequirementSkills)), None);
+        assert_eq!(runs.request(Run::new(Want::NoFiles, true)), None);
+        assert_eq!(
+            runs.finished(),
+            Some(Run::new(Want::RequirementSkills, true))
+        );
+        assert_eq!(runs.finished(), None);
+
+        // The opening check with the repair is one run; requests made meanwhile add only their own wish.
+        assert_eq!(
+            runs.request(Run::new(Want::OpeningCheck, true)),
+            Some(Run::new(Want::OpeningCheck, true))
+        );
+        assert_eq!(runs.request(files(Want::UpdateSkills)), None);
+        assert_eq!(runs.request(files(Want::RequirementSkills)), None);
+        assert_eq!(runs.finished(), Some(files(Want::UpdateSkills)));
+        assert_eq!(runs.finished(), None);
     }
 }

@@ -157,7 +157,7 @@ mod tests {
     ];
 
     /// Words and phrases of the features Weaver does not have; none may remain in an installed text.
-    const OUT_OF_SCOPE_WORDS: [&str; 12] = [
+    const OUT_OF_SCOPE_WORDS: [&str; 11] = [
         "comparison",
         "handoff",
         "hand-off",
@@ -167,7 +167,6 @@ mod tests {
         "hook",
         "timing",
         "team",
-        "solo",
         "diagram",
         "diagrams",
     ];

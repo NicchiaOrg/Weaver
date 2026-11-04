@@ -6,7 +6,7 @@ A folder opened in Weaver, seen as a Weaver project: whether it has a `.weaver` 
 
 ### Not initialised (initial)
 The folder has no `.weaver` folder, even when it has a `.trama` folder of an earlier version of Weaver. Every action that needs a project says to initialise it first; none fails silently. Weaver never looks for a project in the parent folders.
-- `developer.INITIALISE_PROJECT` → Empty Model: creates the `.weaver` folder with an empty Model, whose System is named after the folder, the starting Areas of Requirements, and every file installed for the agent; when agent files it would install already exist with different content, nothing is created until the developer confirms overwriting them; a failure leaves nothing behind.
+- `developer.INITIALISE_PROJECT` → Empty Model: creates the `.weaver` folder with an empty Model, whose System is named after the folder, the starting Areas of Requirements, and every file installed for the agent; when agent files it would install already exist with different content, nothing is created until the developer confirms overwriting them; when the developer chose Solo mode, Weaver turns it on before writing any of its files, and when it cannot, nothing is created and Weaver says why; a failure leaves nothing behind, Solo mode's exclusions included.
 - `workspace.PROJECT_FOLDER_APPEARED` → Empty Model: when the new `.weaver` folder holds no Feature and no Actor.
 - `workspace.PROJECT_FOLDER_APPEARED` → Has a Model: when the new `.weaver` folder already holds a Feature or an Actor.
 

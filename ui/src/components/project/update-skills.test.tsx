@@ -26,6 +26,7 @@ function status(patch: Partial<ProjectStatus> = {}): ProjectStatus {
     state: "has-model",
     files: [],
     folderHasFiles: false,
+    solo: { mode: "off" },
     check: { opening: 1, outcome: { kind: "none" } },
     ...patch,
   };

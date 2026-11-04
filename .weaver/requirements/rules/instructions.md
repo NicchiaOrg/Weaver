@@ -17,7 +17,9 @@ description: "Use when changing the instructions Weaver gives omp for jobs and A
   | Run all | ``Use the weaver-implement skill on the runnable Tasks: take them from `weaver task list --input '{"runnable":true,"max":<N>,"groups":true}'`, one batch at a time, until it says there is none.`` A Run of a model group adds `"proposals":[…]` (the Proposals of its chosen model) or, for the execution-model group, `"notProposals":[…]`, identities in card order. |
   | Resolve | `Use the weaver-resolve-drifts skill on Drift <id>.` With an answer already given: `The developer already answered its prepared question: <answer>.`, the answer as one-line JSON `{"selected":[…],"text":…}`. |
   | Rework | `Use the <skill> skill to rework the rejected Proposal <id> with the developer's feedback.` The skill follows the kind: `weaver-design` for a change, `weaver-setup` for a setup while the Model is empty (`weaver-design` otherwise), `weaver-import`, or `weaver-resolve-drifts` adding ``on the Drifts `<d1>`, `<d2>` `` with its Drifts still open. |
-  | Refinement | `Use the weaver-design skill to refine the stale Proposal <id> on the current Model and Requirements.` |
+  | Refinement | `Use the <skill> skill to refine the stale Proposal <id> on the current Model and Requirements.` The skill follows the kind as for a Rework; `weaver-resolve-drifts` ends the sentence with ``, on the Drifts `<d1>`, `<d2>`.`` naming its Drifts still open. Every skill has a section for refining a stale Proposal of its kind, with the rules of the design refinement (no code read, no announcement, decisions in the body already taken, at most one round and only on a contradicted decision, `Remove`/`Keep` when the whole change is already in the Model); it adds that an attached Proposal goes back Open, and that the agent asks the developer when something of a requirement dropped by the rebase was needed. |
+
+- Setup and Design: right after the first sentence, on the same line, one ``Read the file `.weaver/assets/<name>`.`` for each asset the request tags when it is sent (`requirements/rules#assets`), before the sentences below.
 
 - Sentences appended on the same line, in this order:
   1. `Run at most <N> sub-agents at once.`, with N the sub-agent limit setting (for a Run all group, its share; the same number is the `max` of `weaver task list`).
@@ -43,3 +45,11 @@ description: "Use when changing the instructions Weaver gives omp for jobs and A
   - History entry: `weaver history show <entry>`, then `weaver proposal show <id>` once for each Proposal of its Tasks that still exists and `weaver model show <ref>` once for each reference of its Tasks, without repetitions;
   - question: `weaver drift show <id>` for a prepared question;
   - Requirements: only with an overlay, `weaver proposal show <id>`; without one, no command is listed.
+
+## assets
+- **Tag:** `@` at the start of the text or after whitespace, followed by the name of an asset (`requirements/rules#asset-view`), compared exactly, case included. When several asset names fit, the longest wins, so names with spaces need no quoting. The name must be followed by the end of the text, whitespace, or one of `. , ; : ! ? ) ] } " '`. Anything else after `@` is plain text and tells the agent nothing. Tags inside code spans or code blocks count like any other.
+- **When:** tags are recognised against the assets that exist at the moment the developer sends, never later: a message waiting to be delivered keeps the lines it got when sent.
+- **Lines:** each asset tagged gets one sentence ``Read the file `.weaver/assets/<name>`.``, once even when tagged several times, in the order of its first tag.
+- **Messages** (Chat, a job's conversation, an Ask more conversation): when at least one asset is tagged, Weaver appends to the text sent to omp, after the developer's text, an empty line, the line `Assets tagged by the developer (added by Weaver, not written by the developer):` and the sentences, one per line. In the first message of an Ask more conversation the block follows the developer's message, after the instruction. Without tags the text goes as it is.
+- **Requests:** the sentences go into the job's instruction as `## job` says; the request file is never changed.
+- **Shown:** the developer's message is always shown without the appended block, live and when the conversation is reloaded from omp.

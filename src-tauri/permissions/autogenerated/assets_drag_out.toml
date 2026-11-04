@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-assets-drag-out"
+description = "Enables the assets_drag_out command without any pre-configured scope."
+commands.allow = ["assets_drag_out"]
+
+[[permission]]
+identifier = "deny-assets-drag-out"
+description = "Denies the assets_drag_out command without any pre-configured scope."
+commands.deny = ["assets_drag_out"]

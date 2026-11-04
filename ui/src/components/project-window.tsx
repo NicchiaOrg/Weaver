@@ -10,8 +10,8 @@ import { UpdateBanner } from "@/components/update-banner";
 import { UsageDialog } from "@/components/usage-dialog";
 import { ViewShownContext } from "@/components/view-shown";
 import { ViewHeader, viewTitleId } from "@/components/view-header";
-import { call, isAppError, on } from "@/lib/backend";
-import { BACKGROUND_ENTRY, NO_COUNTS, USAGE_ENTRY, VIEWS, type ShellCounts, type ViewId } from "@/views";
+import { on } from "@/lib/backend";
+import { NO_COUNTS, USAGE_ENTRY, VIEWS, type ShellCounts, type ViewId } from "@/views";
 
 export interface ProjectWindowProps {
   /** The project hash (the window's label is `p-<hash>`). */
@@ -77,29 +77,30 @@ export function ProjectWindow({ projectId, views = {}, counts = NO_COUNTS, initi
     };
   }, [projectId, select, openJob]);
 
+  // This window could not go to the background after `Keep working in background` of the close
+  // confirmation: it stays as it was and says why.
+  useEffect(() => {
+    let current = true;
+    const unlisten = on("window-hide-failed", ({ reason }) => {
+      if (current) toast.error("Could not hide the window.", { description: reason });
+    });
+    return () => {
+      current = false;
+      unlisten.then((stop) => stop()).catch(() => {});
+    };
+  }, []);
+
   const context = useMemo<ProjectContextValue>(
     () => ({ projectId, showView: select, openJob, openedJob }),
     [projectId, select, openJob, openedJob],
   );
 
-  // The sidebar entries of the bottom group that are no views: `Hide` sends this window to the
-  // background at once, without confirmation, and `Usage` opens the dialog over the view shown. Neither is ever selected.
+  // The only sidebar entry of the bottom group that is no view, besides Settings: `Usage` opens the
+  // dialog over the view shown. It is never selected.
   const [usageOpen, setUsageOpen] = useState(false);
   const actions = useMemo<readonly SidebarAction[]>(
-    () => [
-      {
-        ...BACKGROUND_ENTRY,
-        onActivate: () => {
-          call("send_to_background", { projectId }).catch((error: unknown) =>
-            toast.error("Could not hide the window.", {
-              description: isAppError(error) ? error.message : "The window could not be hidden.",
-            }),
-          );
-        },
-      },
-      { ...USAGE_ENTRY, onActivate: () => setUsageOpen(true) },
-    ],
-    [projectId],
+    () => [{ ...USAGE_ENTRY, onActivate: () => setUsageOpen(true) }],
+    [],
   );
   const openSettingsFromUsage = useCallback(() => {
     setUsageOpen(false);

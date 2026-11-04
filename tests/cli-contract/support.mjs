@@ -5,7 +5,7 @@
 // temporary sandbox, so a run never reads or writes the developer's home or settings and the
 // suite passes the same with or without those variables in the environment.
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -126,4 +126,20 @@ export async function newProject(environment) {
     throw new Error(`project new failed (exit ${result.status}): ${result.stderr || result.stdout}`);
   }
   return root;
+}
+
+/** Runs real git in `folder` with no global or system configuration; returns its stdout. */
+export function git(folder, args) {
+  return execFileSync("git", args, {
+    cwd: folder,
+    encoding: "utf8",
+    env: { ...process.env, GIT_CONFIG_GLOBAL: path.join(tmpdir(), "no-such-git-config"), GIT_CONFIG_NOSYSTEM: "1" },
+  });
+}
+
+/** A new empty git repository under the system temporary folder, removed by [`cleanup`]. Returns the root. */
+export function gitRepository(prefix = "cli-contract-repo-") {
+  const folder = temporaryFolder(prefix);
+  git(folder, ["init", "-q"]);
+  return folder;
 }

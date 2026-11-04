@@ -16,13 +16,18 @@ description: "Use when reading, writing or validating files under `.weaver/`: la
   tasks/<id>-<slug>.md         live Tasks
   drifts/<id>-<slug>.md        every Drift, decided ones included
   history/<id>-<slug>.md       History entries
+  assets/<name>                the developer's assets, flat, files only (see `requirements/rules#asset-view`)
   requests/                    local only: design requests (see `design-request`)
   short-numbers/assigned       local only: short-number cache
   task-images/<task id>/       local only: images tied to Tasks
+  notes/                       local only: the developer's notes, notes.md and its images (see `notes-view`)
+  solo/solo.json               local only: Solo mode of this working copy (see `solo-mode`)
 ```
 
-- `model/`, `requirements/`, `specs.yaml`, `proposals/`, `tasks/`, `drifts/` and `history/` are versioned with the project. Decided Proposals and Drifts are never deleted.
-- Local-only folders (`requests/`, `short-numbers/`, `task-images/`) each hold their own `.gitignore` containing `*`, written when the folder is created and written again whenever it is missing. Nothing else in `.weaver/` is ignored.
+- `model/`, `requirements/`, `specs.yaml`, `proposals/`, `tasks/`, `drifts/`, `history/` and `assets/` are versioned with the project. Decided Proposals and Drifts are never deleted.
+- `assets/` is created only when the first asset is copied in, never at initialisation, and gets no `.gitignore`. Weaver never reads its files as Model, Requirement, Specs or card files, never puts them in the project picture, and never writes in it except through the Assets view.
+- `notes/` is created only when the sheet or an image is first written, never at initialisation. Like `assets/`, its files are never Model, Requirement, Specs or card files nor part of the project picture, and only the Notes view writes in it.
+- Local-only folders (`requests/`, `short-numbers/`, `task-images/`, `notes/`, `solo/`) each hold their own `.gitignore` containing `*`, written when the folder is created and written again whenever it is missing. Nothing else in `.weaver/` is ignored.
 - The Model, Requirements and Specs formats are exactly those of the `FORMAT.md` reference installed with the `weaver-design` skill. The core's parser and that file are tested together: every example in it parses, and every rule it states is enforced by `model check` or the hand-over.
 - Files and folders whose name starts with `.` are never read as Model, Requirement, Specs or card files.
 - A `.trama` folder, the project folder of earlier versions of Weaver, is never read, written, moved or deleted: without `.weaver/` the folder is not a project, and with both the project is `.weaver/`.

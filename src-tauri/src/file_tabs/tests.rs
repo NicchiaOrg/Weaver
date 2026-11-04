@@ -183,6 +183,111 @@ fn a_binary_file_opens_without_text() {
     assert_eq!(content.hash, sha256_bytes(&[0, 1, 2, 3]));
 }
 
+/// A PNG-looking file of `len` bytes: the signature, then NULs.
+fn png_bytes(len: usize) -> Vec<u8> {
+    let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    bytes.resize(len, 0);
+    bytes
+}
+
+#[test]
+fn an_image_opens_as_a_data_url_with_its_size_and_no_text_and_cannot_be_saved() {
+    let h = harness();
+    let bytes = png_bytes(20);
+    // Recognised by its first bytes, whatever its name says.
+    h.write("pictures/logo.txt", &bytes);
+    let (_, content, _, _) = opened(h.open("pictures/logo.txt"));
+    assert_eq!(content.kind, FileKind::Image);
+    assert_eq!(content.text, None);
+    assert_eq!(content.hash, sha256_bytes(&bytes));
+    assert!(!content.image_too_large);
+    let image = content.image.expect("the image comes with the result");
+    assert_eq!(image.size, 20);
+    assert_eq!(
+        image.data_url,
+        format!(
+            "data:image/png;base64,{}",
+            weaver_core::project::requests::image::base64_encode(&bytes)
+        )
+    );
+    let outcome = h
+        .tabs
+        .save(&h.id, "pictures/logo.txt", "text\n", SaveMode::Overwrite);
+    assert!(matches!(outcome, SaveOutcome::Failed(_)), "{outcome:?}");
+    assert_eq!(fs::read(h.root.join("pictures/logo.txt")).unwrap(), bytes);
+}
+
+#[test]
+fn an_image_over_ten_mebibytes_is_binary_with_the_reason_and_no_bytes() {
+    let h = harness();
+    h.write("limit.png", &png_bytes(10_485_760));
+    h.write("big.png", &png_bytes(10_485_761));
+    let (_, at_limit, _, _) = opened(h.open("limit.png"));
+    assert_eq!(at_limit.kind, FileKind::Image);
+    let (_, big, _, _) = opened(h.open("big.png"));
+    assert_eq!(big.kind, FileKind::Binary);
+    assert_eq!(big.image, None);
+    assert!(big.image_too_large);
+    assert_eq!(big.text, None);
+}
+
+#[test]
+fn an_image_is_read_again_after_a_change_turns_binary_is_deleted_and_comes_back() {
+    let h = harness();
+    let path = h.write("a.png", &png_bytes(12));
+    opened(h.open("a.png"));
+
+    // Another image: told once, and the reload gives the new one.
+    fs::write(&path, png_bytes(30)).unwrap();
+    h.changed("a.png");
+    h.changed("a.png");
+    assert_eq!(
+        h.tab_events(),
+        vec![("a.png".to_owned(), TabChange::Changed)]
+    );
+    let FileReloadResult::Read { content } = h.tabs.reload(&h.id, "a.png").unwrap() else {
+        panic!("gone")
+    };
+    assert_eq!(content.kind, FileKind::Image);
+    assert_eq!(content.image.map(|image| image.size), Some(30));
+
+    // No longer an image Weaver can show.
+    fs::write(&path, [1, 0, 2, 3]).unwrap();
+    h.changed("a.png");
+    assert_eq!(h.tab_events().len(), 2);
+    let FileReloadResult::Read { content } = h.tabs.reload(&h.id, "a.png").unwrap() else {
+        panic!("gone")
+    };
+    assert_eq!(content.kind, FileKind::Binary);
+    assert_eq!(content.image, None);
+    assert!(!content.image_too_large);
+
+    // Too large to show.
+    fs::write(&path, png_bytes(10_485_761)).unwrap();
+    h.changed("a.png");
+    let FileReloadResult::Read { content } = h.tabs.reload(&h.id, "a.png").unwrap() else {
+        panic!("gone")
+    };
+    assert_eq!(content.kind, FileKind::Binary);
+    assert!(content.image_too_large);
+
+    // Deleted, then an image again.
+    fs::remove_file(&path).unwrap();
+    h.changed("a.png");
+    assert_eq!(h.tab_events().last().unwrap().1, TabChange::Deleted);
+    assert_eq!(
+        h.tabs.reload(&h.id, "a.png").unwrap(),
+        FileReloadResult::Gone
+    );
+    fs::write(&path, png_bytes(16)).unwrap();
+    h.changed("a.png");
+    assert_eq!(h.tab_events().last().unwrap().1, TabChange::Changed);
+    let FileReloadResult::Read { content } = h.tabs.reload(&h.id, "a.png").unwrap() else {
+        panic!("gone")
+    };
+    assert_eq!(content.kind, FileKind::Image);
+}
+
 #[test]
 fn a_large_file_and_a_file_in_weaver_are_read_only_and_never_written() {
     let h = harness();

@@ -3,13 +3,14 @@
 //! [`ErrorCode::Refused`] error whose message is the reason the UI shows in a toast; nothing
 //! changes when it is refused.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tauri::State;
 use weaver_core::file_view::machine::{TreeSnapshot, TreeUpdate};
 use weaver_core::file_view::{FileEntry, Refusal};
 
-use super::{EntryChange, FileViewService};
+use super::{CopyInResult, EntryChange, FileViewService};
 use crate::blocking;
 use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
@@ -137,6 +138,26 @@ pub async fn files_move(
     blocking::disk(move || {
         service
             .move_into(&project_id, &path, &target)
+            .map_err(refused)
+    })
+    .await?
+}
+
+/// `developer.DROP_EXTERNAL_ENTRIES`: copies `paths` (dropped from outside, absolute) into the
+/// folder `target` (empty: the project root). Runs to its end even when the view is left or the
+/// window closes.
+#[tauri::command]
+pub async fn files_copy_in(
+    state: State<'_, AppState>,
+    project_id: String,
+    target: String,
+    paths: Vec<String>,
+) -> Result<CopyInResult, AppError> {
+    let service = service(&state);
+    let sources: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    blocking::disk_named("files_copy_in", None, move || {
+        service
+            .copy_in(&project_id, &target, &sources)
             .map_err(refused)
     })
     .await?

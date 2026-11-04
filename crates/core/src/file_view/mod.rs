@@ -3,6 +3,7 @@
 //! | Module | Responsibility |
 //! |--------|----------------|
 //! | [`names`] | The names a new entry may have |
+//! | [`copy_in`] | Copying files and folders dropped from outside into the project |
 //! | [`listing`] | One folder at a time: names and kinds, `.git` and what git ignores left out |
 //! | [`rename`] | A rename that never replaces an existing entry, on every system |
 //! | [`ops`] | Create, rename, move and delete, with every refusal checked when they run |
@@ -12,6 +13,7 @@
 //! app runs it on the blocking pool and sends the results to the UI. Paths are checked with
 //! [`crate::file_tab::path`] before anything is touched.
 
+pub mod copy_in;
 pub mod listing;
 pub mod machine;
 pub mod names;

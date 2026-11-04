@@ -56,7 +56,8 @@ function mermaidSource(pre: Element | undefined): string | null {
   return isMermaid ? code.children.map(textOf).join("").replace(/\n$/, "") : null;
 }
 
-function openInBrowser(url: string) {
+/** Opens `url` in the system browser; an error toast when that fails. */
+export function openInBrowser(url: string) {
   call("open_url", { url }).catch(() => toast.error("Could not open the link."));
 }
 

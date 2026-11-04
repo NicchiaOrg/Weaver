@@ -378,6 +378,160 @@ fn deleting_goes_through_the_trash_closes_the_tabs_and_a_refusing_trash_deletes_
     );
 }
 
+/// A folder next to the project with something to drop.
+fn dropped(names: &[&str]) -> (tempfile::TempDir, Vec<PathBuf>) {
+    let dir = tempfile::tempdir().unwrap();
+    let base = weaver_core::paths::canonical_root(dir.path()).unwrap();
+    let paths = names
+        .iter()
+        .map(|name| {
+            put(&base, name);
+            base.join(name.split('/').next().unwrap())
+        })
+        .collect();
+    (dir, paths)
+}
+
+#[test]
+fn copying_in_puts_the_entries_in_the_target_folder_and_in_the_tree_and_keeps_the_originals() {
+    let f = fixture();
+    f.service.open(PROJECT, &f.root).unwrap();
+    f.service.expand(PROJECT, "src").unwrap();
+    let (_outside, paths) = dropped(&["notes.txt", "assets/logo.png"]);
+
+    let result = f.service.copy_in(PROJECT, "src", &paths).unwrap();
+
+    assert_eq!(result.paths, ["src/assets", "src/notes.txt"]);
+    assert!(f.root.join("src/assets/logo.png").is_file());
+    assert!(f.root.join("src/notes.txt").is_file());
+    assert!(paths.iter().all(|path| path.exists()));
+    assert_eq!(
+        names(&listing_of(&result.update, "src").unwrap()),
+        ["assets", "deep", "main.rs", "notes.txt"]
+    );
+    // The guard went with the copy: another one can start.
+    let (_more, more) = dropped(&["more.txt"]);
+    assert!(f.service.copy_in(PROJECT, "", &more).is_ok());
+}
+
+#[test]
+fn a_refused_drop_copies_nothing_and_the_view_must_be_open() {
+    let f = fixture();
+    let (_outside, paths) = dropped(&["x.txt"]);
+    assert_eq!(
+        reason(f.service.copy_in(PROJECT, "", &paths)),
+        "The File view is not open."
+    );
+    f.service.open(PROJECT, &f.root).unwrap();
+    assert_eq!(
+        reason(f.service.copy_in(PROJECT, ".weaver", &paths)),
+        ".weaver is written by Weaver: read-only here."
+    );
+    assert_eq!(
+        reason(f.service.copy_in(PROJECT, "", &[f.root.join("a.txt")])),
+        "\"a.txt\" is already in the project: drag it inside the tree to move it."
+    );
+    assert!(!f.root.join("x.txt").exists());
+    assert!(!f.root.join(".weaver/x.txt").exists());
+}
+
+#[test]
+fn a_failure_part_way_is_told_as_the_error_and_leaves_the_project_as_it_was() {
+    let f = fixture();
+    f.service.open(PROJECT, &f.root).unwrap();
+    let (_outside, paths) = dropped(&["one.txt", "two.txt"]);
+    let calls = std::cell::Cell::new(0);
+    let failing = |_: &Path| {
+        calls.set(calls.get() + 1);
+        if calls.get() == 2 {
+            Err(io::Error::other("disk on fire"))
+        } else {
+            Ok(())
+        }
+    };
+
+    assert_eq!(
+        reason(f.service.copy_in_with(PROJECT, "", &paths, &failing)),
+        "Could not copy \"two.txt\": disk on fire. Nothing was copied."
+    );
+    assert!(!f.root.join("one.txt").exists());
+    assert!(!f.root.join("two.txt").exists());
+    // The failed copy released the guard.
+    assert!(f.service.copy_in(PROJECT, "", &paths).is_ok());
+}
+
+/// Runs a drop that waits in its first step until told, so a test can act while it runs.
+fn with_running_copy<R>(
+    f: &Fixture,
+    paths: &[PathBuf],
+    while_running: impl FnOnce() -> R,
+) -> (R, Result<CopyInResult, Refusal>) {
+    let (started, wait_started) = mpsc::channel::<()>();
+    let (release, wait_release) = mpsc::channel::<()>();
+    let wait_release = Mutex::new(wait_release);
+    let started = Mutex::new(started);
+    let service = &f.service;
+    std::thread::scope(|scope| {
+        let copy = scope.spawn(|| {
+            let first = std::cell::Cell::new(true);
+            service.copy_in_with(PROJECT, "", paths, &|_| {
+                if first.replace(false) {
+                    started.lock().unwrap().send(()).unwrap();
+                    wait_release.lock().unwrap().recv().unwrap();
+                }
+                Ok(())
+            })
+        });
+        wait_started.recv().unwrap();
+        let during = while_running();
+        release.send(()).unwrap();
+        (during, copy.join().unwrap())
+    })
+}
+
+#[test]
+fn a_second_drop_is_refused_while_one_copies_and_copies_nothing() {
+    let f = fixture();
+    f.service.open(PROJECT, &f.root).unwrap();
+    let (_first_dir, first) = dropped(&["first.txt"]);
+    let (_second_dir, second) = dropped(&["second.txt"]);
+
+    let (second_result, first_result) =
+        with_running_copy(&f, &first, || f.service.copy_in(PROJECT, "", &second));
+
+    assert_eq!(
+        reason(second_result),
+        "Another copy is still running in this window."
+    );
+    assert!(!f.root.join("second.txt").exists());
+    assert_eq!(first_result.unwrap().paths, ["first.txt"]);
+    assert!(f.root.join("first.txt").is_file());
+    assert!(f.service.copy_in(PROJECT, "", &second).is_ok());
+}
+
+#[test]
+fn the_copy_goes_to_its_end_when_the_view_is_left_or_the_window_closes() {
+    let f = fixture();
+    f.service.open(PROJECT, &f.root).unwrap();
+    let (_dir, paths) = dropped(&["assets/a.png", "assets/b.png", "z.txt"]);
+    let paths = vec![paths[0].clone(), paths[2].clone()];
+
+    let (_, result) = with_running_copy(&f, &paths, || {
+        f.service.leave(PROJECT);
+        f.service.close_project(PROJECT);
+    });
+
+    assert_eq!(result.unwrap().paths, ["assets", "z.txt"]);
+    assert!(f.root.join("assets/a.png").is_file());
+    assert!(f.root.join("assets/b.png").is_file());
+    assert!(f.root.join("z.txt").is_file());
+    // The guard went with the window: a window of the same project starts clean.
+    assert_eq!(f.service.state(PROJECT), State::Closed);
+    f.service.open(PROJECT, &f.root).unwrap();
+    let (_more_dir, more) = dropped(&["late.txt"]);
+    assert!(f.service.copy_in(PROJECT, "", &more).is_ok());
+}
+
 #[test]
 fn the_folders_for_the_move_dialog_are_listed_one_folder_at_a_time_and_not_held() {
     let f = fixture();

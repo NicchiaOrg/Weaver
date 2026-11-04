@@ -170,6 +170,20 @@ pub fn rework_requested(card: &Card) -> bool {
     card.bool_key("reworkRequested") == Some(true)
 }
 
+/// Rejected with `Rework` and the rework has not been handed over yet: no Proposal that takes its
+/// place was opened. A Proposal that requires it keeps waiting, as for one still being written.
+pub fn rework_pending(image: &ProjectImage, card: &Card) -> bool {
+    status_of(card) == Some(Status::Rejected)
+        && rework_requested(card)
+        && !image.cards_of(CardKind::Proposal).any(|other| {
+            reworks_of(other) == Some(card.id.as_str())
+                && matches!(
+                    status_of(other),
+                    Some(Status::Open | Status::Refining | Status::Approved | Status::Rejected)
+                )
+        })
+}
+
 /// `refining: true`: a refinement started on it and has not handed it over again.
 pub fn refining_flag(card: &Card) -> bool {
     card.bool_key("refining") == Some(true)

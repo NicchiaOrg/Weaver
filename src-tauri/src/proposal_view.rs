@@ -5,7 +5,7 @@
 
 use serde::Serialize;
 use ts_rs::TS;
-use weaver_core::project::board::AgentFacts;
+use weaver_core::project::board::{AgentFacts, REASON_BEING_REFINED};
 use weaver_core::project::cards::{Card, CardKind};
 use weaver_core::project::image::ProjectImage;
 use weaver_core::project::proposal::analysis::{self, Analysis, Gate, Reason, RequiredProblem};
@@ -15,13 +15,15 @@ use weaver_core::project::proposal::models::ProposalModels;
 use weaver_core::project::proposal::transitions::gate_of;
 use weaver_core::project::shortnum::ShortNumbers;
 
-/// `Being refined`: the second reason of Approve (after the agent and a Run) and the only one of
-/// Reject and Rework with feedback besides the agent.
-pub const REASON_BEING_REFINED: &str = "Being refined";
-/// The tooltip of an enabled Approve on a Proposal only staleness blocks.
+/// The tooltip of `Refine` on a stale Open Proposal.
 pub const TOOLTIP_REFINE: &str = "Refine on the current Model, then approve";
-/// The tooltip of Approve on a Draft a refinement left half-way.
+/// The tooltip of `Refine` when the hand-over does not approve: the Proposal is attached to a
+/// Drift, or a required Proposal is still being written or not approved yet.
+pub const TOOLTIP_REFINE_ONLY: &str = "Refine on the current Model";
+/// The tooltip of `Refine` on a Draft a refinement left half-way.
 pub const TOOLTIP_CONTINUE: &str = "Continue refining, then approve";
+/// The tooltip of `Refine` on a Draft left half-way when the hand-over does not approve.
+pub const TOOLTIP_CONTINUE_ONLY: &str = "Continue refining";
 
 /// A Task a Proposal creates: its title and its body, for the compact row and the nested Dialog
 /// of the details dialog.
@@ -154,10 +156,33 @@ fn controls(
     if status == Some(Status::Refining) {
         reject.push(REASON_BEING_REFINED.to_owned());
     }
+    let refinement = || -> Vec<String> {
+        analysis
+            .refinement_refusals(gate)
+            .into_iter()
+            .map(|r| r.text().to_owned())
+            .collect()
+    };
+    // A hand-over that cannot approve: attached to a Drift (the developer accepts it there), or a
+    // required Proposal still to be written or approved.
+    let hands_back_open = analysis.attached
+        || analysis.requires.iter().any(|r| {
+            matches!(
+                r.problem,
+                Some(RequiredProblem::BeingWritten | RequiredProblem::NotApproved)
+            )
+        });
     let approve = match status {
         Some(Status::Draft) => ProposalControl {
-            reasons: finishing().into_iter().collect(),
-            tooltip: Some(TOOLTIP_CONTINUE.to_owned()),
+            reasons: refinement(),
+            tooltip: Some(
+                if hands_back_open {
+                    TOOLTIP_CONTINUE_ONLY
+                } else {
+                    TOOLTIP_CONTINUE
+                }
+                .to_owned(),
+            ),
             refines: true,
         },
         Some(Status::Refining) => {
@@ -173,25 +198,29 @@ fn controls(
                 refines: false,
             }
         }
-        _ => {
-            if analysis.refinable(gate) {
-                ProposalControl {
-                    reasons: Vec::new(),
-                    tooltip: Some(TOOLTIP_REFINE.to_owned()),
-                    refines: true,
+        // Any stale Open Proposal is refined, whatever its kind and whatever else blocks it: only
+        // the agent finishing and a resolution without an open Drift disable it.
+        _ if !analysis.stale.is_empty() => ProposalControl {
+            reasons: refinement(),
+            tooltip: Some(
+                if hands_back_open {
+                    TOOLTIP_REFINE_ONLY
+                } else {
+                    TOOLTIP_REFINE
                 }
-            } else {
-                ProposalControl {
-                    reasons: analysis
-                        .approve_reasons(gate)
-                        .iter()
-                        .map(|r| r.text(numbers))
-                        .collect(),
-                    tooltip: None,
-                    refines: false,
-                }
-            }
-        }
+                .to_owned(),
+            ),
+            refines: true,
+        },
+        _ => ProposalControl {
+            reasons: analysis
+                .approve_reasons(gate)
+                .iter()
+                .map(|r| r.text(numbers))
+                .collect(),
+            tooltip: None,
+            refines: false,
+        },
     };
     (approve, reject)
 }
@@ -393,8 +422,19 @@ mod tests {
         assert_eq!(view.requires[0].problem.as_deref(), Some("is missing"));
     }
 
+    fn drift_file(status: &str) -> String {
+        format!(
+            "---\nstatus: {status}\nrefs:\n  - order/Paid\ncreated: 2026-11-02T06:00:00.000Z\n---\n# The code ships twice\n\n## What happens\n\nIt ships twice.\n\n## What should happen\n\nIt ships once.\n\n## Where in the code\n\n`src/ship.rs`\n"
+        )
+    }
+
+    /// A Drift the Proposal `pppppppp` is attached to.
+    fn attached_drift_file(status: &str) -> String {
+        drift_file(status).replacen("created:", "proposal: pppppppp\ncreated:", 1)
+    }
+
     #[test]
-    fn staleness_alone_enables_approve_with_its_tooltip_also_during_a_run() {
+    fn a_stale_proposal_is_refined_whatever_else_blocks_it_also_during_a_run() {
         let dir = project();
         proposal(
             dir.path(),
@@ -423,6 +463,127 @@ mod tests {
                 refines: true,
             }
         );
+
+        // A missing required Proposal blocks it too: Refine stays, the reason stays in `blocked`.
+        proposal(
+            dir.path(),
+            "pppppppp",
+            "status: open\nkind: change\nrequires:\n  - zzzzzzzz\n",
+            &hash("an older Model"),
+            true,
+        );
+        let view = view_of(dir.path(), &facts, &ProposalModels::default());
+        assert_eq!(view.blocked.len(), 2, "{:?}", view.blocked);
+        assert_eq!(view.approve.reasons, Vec::<String>::new());
+        assert!(view.approve.refines);
+        assert_eq!(view.approve.tooltip.as_deref(), Some(TOOLTIP_REFINE));
+
+        // A required Proposal not approved yet: the hand-over cannot approve, the tooltip says so.
+        proposal(
+            dir.path(),
+            "qqqqqqqq",
+            "status: open\nkind: change\n",
+            &hash(ORDER),
+            false,
+        );
+        proposal(
+            dir.path(),
+            "pppppppp",
+            "status: open\nkind: change\nrequires:\n  - qqqqqqqq\n",
+            &hash("an older Model"),
+            true,
+        );
+        let view = view_of(dir.path(), &facts, &ProposalModels::default());
+        assert!(
+            view.blocked
+                .iter()
+                .any(|b| b.ends_with("is not approved yet")),
+            "{:?}",
+            view.blocked
+        );
+        assert!(view.approve.reasons.is_empty() && view.approve.refines);
+        assert_eq!(view.approve.tooltip.as_deref(), Some(TOOLTIP_REFINE_ONLY));
+
+        // Attached to a Drift: the same.
+        proposal(
+            dir.path(),
+            "pppppppp",
+            "status: open\nkind: change\n",
+            &hash("an older Model"),
+            true,
+        );
+        put(
+            dir.path(),
+            "drifts/dddddddd-d.md",
+            &attached_drift_file("open"),
+        );
+        let view = view_of(dir.path(), &facts, &ProposalModels::default());
+        assert!(view.approve.reasons.is_empty() && view.approve.refines);
+        assert_eq!(view.approve.tooltip.as_deref(), Some(TOOLTIP_REFINE_ONLY));
+        fs::remove_file(dir.path().join(".weaver/drifts/dddddddd-d.md")).unwrap();
+
+        // Only the agent still finishing disables it.
+        let text = fs::read_to_string(dir.path().join(".weaver/proposals/pppppppp-t/proposal.md"))
+            .unwrap();
+        put(
+            dir.path(),
+            "proposals/pppppppp-t/proposal.md",
+            &text.replacen("---\n", "---\njob: jjjjjjjj\n", 1),
+        );
+        let mut finishing = facts.clone();
+        finishing.working_jobs.insert("jjjjjjjj".into());
+        let view = view_of(dir.path(), &finishing, &ProposalModels::default());
+        assert_eq!(view.approve.reasons, ["The agent is still finishing"]);
+        assert!(view.approve.refines);
+    }
+
+    #[test]
+    fn a_stale_resolution_is_refined_only_while_one_of_its_drifts_is_still_open() {
+        let dir = project();
+        let drifts = "drifts:\n  - drift: dddddddd\n    decision: dismissed\n";
+        proposal(
+            dir.path(),
+            "pppppppp",
+            &format!("status: open\nkind: resolution\n{drifts}"),
+            &hash("an older Model"),
+            false,
+        );
+        put(dir.path(), "drifts/dddddddd-d.md", &drift_file("open"));
+        let view = view_of(
+            dir.path(),
+            &AgentFacts::default(),
+            &ProposalModels::default(),
+        );
+        assert!(view.stale && view.approve.refines);
+        assert!(view.approve.reasons.is_empty());
+
+        put(dir.path(), "drifts/dddddddd-d.md", &drift_file("dismissed"));
+        let view = view_of(
+            dir.path(),
+            &AgentFacts::default(),
+            &ProposalModels::default(),
+        );
+        assert!(view.approve.refines);
+        assert_eq!(view.approve.reasons, ["None of its Drifts is still open"]);
+
+        // A resolution with no file has no `base`: never stale, never refined.
+        put(
+            dir.path(),
+            "proposals/pppppppp-t/proposal.md",
+            &format!("---\nstatus: open\nkind: resolution\n{drifts}created: 2026-11-02T07:00:00.000Z\n---\n# R\n"),
+        );
+        fs::remove_file(
+            dir.path()
+                .join(".weaver/proposals/pppppppp-t/model/shop/order.md"),
+        )
+        .unwrap();
+        put(dir.path(), "drifts/dddddddd-d.md", &drift_file("open"));
+        let view = view_of(
+            dir.path(),
+            &AgentFacts::default(),
+            &ProposalModels::default(),
+        );
+        assert!(!view.stale && !view.approve.refines);
     }
 
     #[test]
@@ -457,6 +618,31 @@ mod tests {
         );
         assert!(view.approve.reasons.is_empty());
         assert_eq!(view.approve.tooltip.as_deref(), Some(TOOLTIP_CONTINUE));
+        // The agent that handed it over is still finishing: disabled by that alone.
+        let mut finishing = AgentFacts::default();
+        finishing.working_jobs.insert("jjjjjjjj".into());
+        let text = fs::read_to_string(dir.path().join(".weaver/proposals/pppppppp-t/proposal.md"))
+            .unwrap();
+        put(
+            dir.path(),
+            "proposals/pppppppp-t/proposal.md",
+            &text.replacen("---\n", "---\njob: jjjjjjjj\n", 1),
+        );
+        let view = view_of(dir.path(), &finishing, &ProposalModels::default());
+        assert_eq!(view.approve.reasons, ["The agent is still finishing"]);
+        assert!(view.approve.refines);
+        // Attached to a Drift: the hand-over never approves.
+        put(
+            dir.path(),
+            "drifts/dddddddd-d.md",
+            &attached_drift_file("open"),
+        );
+        let view = view_of(
+            dir.path(),
+            &AgentFacts::default(),
+            &ProposalModels::default(),
+        );
+        assert_eq!(view.approve.tooltip.as_deref(), Some(TOOLTIP_CONTINUE_ONLY));
         assert!(view.approve.refines);
     }
 

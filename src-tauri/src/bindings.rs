@@ -10,6 +10,9 @@ use ts_rs::TS;
 
 use crate::agent_work::{Ghost, GhostKind, GhostPhase};
 use crate::ask::build::AskTarget;
+use crate::assets::{
+    AssetRefusal, AssetRenamed, AssetsChanged, AssetsCopied, AssetsDeleted, AssetsSnapshot,
+};
 use crate::board::{
     BoardCard, BoardSnapshot, CardHead, CardRef, ProposalStanding, ResolutionDrift, TitledRef,
 };
@@ -18,10 +21,10 @@ use crate::drift_view::{AttachedProposal, CodePlace, DriftView, FixOption};
 use crate::error::{AppError, ErrorCode};
 use crate::events::{EventName, Notice, ProjectChanged};
 use crate::file_tabs::wire::{
-    FileContent, FileKind, FileLockChanged, FileOpenResult, FileReloadResult, FileSaveResult,
-    FileTabChanged, ReadOnlyReason, TabChange,
+    FileContent, FileImage, FileKind, FileLockChanged, FileOpenResult, FileReloadResult,
+    FileSaveResult, FileTabChanged, ReadOnlyReason, TabChange,
 };
-use crate::file_view::{EntryChange, TreeChanged};
+use crate::file_view::{CopyInResult, EntryChange, TreeChanged};
 use crate::general::wire::{
     AskClosed, AskEntries, AskKind, AskRow, AskSnapshot, AskStatus, AsksSnapshot, GeneralEntries,
     GeneralSnapshot, GeneralState,
@@ -32,7 +35,12 @@ use crate::jobs::conversation::{
     ToolStatus,
 };
 use crate::jobs::wire::{ConversationSnapshot, EntriesEvent, JobRow, JobsSnapshot};
-use crate::project_setup::{InitialiseResult, ProjectStatus};
+use crate::notes::changes::NotesChanged;
+use crate::notes::{
+    NotesFlush, NotesImageOutcome, NotesImagesAdded, NotesRefusalReason, NotesSheet,
+    NotesTrashRefusal, NotesTrashed, NotesWritten, PastedImage,
+};
+use crate::project_setup::{InitialiseResult, ProjectStatus, SoloChange};
 use crate::project_view::ViewSnapshot;
 use crate::proposal_view::{
     ProposalControl, ProposalFiles, ProposalTask, ProposalView, RequiredProposal,
@@ -48,10 +56,11 @@ use crate::subagents::wire::{
 use crate::updates::{UpdateInfo, UpdateStatus};
 use crate::usage::{UsagePhase, UsageStatus};
 use crate::windows::commands::{RecentEntry, WelcomeState};
-use crate::windows::manager::{ShowRequest, ShowView};
+use crate::windows::manager::{HideFailed, ShowRequest, ShowView};
 use crate::windows::unsaved::{
     FilesCloseTab, FilesFlush, FilesSaveFailed, SaveFailure, SavedFile, TabText,
 };
+use weaver_core::assets::Asset;
 use weaver_core::file_view::machine::{TreeSnapshot, TreeUpdate};
 use weaver_core::file_view::{FileEntry, FileEntryKind, FolderListing};
 use weaver_core::jobs::notes::Note;
@@ -139,6 +148,7 @@ pub fn export_all(dir: &Path) -> Result<(), ts_rs::ExportError> {
     ViewSnapshot::export_all_to(dir)?;
     ProjectStatus::export_all_to(dir)?;
     InitialiseResult::export_all_to(dir)?;
+    SoloChange::export_all_to(dir)?;
     SyncReport::export_all_to(dir)?;
     TreeEntry::export_all_to(dir)?;
     OmpStatus::export_all_to(dir)?;
@@ -158,6 +168,7 @@ pub fn export_all(dir: &Path) -> Result<(), ts_rs::ExportError> {
     RecentEntry::export_all_to(dir)?;
     WelcomeState::export_all_to(dir)?;
     ShowRequest::export_all_to(dir)?;
+    HideFailed::export_all_to(dir)?;
     ShowView::export_all_to(dir)?;
     JobsSnapshot::export_all_to(dir)?;
     ConversationSnapshot::export_all_to(dir)?;
@@ -205,6 +216,7 @@ pub fn export_all(dir: &Path) -> Result<(), ts_rs::ExportError> {
     TreeSnapshot::export_all_to(dir)?;
     TreeUpdate::export_all_to(dir)?;
     EntryChange::export_all_to(dir)?;
+    CopyInResult::export_all_to(dir)?;
     TreeChanged::export_all_to(dir)?;
     FilesFlush::export_all_to(dir)?;
     TabText::export_all_to(dir)?;
@@ -215,6 +227,7 @@ pub fn export_all(dir: &Path) -> Result<(), ts_rs::ExportError> {
     FileContent::export_all_to(dir)?;
     FileKind::export_all_to(dir)?;
     ReadOnlyReason::export_all_to(dir)?;
+    FileImage::export_all_to(dir)?;
     FileOpenResult::export_all_to(dir)?;
     FileReloadResult::export_all_to(dir)?;
     FileSaveResult::export_all_to(dir)?;
@@ -224,6 +237,23 @@ pub fn export_all(dir: &Path) -> Result<(), ts_rs::ExportError> {
     QuestionRoundView::export_all_to(dir)?;
     QuestionRoundChanged::export_all_to(dir)?;
     ActionInput::export_all_to(dir)?;
+    Asset::export_all_to(dir)?;
+    AssetsSnapshot::export_all_to(dir)?;
+    AssetsChanged::export_all_to(dir)?;
+    AssetsCopied::export_all_to(dir)?;
+    AssetRenamed::export_all_to(dir)?;
+    AssetRefusal::export_all_to(dir)?;
+    NotesChanged::export_all_to(dir)?;
+    AssetsDeleted::export_all_to(dir)?;
+    NotesSheet::export_all_to(dir)?;
+    NotesWritten::export_all_to(dir)?;
+    PastedImage::export_all_to(dir)?;
+    NotesRefusalReason::export_all_to(dir)?;
+    NotesImageOutcome::export_all_to(dir)?;
+    NotesImagesAdded::export_all_to(dir)?;
+    NotesTrashRefusal::export_all_to(dir)?;
+    NotesTrashed::export_all_to(dir)?;
+    NotesFlush::export_all_to(dir)?;
     Ok(())
 }
 

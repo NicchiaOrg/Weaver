@@ -183,6 +183,27 @@ describe("ghosts", () => {
     expect(openJob).toHaveBeenCalledWith("job-g1");
   });
 
+  it("shows still known texts and, under them, only placeholders that shimmer, shaped like the real card of its kind", async () => {
+    install(
+      board(1, {
+        ghosts: [ghost("g1", "proposal", "Coming proposal", { note: "Reading the Model" }), ghost("g2", "task", "Coming task"), ghost("g3", "drift", "Coming drift")],
+      }),
+    );
+    await show();
+    const shapes = (name: RegExp) => {
+      const button = screen.getByRole("button", { name });
+      const placeholders = Array.from(button.querySelectorAll("[data-placeholder]"));
+      expect(placeholders.every((element) => element.classList.contains("shimmer") && element.textContent === "")).toBe(true);
+      // Nothing else in the ghost shimmers: the kind, title, phase and note are still.
+      expect(button.querySelectorAll(".shimmer")).toHaveLength(placeholders.length);
+      expect(button).toHaveTextContent("Coming");
+      return placeholders.map((element) => (element.classList.contains("h-8") ? "button" : element.classList.contains("size-2") ? "dot" : "bar"));
+    };
+    expect(shapes(/Proposal being prepared/)).toEqual(["bar", "bar", "bar", "button", "button"]);
+    expect(shapes(/Task being prepared/)).toEqual(["dot", "bar", "button"]);
+    expect(shapes(/Drift being prepared/)).toEqual(["bar", "button", "button"]);
+  });
+
   it("leaves in the same picture in which its card arrives", async () => {
     install(board(1, { ghosts: [ghost("g1", "task", "Coming task")] }));
     await show();

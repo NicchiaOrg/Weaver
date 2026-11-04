@@ -18,7 +18,7 @@
 //! | [`fullscreen`]   | A fullscreen window sent to the background leaves fullscreen first (macOS) |
 //! | [`tray`]         | The tray icon of Windows and Linux: `Show Weaver` and `Quit` |
 //! | [`menu`]         | The application menu (`Cmd+Q` / `Ctrl+Q` / File › Quit) |
-//! | [`commands`]     | Tauri commands: the welcome window, `send_to_background` and `open_in_editor` |
+//! | [`commands`]     | Tauri commands: the welcome window and `open_in_editor` |
 //!
 //! # What other Tasks plug into
 //!
@@ -38,8 +38,9 @@
 //!   [`crate::notifications::route_click`]: the project window used most recently shows Settings,
 //!   else the welcome window comes forward.
 //! * **Open a project from elsewhere**: [`WindowManager::open_project`].
-//! * **Background** (`developer.SEND_TO_BACKGROUND`, `developer.REOPEN_APP`):
-//!   [`WindowManager::send_to_background`] hides a project window without suspending anything; it
+//! * **Background** (`developer.CLOSE_WINDOW` → In background, `developer.REOPEN_APP`):
+//!   [`WindowManager::send_to_background`] hides a project window without suspending anything,
+//!   when the developer chose `Keep working in background` on closing it; it
 //!   stays open for the jobs, the notifications, the restore list and the last-window rule.
 //!   [`WindowManager::reopen_app`] brings them all back (the Dock, a second launch, the tray).
 

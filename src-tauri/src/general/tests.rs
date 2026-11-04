@@ -1690,6 +1690,7 @@ async fn the_sub_agents_are_rebuilt_from_the_replayed_history_and_clear_forgets_
 // -----------------------------------------------------------------------------------------------
 
 mod ask_more {
+    use weaver_core::assets::tags;
     use weaver_core::jobs::ask;
 
     use super::*;
@@ -1884,6 +1885,55 @@ mod ask_more {
             .read(f.id())
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn tagged_assets_follow_the_message_after_the_instruction_and_are_never_shown() {
+        let f = fixture().await;
+        *f.host.assets.lock().unwrap() = vec!["logo.png".to_owned(), "spec.pdf".to_owned()];
+        f.host.script(json!({
+            "log": f.host.received_log(),
+            "prompts": [[agent("First")], [agent("Second")]],
+        }));
+        let (rebuild, _) = rebuilt(Some("not used"));
+        let id = open(&f, rebuild);
+
+        f.general
+            .send_message(&id, "What is in @logo.png?")
+            .unwrap();
+        answered(&f, &id, "First").await;
+        f.general
+            .send_message(&id, "And @spec.pdf, not @other.pdf, and @logo.png again")
+            .unwrap();
+        answered(&f, &id, "Second").await;
+
+        let block = |names: &[&str]| {
+            tags::block(&names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>()).unwrap()
+        };
+        assert_eq!(
+            prompts(&f),
+            [
+                ask::first_prompt(
+                    INSTRUCTION,
+                    &format!("What is in @logo.png?\n\n{}", block(&["logo.png"]))
+                ),
+                format!(
+                    "And @spec.pdf, not @other.pdf, and @logo.png again\n\n{}",
+                    block(&["spec.pdf", "logo.png"])
+                ),
+            ]
+        );
+        // The conversation shows what the developer wrote.
+        assert_eq!(
+            developers(&f.general.entries(&id)),
+            vec![
+                ("What is in @logo.png?", &Delivery::Delivered),
+                (
+                    "And @spec.pdf, not @other.pdf, and @logo.png again",
+                    &Delivery::Delivered
+                )
+            ]
+        );
     }
 
     #[tokio::test]

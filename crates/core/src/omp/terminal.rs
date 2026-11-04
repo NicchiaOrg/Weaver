@@ -377,7 +377,7 @@ pub fn open(os: Os, launch: &Launch) -> Result<(), TerminalError> {
         command.creation_flags(CREATE_NEW_CONSOLE);
     }
     if os == Os::MacOs {
-        return super::run::run_command(command, OSASCRIPT_LIMIT)
+        return crate::process::timed::run_command(command, OSASCRIPT_LIMIT)
             .map(|_| ())
             .map_err(|failure| TerminalError::Launch(failure.reason()));
     }

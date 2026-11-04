@@ -11,6 +11,8 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
+use crate::project::requests::image::{base64_encode, ImageKind, MAX_IMAGE_BYTES};
+
 /// How many bytes at the start of a file are searched for a NUL byte.
 pub const BINARY_SCAN_BYTES: usize = 8_192;
 
@@ -35,6 +37,15 @@ pub enum ReadOnly {
     Weaver,
 }
 
+/// An image Weaver can show (`requirements/rules#file-tab`), as the UI gets it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageRead {
+    /// `data:<mime>;base64,<…>`.
+    pub data_url: String,
+    /// The size of the file in bytes.
+    pub size: u64,
+}
+
 /// What a tab keeps of a file as it read it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileRead {
@@ -46,6 +57,11 @@ pub struct FileRead {
     /// `None` for a binary file: no text goes to the UI.
     pub text: Option<String>,
     pub read_only: Option<ReadOnly>,
+    /// The image a binary file is, when Weaver can show it. Handed to the UI at once: a tab keeps
+    /// none of it.
+    pub image: Option<ImageRead>,
+    /// A binary file with an image signature that is larger than 10 MB.
+    pub image_too_large: bool,
 }
 
 impl FileRead {
@@ -129,17 +145,36 @@ pub fn to_disk_bytes(text: &str, line_ending: LineEnding, bom: bool) -> Vec<u8> 
     bytes
 }
 
-/// What a tab keeps of `bytes`, read from a file of the given kind of place.
+/// The image a binary file is, when its first bytes are the signature of one Weaver can show and it
+/// is at most 10 MB; the second value tells a file with such a signature that is larger.
+fn image_of(bytes: &[u8]) -> (Option<ImageRead>, bool) {
+    match ImageKind::detect(bytes) {
+        Some(kind) if bytes.len() <= MAX_IMAGE_BYTES => (
+            Some(ImageRead {
+                data_url: format!("data:{};base64,{}", kind.mime(), base64_encode(bytes)),
+                size: bytes.len() as u64,
+            }),
+            false,
+        ),
+        Some(_) => (None, true),
+        None => (None, false),
+    }
+}
+
+/// What a tab keeps of a file as it read it, from `bytes`, of the given kind of place.
 pub fn from_bytes(bytes: &[u8], inside_weaver: bool) -> FileRead {
     let hash = sha256_bytes(bytes);
     let bom = has_bom(bytes);
     if is_binary(bytes) {
+        let (image, image_too_large) = image_of(bytes);
         return FileRead {
             hash,
             bom,
             line_ending: LineEnding::Lf,
             text: None,
             read_only: None,
+            image,
+            image_too_large,
         };
     }
     // Valid UTF-8, checked by `is_binary`.
@@ -157,6 +192,8 @@ pub fn from_bytes(bytes: &[u8], inside_weaver: bool) -> FileRead {
         line_ending: choose_line_ending(body),
         text: Some(to_ui_text(body)),
         read_only,
+        image: None,
+        image_too_large: false,
     }
 }
 
@@ -259,5 +296,70 @@ mod tests {
             sha256_bytes(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    /// A binary file that starts with `signature`, `len` bytes long.
+    fn with_signature(signature: &[u8], len: usize) -> Vec<u8> {
+        let mut bytes = signature.to_vec();
+        bytes.resize(len, 0);
+        bytes
+    }
+
+    #[test]
+    fn a_binary_file_with_an_image_signature_is_an_image_of_that_type() {
+        let cases: [(&[u8], &str); 6] = [
+            (
+                &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+                "image/png",
+            ),
+            (&[0xFF, 0xD8, 0xFF, 0xE0], "image/jpeg"),
+            (b"GIF87a", "image/gif"),
+            (b"GIF89a", "image/gif"),
+            (b"RIFF\0\0\0\0WEBP", "image/webp"),
+            (b"BM", "image/bmp"),
+        ];
+        for (signature, mime) in cases {
+            let bytes = with_signature(signature, 40);
+            let read = from_bytes(&bytes, false);
+            let image = read.image.as_ref().expect(mime);
+            assert!(read.is_binary() && read.text.is_none(), "{mime}");
+            assert!(!read.image_too_large, "{mime}");
+            assert_eq!(image.size, 40, "{mime}");
+            assert_eq!(
+                image.data_url,
+                format!("data:{mime};base64,{}", base64_encode(&bytes)),
+                "{mime}"
+            );
+        }
+        let ico = from_bytes(&with_signature(&[0, 0, 1, 0], 40), false);
+        assert!(ico
+            .image
+            .unwrap()
+            .data_url
+            .starts_with("data:image/x-icon;base64,"));
+    }
+
+    #[test]
+    fn an_image_is_shown_up_to_ten_mebibytes_and_binary_with_a_reason_above() {
+        let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        let at_limit = from_bytes(&with_signature(&png, MAX_IMAGE_BYTES), false);
+        assert_eq!(at_limit.image.map(|image| image.size), Some(10_485_760));
+        assert!(!at_limit.image_too_large);
+
+        let over = from_bytes(&with_signature(&png, MAX_IMAGE_BYTES + 1), false);
+        assert!(over.is_binary());
+        assert_eq!(over.image, None);
+        assert!(over.image_too_large);
+    }
+
+    #[test]
+    fn any_other_binary_file_and_any_text_file_is_never_an_image() {
+        let other = from_bytes(&[1, 0, 2, 3], false);
+        assert!(other.is_binary() && other.image.is_none() && !other.image_too_large);
+        // The signature is looked at only for binary files: this one is text.
+        let text = from_bytes(b"BM is not a bitmap here", false);
+        assert!(!text.is_binary() && text.image.is_none() && !text.image_too_large);
+        let svg = from_bytes(b"<svg xmlns='http://www.w3.org/2000/svg'/>", false);
+        assert!(svg.image.is_none());
     }
 }

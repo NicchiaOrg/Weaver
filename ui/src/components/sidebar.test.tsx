@@ -9,7 +9,7 @@ import { ProjectWindow } from "@/components/project-window";
 import { Sidebar } from "@/components/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ViewHeader } from "@/components/view-header";
-import { call } from "@/lib/backend";
+import { on } from "@/lib/backend";
 import { setViewportWidth } from "@/test/media";
 import { VIEWS, type ShellCounts, type ViewId } from "@/views";
 
@@ -24,7 +24,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn() }, Toaster: () => null }));
 // The Usage dialog reads the status of omp: not ready here, so it says why and offers Open Settings.
 vi.mock("@/hooks/use-omp", () => ({ useOmp: () => ({ status: { state: "missing", providers: [], models: [], version: null, reason: null } }) }));
 
-const ORDER = ["Board", "Chat", "Jobs", "Files", "Requirements", "Specs", "History", "Settings"];
+const ORDER = ["Board", "Chat", "Jobs", "Files", "Assets", "Notes", "Requirements", "Specs", "History", "Settings"];
 
 function renderSidebar(counts: ShellCounts = { backlog: 0, jobsWaiting: 0 }, selected: ViewId = "board") {
   return render(
@@ -37,7 +37,7 @@ function renderSidebar(counts: ShellCounts = { backlog: 0, jobsWaiting: 0 }, sel
 const navigation = () => screen.getByRole("navigation", { name: "Views" });
 
 describe("sidebar", () => {
-  it("lists Board, Chat, Jobs, Files, Requirements, Specs, History, Settings in this order", () => {
+  it("lists Board, Chat, Jobs, Files, Assets, Notes, Requirements, Specs, History, Settings in this order", () => {
     expect(VIEWS.map((v) => v.label)).toEqual(ORDER);
     renderSidebar();
     const names = within(navigation())
@@ -51,7 +51,10 @@ describe("sidebar", () => {
     const lists = within(navigation()).getAllByRole("list");
     const top = lists[0] as HTMLElement;
     const bottom = lists[1] as HTMLElement;
-    expect(within(top).getAllByRole("button").map((b) => b.textContent)).toEqual(ORDER.slice(0, 7));
+    expect(within(top).getAllByRole("button").map((b) => b.textContent)).toEqual(ORDER.slice(0, 9));
+    // Assets comes after Files, with the Paperclip icon; Notes comes after Assets, with the NotebookPen icon.
+    expect(within(top).getByRole("button", { name: "Assets" }).querySelector("svg")).toHaveClass("lucide-paperclip");
+    expect(within(top).getByRole("button", { name: "Notes" }).querySelector("svg")).toHaveClass("lucide-notebook-pen");
     expect(within(bottom).getAllByRole("button").map((b) => b.textContent)).toEqual(["Settings"]);
     expect(top.compareDocumentPosition(bottom) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(navigation()).toHaveClass("h-full", "flex-col", "justify-between");
@@ -214,7 +217,7 @@ describe("the Usage entry of a project window", () => {
   it("sits in the bottom group, right above Settings, with the Gauge icon", () => {
     renderWindow();
     const bottom = within(navigation()).getAllByRole("list")[1] as HTMLElement;
-    expect(within(bottom).getAllByRole("button").map((b) => b.textContent)).toEqual(["Hide", "Usage", "Settings"]);
+    expect(within(bottom).getAllByRole("button").map((b) => b.textContent)).toEqual(["Usage", "Settings"]);
     expect(screen.getByRole("button", { name: "Usage" }).querySelector("svg")).toHaveClass("lucide-gauge");
   });
 
@@ -234,6 +237,15 @@ describe("the Usage entry of a project window", () => {
     const user = userEvent.setup();
     await user.hover(screen.getByRole("button", { name: "Usage" }));
     expect(await screen.findByRole("tooltip")).toHaveTextContent("Usage");
+    act(() => setViewportWidth(1024));
+  });
+
+  it("gives Settings its name as tooltip when the sidebar shows icons only", async () => {
+    renderWindow();
+    act(() => setViewportWidth(1023));
+    const user = userEvent.setup();
+    await user.hover(screen.getByRole("button", { name: "Settings" }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Settings");
     act(() => setViewportWidth(1024));
   });
 
@@ -263,63 +275,28 @@ describe("the Usage entry of a project window", () => {
   });
 });
 
-describe("the Hide entry of a project window", () => {
-  const renderWindow = () =>
+describe("the error toast of a window that cannot go to the background", () => {
+  it("tells the reason, and leaves the window as it was", () => {
+    type Failure = { reason: string };
+    let failed: ((failure: Failure) => void) | undefined;
+    vi.mocked(on).mockImplementation(((name: string, listener: (failure: Failure) => void) => {
+      if (name === "window-hide-failed") failed = listener;
+      return Promise.resolve(() => {});
+    }) as never);
+    vi.mocked(toast.error).mockClear();
     render(
       <TooltipProvider>
         <ProjectWindow projectId="0123456789abcdef" views={{ board: <Counter />, settings: <p>settings content</p> }} />
       </TooltipProvider>,
     );
+    expect(failed).toBeDefined();
+    expect(toast.error).not.toHaveBeenCalled();
 
-  it("sits in the bottom group before Usage and Settings, with the EyeOff icon", () => {
-    renderWindow();
-    const bottom = within(navigation()).getAllByRole("list")[1] as HTMLElement;
-    expect(within(bottom).getAllByRole("button").map((b) => b.textContent)).toEqual(["Hide", "Usage", "Settings"]);
-    expect(screen.getByRole("button", { name: "Hide" }).querySelector("svg")).toHaveClass("lucide-eye-off");
-  });
-
-  it("sends this window to the background at once, without confirmation, and is never selected nor current", async () => {
-    const user = userEvent.setup();
-    vi.mocked(call).mockClear();
-    renderWindow();
-    await user.click(screen.getByRole("button", { name: "Clicked 0" }));
-    const entry = screen.getByRole("button", { name: "Hide" });
-    expect(entry).toBeEnabled();
-    expect(entry).not.toHaveAttribute("aria-current");
-
-    await user.click(entry);
-    expect(call).toHaveBeenCalledWith("send_to_background", { projectId: "0123456789abcdef" });
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(entry).not.toHaveAttribute("aria-current");
-    // The window shows the same view, with its state as it was.
+    act(() => failed?.({ reason: "no window system" }));
+    expect(toast.error).toHaveBeenCalledWith("Could not hide the window.", { description: "no window system" });
     expect(screen.getByRole("button", { name: "Board" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("button", { name: "Clicked 1" })).toBeVisible();
-  });
+    expect(screen.getByRole("button", { name: "Clicked 0" })).toBeVisible();
 
-  it("is also available while another view is shown, and leaves that view selected", async () => {
-    const user = userEvent.setup();
-    renderWindow();
-    await user.click(screen.getByRole("button", { name: "Settings" }));
-    await user.click(screen.getByRole("button", { name: "Hide" }));
-    expect(screen.getByRole("button", { name: "Settings" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getAllByRole("button", { current: "page" })).toHaveLength(1);
-  });
-
-  it("gives its name as tooltip when the sidebar shows icons only", async () => {
-    renderWindow();
-    act(() => setViewportWidth(1023));
-    const user = userEvent.setup();
-    await user.hover(screen.getByRole("button", { name: "Hide" }));
-    expect(await screen.findByRole("tooltip")).toHaveTextContent("Hide");
-    act(() => setViewportWidth(1024));
-  });
-
-  it("tells the reason in an error toast when the window cannot be sent to the background", async () => {
-    vi.mocked(call).mockImplementation(((name: string) =>
-      name === "send_to_background" ? Promise.reject({ code: "internal", message: "the window is gone" }) : Promise.resolve([])) as never);
-    renderWindow();
-    await userEvent.setup().click(screen.getByRole("button", { name: "Hide" }));
-    expect(toast.error).toHaveBeenCalledWith("Could not hide the window.", { description: "the window is gone" });
-    vi.mocked(call).mockImplementation((() => Promise.resolve([])) as never);
+    vi.mocked(on).mockImplementation((() => Promise.resolve(() => {})) as never);
   });
 });

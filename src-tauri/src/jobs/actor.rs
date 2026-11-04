@@ -301,7 +301,7 @@ impl Actor {
                     self.jobs.host.report_omp_missing(Some(reason.clone()));
                 }
                 self.fail_opening(
-                    &weaver_core::omp::Failure::NotStarted.reason(),
+                    &weaver_core::process::timed::Failure::NotStarted.reason(),
                     Some(reason),
                 );
                 return;

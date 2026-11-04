@@ -30,7 +30,7 @@ pub const WEAVER_READ_ONLY: &str = ".weaver is written by Weaver: read-only here
 pub const AGENT_LOCK: &str = "The agent is editing this file.";
 
 /// The checked parts of `rel`, and whether they name `.weaver/` or something inside it.
-fn checked(rel: &str) -> Result<(Vec<&str>, bool), PathRefusal> {
+pub(super) fn checked(rel: &str) -> Result<(Vec<&str>, bool), PathRefusal> {
     let parts = path::parts(rel)?;
     let in_weaver = parts
         .first()
@@ -44,7 +44,7 @@ fn normal(parts: &[&str]) -> String {
 }
 
 /// The canonical folder `rel` of the project, which must be a folder.
-fn folder_of(root: &Path, rel: &str) -> Result<PathBuf, Refusal> {
+pub(super) fn folder_of(root: &Path, rel: &str) -> Result<PathBuf, Refusal> {
     let folder = path::resolve(root, rel)?;
     if folder.is_dir() {
         Ok(folder)
@@ -71,8 +71,9 @@ fn entry_in(root: &Path, parent_rel: &str, name: &str) -> Result<(PathBuf, fs::M
     }
 }
 
-/// Whether two existing paths are the same entry (a case-only rename names the entry it renames).
-fn same_entry(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+/// Whether two existing paths are the same entry (a case-only rename names the entry it renames;
+/// the assets' rename asks the same).
+pub(crate) fn same_entry(a: &fs::Metadata, b: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;

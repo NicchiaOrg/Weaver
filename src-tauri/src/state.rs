@@ -5,12 +5,15 @@ use std::sync::{Arc, Mutex};
 use weaver_core::paths::AppDirs;
 
 use crate::agent_work::AgentWorkSlot;
+use crate::assets::AssetsService;
 use crate::file_lock::FileLockService;
 use crate::file_tabs::events::FileEvents;
 use crate::file_tabs::watch::NotifyTabWatch;
 use crate::file_tabs::FileTabs;
 use crate::file_view::{FileViewService, TabsAndLocks};
 use crate::mutations::MutationQueues;
+use crate::notes::changes::NotesChanges;
+use crate::notes::NotesService;
 use crate::pictures::Pictures;
 use crate::proposals::ProposalJobsSlot;
 use crate::server::Server;
@@ -44,6 +47,16 @@ pub struct AppState {
     /// The tree of each window's File view: its listings and watches, in memory only (see
     /// [`crate::file_view`]).
     pub file_view: Arc<FileViewService>,
+    /// The assets of each open project: name and size of every one, in memory only, and the
+    /// actions of the Assets view (see [`crate::assets`]).
+    pub assets: Arc<AssetsService>,
+    /// The events of the notes of each open project: what the project's watcher tells the Notes
+    /// view (see [`crate::notes::changes`]).
+    pub notes_changes: Arc<NotesChanges>,
+    /// The notes sheet of each open project: the hash of the last sheet written or read and the
+    /// writes in flight, in memory only, and the commands of the Notes view (see
+    /// [`crate::notes`]).
+    pub notes: Arc<NotesService>,
     /// The CLI socket server; `None` until it started, and after shutdown.
     pub server: Mutex<Option<Server>>,
 }
@@ -72,6 +85,9 @@ impl AppState {
             file_locks,
             file_tabs,
             file_view,
+            assets: Arc::new(AssetsService::new()),
+            notes_changes: Arc::new(NotesChanges::new()),
+            notes: Arc::new(NotesService::new()),
             dirs,
             server: Mutex::new(None),
         }

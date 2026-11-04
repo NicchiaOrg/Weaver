@@ -77,3 +77,18 @@ description: "Use when building anything that must stay fast, reliable, logged, 
   - the installer command per system and its marker: a code, `0`, no marker, a stale nonce, forgotten at the next install and when omp is found;
   - each certificate marker and HTTP form and code, other codes, bare numbers, certificate precedence, the explanation with the setting on and off, and that no error text names a product;
   - the switch, status line, `Refresh` and banners in Vitest with their keyboard paths and accessible names.
+
+## solo-mode
+
+- **Reliability:** Weaver never changes a line of the exclusions file outside its own block of this working copy, never touches git's index, and never leaves a block behind a failed initialisation.
+- **Performance:** Solo mode starts git only when the project opens, when Solo mode changes, when the Settings view is shown and, for the File view, as part of its one `git check-ignore` per listed folder; never on the UI or IPC thread, never more than 10 s per call.
+- **Tests,** against temporary git repositories with real git:
+  - the block for both modes at the repository's root and in a subfolder, a prefix with special characters, a linked worktree writing into the main repository's file;
+  - other lines kept byte for byte, with and without a final newline; writing the same block twice leaving the file untouched; two working copies' blocks independent; duplicate and broken blocks; removal leaving the rest;
+  - git missing (an empty PATH), a folder outside a repository and a git call over the limit (injected limit);
+  - initialisation with each mode: the block written before any other file, refused outside git with nothing created, a later failure removing the block;
+  - the opening repair with an empty Model and with a Model, silent and never changing the opening check's outcome; `.weaver` vanishing removing the block;
+  - the tracked files listed for each mode, team files in `.agents/skills/` left out in `files` mode;
+  - the File view listing what a Solo mode block ignores and still leaving out what other rules ignore;
+  - the CLI `solo` field of `project new`, `project edit` and `project show`;
+  - the control, notes, warnings and list in Settings and Get Started in Vitest, with their keyboard paths and accessible names.

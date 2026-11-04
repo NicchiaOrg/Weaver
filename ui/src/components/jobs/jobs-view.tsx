@@ -51,6 +51,7 @@ import {
 import { AgentState, SubAgentLine, SubAgentList, SubAgentNavProvider, type SubAgentNav } from "@/components/sub-agents/sub-agent-ui";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { TaggedTextarea } from "@/components/assets/tagged-textarea";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { VIEW_HEADER_CLASS, ViewHeader, viewTitleId } from "@/components/view-header";
@@ -353,7 +354,7 @@ function MessageBox({ projectId, job }: { projectId: string; job: JobRow }) {
   };
   return (
     <div className="flex items-end gap-2 border-t p-3">
-      <Textarea
+      <TaggedTextarea
         aria-label="Message the agent"
         placeholder="Message the agent…"
         rows={1}

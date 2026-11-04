@@ -11,6 +11,12 @@ description: "Use when changing CI workflows, packaging, release artifacts, upda
 - The version lives in `src-tauri/tauri.conf.json` (`version`). `src-tauri/Cargo.toml`, `crates/core/Cargo.toml`, `crates/cli/Cargo.toml` and `ui/package.json` carry the same version; `ci` fails when they differ.
 - Toolchains are pinned: Rust in `rust-toolchain.toml` (exact version, with `rustfmt` and `clippy`), Node in `.nvmrc` (exact version) and `ui/package.json` `engines`, pnpm through `packageManager`. Dependencies install from the committed lockfiles without updating them (`cargo --locked`, `pnpm install --frozen-lockfile`).
 
+### App icon
+
+- Weaver has one app icon, the woven "W" logo: a cream rounded square holding a "W" woven from flat pastel ribbons (salmon pink, lavender, peach, sage green) that pass over and under horizontal ribbons. It is the icon of the bundles on every platform, of the macOS Dock, of the Windows and Linux taskbar, of the tray icon (`requirements/tech#window`), of the system notifications (`requirements/ui#notification`) and of the drag-out preview of assets (`requirements/tech#asset-view`). The interface itself never shows it: the welcome window keeps its lucide mark.
+- Its master is `src-tauri/icons/source.png`, 1024×1024 px with an alpha channel: the rounded square is 896×896 px, centred, and everything outside it is fully transparent (64 px per side), with no white left around the shape. There is no other master: no vector source is kept.
+- Every file listed in `bundle.icon` of `src-tauri/tauri.conf.json` (`32x32.png`, `128x128.png`, `128x128@2x.png`, `icon.icns`, `icon.ico`) and `src-tauri/icons/icon.png` is generated from the master by plain downscaling (`tauri icon`), with no separate drawing for small sizes. Outputs the app does not use (Windows Store, Android, iOS) are not kept in the repository.
+
 ### Workflow `ci`
 
 - File `.github/workflows/ci.yml`. Triggers: push to `dev`, pull requests to `dev` or `main`, push to `main`.

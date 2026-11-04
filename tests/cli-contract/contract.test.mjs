@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import path from "node:path";
 import { after, describe, test } from "node:test";
 
-import { WEAVER_CLI, cleanup, entries, hermeticEnvironment, makeFolder, newProject, run, temporaryFolder } from "./support.mjs";
+import { WEAVER_CLI, cleanup, entries, git, gitRepository, hermeticEnvironment, makeFolder, newProject, run, temporaryFolder } from "./support.mjs";
 
 after(cleanup);
 
@@ -734,6 +734,139 @@ describe("project new", { skip: SKIP }, () => {
     assert.equal(forced.status, 0, `${forced.stdout}${forced.stderr}`);
     assert.ok(existsSync(path.join(root, ".weaver")));
     assert.notEqual(readFileSync(path.join(root, ".omp", "WATCHDOG.yml"), "utf8"), "mine");
+  });
+});
+
+describe("the solo field of project new, project edit and project show", { skip: SKIP }, () => {
+  const excludeOf = (root) => readFileSync(path.join(root, ".git", "info", "exclude"), "utf8");
+
+  test("--help of project new and project edit names the field and its three values", async () => {
+    for (const verb of ["new", "edit"]) {
+      const result = await exec(["project", verb, "--help"], { cwd: emptyFolder() });
+      assert.equal(result.status, 0, result.stderr);
+      for (const word of ["solo", "off", "folders", "files"]) assert.ok(result.stdout.includes(word), `${verb}: ${word}\n${result.stdout}`);
+      const json = await exec(["project", verb, "--help", "--json"], { cwd: emptyFolder() });
+      const schema = parseJson(json.stdout);
+      assert.deepEqual(schema.input.properties.solo.enum, ["off", "folders", "files"], `${verb}: input`);
+      assert.ok(schema.output.properties.solo, `${verb}: output`);
+    }
+    const show = parseJson((await exec(["project", "show", "--help", "--json"], { cwd: emptyFolder() })).stdout);
+    assert.ok(show.output.properties.solo, "project show: output");
+  });
+
+  test("another value is exit 2 with the field path, and nothing is created or changed", async () => {
+    const root = gitRepository();
+    const created = await exec(["project", "new", "--input", '{"solo":"all"}', "--root", root], { cwd: root });
+    assert.equal(created.status, 2, `${created.stdout}${created.stderr}`);
+    assert.ok(created.stderr.includes("solo"), created.stderr);
+    assert.ok(!existsSync(path.join(root, ".weaver")));
+
+    const project = await newProject(environment);
+    const before = snapshot(project);
+    for (const input of ['{"solo":"all"}', '{"solo":true}', '{"solo":"Folders"}']) {
+      const result = await exec(["project", "edit", "--input", input, "--root", project], { cwd: project });
+      assert.equal(result.status, 2, `${input}: ${result.stdout}${result.stderr}`);
+      assert.ok(result.stderr.includes("solo"), result.stderr);
+    }
+    assert.deepEqual(snapshot(project), before);
+  });
+
+  for (const [mode, line] of [
+    ["folders", "/.omp/"],
+    ["files", "/.omp/WATCHDOG.yml"],
+  ]) {
+    test(`project new with solo ${mode} in a repository: exit 0, the block is written, Markdown and --json say so`, async () => {
+      const root = gitRepository();
+      const result = await exec(["project", "new", "--input", JSON.stringify({ solo: mode }), "--root", root, "--json"], { cwd: root });
+      assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+      assert.deepEqual(parseJson(result.stdout).solo, { mode, tracked: [] });
+      assert.ok(excludeOf(root).includes(`\n${line}\n`), excludeOf(root));
+      assert.equal(readFileSync(path.join(root, ".weaver", "solo", "solo.json"), "utf8"), `{"mode": "${mode}"}\n`);
+      assert.equal(git(root, ["status", "--porcelain"]), "", "git sees only the code");
+
+      const other = gitRepository();
+      const text = await exec(["project", "new", "--input", JSON.stringify({ solo: mode }), "--root", other], { cwd: other });
+      assert.equal(text.status, 0, `${text.stdout}${text.stderr}`);
+      assert.match(text.stdout, /## Solo mode/);
+    });
+  }
+
+  test("project new with solo off, or with no solo, leaves git alone and prints solo off", async () => {
+    for (const input of ["{}", '{"solo":"off"}']) {
+      const root = gitRepository();
+      const before = excludeOf(root);
+      const result = await exec(["project", "new", "--input", input, "--root", root, "--json"], { cwd: root });
+      assert.equal(result.status, 0, `${input}: ${result.stdout}${result.stderr}`);
+      assert.deepEqual(parseJson(result.stdout).solo, { mode: "off", tracked: [] });
+      assert.equal(excludeOf(root), before);
+      assert.ok(!existsSync(path.join(root, ".weaver", "solo")));
+    }
+  });
+
+  test("project new with solo outside a git repository is exit 1 with the reason and creates nothing", async () => {
+    const root = emptyFolder();
+    const result = await exec(["project", "new", "--input", '{"solo":"folders"}', "--root", root], { cwd: root });
+    assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /this folder is not in a git repository/);
+    assert.deepEqual(entries(root), []);
+  });
+
+  test("project edit with solo changes only Solo mode and prints it; project show prints the same", async () => {
+    const root = gitRepository();
+    const created = await exec(["project", "new", "--input", "{}", "--root", root], { cwd: root });
+    assert.equal(created.status, 0, `${created.stdout}${created.stderr}`);
+    git(root, ["add", "-f", ".weaver/model/system.md"]);
+    const skills = readFileSync(path.join(root, ".agents", "skills", "weaver-design", "SKILL.md"), "utf8");
+
+    const on = await exec(["project", "edit", "--input", '{"solo":"files"}', "--root", root, "--json"], { cwd: root });
+    assert.equal(on.status, 0, `${on.stdout}${on.stderr}`);
+    assert.deepEqual(parseJson(on.stdout), { solo: { mode: "files", tracked: [".weaver/model/system.md"] } });
+    assert.ok(excludeOf(root).includes("\n/.omp/WATCHDOG.yml\n"));
+    assert.equal(readFileSync(path.join(root, ".agents", "skills", "weaver-design", "SKILL.md"), "utf8"), skills);
+
+    const text = await exec(["project", "edit", "--input", '{"solo":"files"}', "--root", root], { cwd: root });
+    assert.equal(text.status, 0, `${text.stdout}${text.stderr}`);
+    assert.match(text.stdout, /Git still tracks 1 of Weaver's files/);
+    assert.ok(text.stdout.includes(".weaver/model/system.md"));
+
+    const shown = await exec(["project", "show", "--root", root, "--json"], { cwd: root });
+    assert.equal(shown.status, 0, `${shown.stdout}${shown.stderr}`);
+    assert.deepEqual(parseJson(shown.stdout).solo, { mode: "files", tracked: [".weaver/model/system.md"] });
+
+    const folders = await exec(["project", "edit", "--input", '{"solo":"folders"}', "--root", root, "--json"], { cwd: root });
+    assert.equal(parseJson(folders.stdout).solo.mode, "folders");
+    const off = await exec(["project", "edit", "--input", '{"solo":"off"}', "--root", root, "--json"], { cwd: root });
+    assert.equal(off.status, 0, `${off.stdout}${off.stderr}`);
+    assert.deepEqual(parseJson(off.stdout), { solo: { mode: "off", tracked: [] } });
+    assert.ok(!excludeOf(root).includes("weaver solo mode"));
+    assert.ok(!existsSync(path.join(root, ".weaver", "solo")));
+  });
+
+  test("project edit with solo that cannot change is exit 1 with the reason and changes nothing", async () => {
+    const root = await newProject(environment);
+    const before = snapshot(root);
+    const result = await exec(["project", "edit", "--input", '{"solo":"folders"}', "--root", root], { cwd: root });
+    assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /Could not change Solo mode: this folder is not in a git repository/);
+    assert.deepEqual(snapshot(root), before);
+  });
+
+  test("project show says why Solo mode cannot be changed, and why its block is not in place, and repairs nothing", async () => {
+    const plain = await newProject(environment);
+    const shown = parseJson((await exec(["project", "show", "--root", plain, "--json"], { cwd: plain })).stdout);
+    assert.deepEqual(shown.solo, { mode: "off", unavailable: "this folder is not in a git repository", tracked: [] });
+
+    const root = gitRepository();
+    await exec(["project", "new", "--input", '{"solo":"folders"}', "--root", root], { cwd: root });
+    const exclude = path.join(root, ".git", "info", "exclude");
+    writeFileSync(exclude, excludeOf(root).replace("# >>> weaver solo mode", "# nothing"));
+    const broken = excludeOf(root);
+    const result = await exec(["project", "show", "--root", root, "--json"], { cwd: root });
+    const solo = parseJson(result.stdout).solo;
+    assert.equal(solo.mode, "folders");
+    assert.equal(typeof solo.problem, "string");
+    assert.equal(solo.unavailable, undefined);
+    assert.equal(excludeOf(root), broken);
   });
 });
 

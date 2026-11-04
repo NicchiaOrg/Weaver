@@ -1,5 +1,6 @@
 //! The decisions of the developer on an Open Drift: `developer.FIX_DRIFT_CODE`,
-//! `developer.ACCEPT_DRIFT_PROPOSAL` and `developer.DISMISS_DRIFT`.
+//! `developer.ACCEPT_DRIFT_PROPOSAL`, `developer.DISMISS_DRIFT` and `developer.REFINE_DRIFT_PROPOSAL`
+//! (which decides nothing).
 //!
 //! Every `plan_*` function is pure and returns the [`ChangeSet`] of the decision or a [`Refusal`]
 //! naming every reason. [`decide`] runs the plan under the project lock through
@@ -13,16 +14,30 @@
 //!   to To do; the attached Proposal is discarded (Draft) or rejected (Open).
 //! * Accept the Proposal → `Proposal accepted`: only with an attached Proposal that could be
 //!   approved; approving it is the whole decision.
-//! * Dismiss → `Dismissed`, refused while the Drift is in a resolution being written or waiting for
-//!   a decision; the attached Proposal is discarded; the text fingerprint is recorded.
+//! * Dismiss → `Dismissed`, refused while the Drift is in a resolution being written, refined or
+//!   waiting for a decision, or while its attached Proposal is being refined; the attached Proposal
+//!   is discarded; the text fingerprint is recorded.
+//! * Refine the Proposal → the Drift stays `Open`: only the stale attached Proposal (Open), or one
+//!   a refinement left half-way (Draft), becomes `Refining`, as `Approve` on a Proposal does
+//!   ([`transitions::plan_approve`] with [`Decider::Drift`]); the caller starts the refinement job
+//!   ([`Decided::refine`]). The Drift is not written.
+//!
+//! * Discard the Proposal → the Drift stays `Open`: only an attached Draft a refinement left
+//!   half-way is discarded, through [`transitions::plan_discard`] with [`Decider::Drift`]. The
+//!   Drift is not written.
+//!
+//! Fixing the code, accepting and dismissing are refused while the attached Proposal is Refining.
 
 use std::path::Path;
 
-use crate::project::board::{AgentFacts, Refused, ResolutionRow, REASON_AGENT_FINISHING};
+use crate::project::board::{
+    AgentFacts, Refused, ResolutionRow, REASON_AGENT_FINISHING, REASON_BEING_REFINED,
+};
 use crate::project::cards::{Card, CardKind};
 use crate::project::changes::{self, Change, ChangeSet, MutationError};
 use crate::project::frontmatter;
 use crate::project::image::ProjectImage;
+use crate::project::proposal::analysis;
 use crate::project::proposal::data::{self, set, Status};
 use crate::project::proposal::files::{self, Folders};
 use crate::project::proposal::resolution;
@@ -46,6 +61,10 @@ pub enum Decision {
     AcceptProposal,
     /// `developer.DISMISS_DRIFT`.
     Dismiss,
+    /// `developer.REFINE_DRIFT_PROPOSAL`: adapts the attached Proposal and decides nothing.
+    RefineProposal,
+    /// Discards the attached Draft a refinement left half-way; the Drift stays open.
+    DiscardProposal,
 }
 
 impl Decision {
@@ -55,6 +74,8 @@ impl Decision {
             Decision::FixCode { .. } => "fix the code of",
             Decision::AcceptProposal => "accept the Proposal of",
             Decision::Dismiss => "dismiss",
+            Decision::RefineProposal => "refine the Proposal of",
+            Decision::DiscardProposal => "discard the Proposal of",
         }
     }
 }
@@ -72,6 +93,8 @@ pub struct Decided {
     /// The Requirement skills generated again after the decision was written, when
     /// `requirements_changed`: the report, or why they could not be written (the decision stands).
     pub skills: Option<Result<SyncReport, String>>,
+    /// The attached Proposal that is now Refining: the caller starts a refinement job on it.
+    pub refine: Option<String>,
 }
 
 fn refuse<T>(reason: impl Into<String>) -> Result<T, Refusal> {
@@ -117,12 +140,21 @@ pub fn plan_decision(
     if facts.is_finishing(drift) {
         return refuse(REASON_AGENT_FINISHING);
     }
+    if matches!(
+        decision,
+        Decision::FixCode { .. } | Decision::AcceptProposal
+    ) && reasons::attached_being_refined(image, drift)
+    {
+        return refuse(REASON_BEING_REFINED);
+    }
     match decision {
         Decision::FixCode { option, note } => {
             plan_fix(image, drift, *option, note.as_deref(), now, rng)
         }
         Decision::Dismiss => plan_dismiss(image, facts, drift, now, rng),
         Decision::AcceptProposal => plan_accept(image, folders, numbers, facts, drift, now, rng),
+        Decision::RefineProposal => plan_refine(image, folders, numbers, facts, drift, now, rng),
+        Decision::DiscardProposal => plan_discard_attached(image, numbers, facts, drift),
     }
 }
 
@@ -220,11 +252,10 @@ fn plan_accept(
     else {
         return refuse("the Drift has no attached Proposal");
     };
-    if !matches!(
-        data::status_of(proposal),
-        Some(Status::Draft | Status::Open)
-    ) {
-        return refuse("its attached Proposal is no longer in Draft or Open");
+    match data::status_of(proposal) {
+        Some(Status::Refining) => return refuse(REASON_BEING_REFINED),
+        Some(Status::Draft | Status::Open) => {}
+        _ => return refuse("its attached Proposal is no longer in Draft or Open"),
     }
     let gate = transitions::gate_of(facts, proposal);
     let approval = transitions::plan_approve(
@@ -257,9 +288,96 @@ fn plan_accept(
     })
 }
 
-/// `Fix the code`, `Accept Proposal` and `Dismiss Drift` under the project lock: reads the project
-/// and the Proposal folders again, plans, writes the whole change or nothing. Returns the image
-/// after it and what the decision did.
+/// `Discard` on the attached Draft a refinement left half-way, decided by the Drift
+/// (`plan_discard` with [`Decider::Drift`]): the Proposal is discarded, the Drift stays open and
+/// is not written.
+fn plan_discard_attached(
+    image: &ProjectImage,
+    numbers: &ShortNumbers,
+    facts: &AgentFacts,
+    drift: &Card,
+) -> Result<Decided, Refusal> {
+    let Some(proposal) = drift
+        .str_key("proposal")
+        .and_then(|id| image.card(CardKind::Proposal, id))
+    else {
+        return refuse("the Drift has no attached Proposal");
+    };
+    match data::status_of(proposal) {
+        Some(Status::Refining) => return refuse(REASON_BEING_REFINED),
+        Some(Status::Draft) if data::is_interrupted(proposal) => {}
+        _ => return refuse("its attached Proposal is not a Draft left half-way by a refinement"),
+    }
+    let changes = transitions::plan_discard(
+        image,
+        numbers,
+        &proposal.id,
+        transitions::gate_of(facts, proposal),
+        Decider::Drift,
+    )?;
+    Ok(Decided {
+        changes,
+        status: "open",
+        ..Decided::default()
+    })
+}
+
+/// `Refine` on the attached Proposal: it becomes Refining (a stale Open one, or a Draft a
+/// refinement left half-way) and a refinement job adapts it. The Drift is not written.
+fn plan_refine(
+    image: &ProjectImage,
+    folders: &Folders,
+    numbers: &ShortNumbers,
+    facts: &AgentFacts,
+    drift: &Card,
+    now: &str,
+    rng: &mut dyn RandomSource,
+) -> Result<Decided, Refusal> {
+    let Some(proposal) = drift
+        .str_key("proposal")
+        .and_then(|id| image.card(CardKind::Proposal, id))
+    else {
+        return refuse("the Drift has no attached Proposal");
+    };
+    match data::status_of(proposal) {
+        Some(Status::Refining) => return refuse(REASON_BEING_REFINED),
+        Some(Status::Open) => {
+            let stale = analysis::analyse(image, folders, numbers, &proposal.id)
+                .is_some_and(|analysed| !analysed.stale.is_empty());
+            if !stale {
+                return refuse("its attached Proposal is not stale");
+            }
+        }
+        Some(Status::Draft) if data::is_interrupted(proposal) => {}
+        Some(Status::Draft) => {
+            return refuse("its attached Proposal is still being written by the agent")
+        }
+        _ => return refuse("its attached Proposal is no longer in Draft or Open"),
+    }
+    let approval = transitions::plan_approve(
+        image,
+        folders,
+        numbers,
+        &proposal.id,
+        transitions::gate_of(facts, proposal),
+        now,
+        rng,
+        Decider::Drift,
+    )?;
+    match approval {
+        Approval::Refine(changes) | Approval::Continue(changes) => Ok(Decided {
+            changes,
+            status: "open",
+            refine: Some(proposal.id.clone()),
+            ..Decided::default()
+        }),
+        Approval::Approve(_) => refuse("its attached Proposal needs no refinement"),
+    }
+}
+
+/// `Fix the code`, `Accept Proposal`, `Dismiss Drift` and `Refine` under the project lock: reads
+/// the project and the Proposal folders again, plans, writes the whole change or nothing. Returns
+/// the image after it and what the decision did.
 pub fn decide(
     project_root: &Path,
     facts: &AgentFacts,
@@ -267,6 +385,20 @@ pub fn decide(
     decision: &Decision,
     now: &str,
     rng: &mut dyn RandomSource,
+) -> Result<(ProjectImage, Decided), MutationError<Refused>> {
+    decide_with(project_root, facts, id, decision, now, rng, &|| Ok(()))
+}
+
+/// [`decide`] for the app: a `Refine` first asks `jobs` whether a refinement job can start, and is
+/// refused, writing nothing, when it cannot.
+pub fn decide_with(
+    project_root: &Path,
+    facts: &AgentFacts,
+    id: &str,
+    decision: &Decision,
+    now: &str,
+    rng: &mut dyn RandomSource,
+    jobs: transitions::JobCheck,
 ) -> Result<(ProjectImage, Decided), MutationError<Refused>> {
     let (image, mut decided) = changes::mutate(
         project_root,
@@ -276,14 +408,18 @@ pub fn decide(
             let name = image
                 .card(CardKind::Drift, id)
                 .map_or_else(|| id.to_owned(), |d| name_of(&numbers, d));
-            let decided = plan_decision(image, &folders, &numbers, facts, id, decision, now, rng)
-                .map_err(|refusal| Refused {
+            let refused = |reasons: Vec<String>| Refused {
                 notice: format!(
                     "Could not {} {name}: {}.",
                     decision.verb(),
-                    refusal.0.join("; ")
+                    reasons.join("; ")
                 ),
-            })?;
+            };
+            let decided = plan_decision(image, &folders, &numbers, facts, id, decision, now, rng)
+                .map_err(|refusal| refused(refusal.0))?;
+            if decided.refine.is_some() {
+                jobs().map_err(|why| refused(vec![why]))?;
+            }
             Ok((decided.changes.clone(), decided))
         },
         |_| Ok(()),

@@ -28,6 +28,7 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use ts_rs::TS;
+use weaver_core::assets::tags;
 use weaver_core::job_instruction::Job;
 use weaver_core::project::image::ProjectImage;
 use weaver_core::project::requests::image::{base64_decode, base64_encode, ImageError};
@@ -72,6 +73,11 @@ pub trait RequestJobs: Send + Sync {
     fn start(&self, ctx: &Ctx, job: &Job) -> Result<StartedJob, String>;
     /// The name and life of a job; `None` when the jobs do not know it.
     fn life(&self, job_id: &str) -> Option<(String, JobLife)>;
+    /// The names of the assets of a project now: the tags of a request are recognised against
+    /// them when it is sent. None in the tests of the requests.
+    fn asset_names(&self, _project_id: &str) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// The jobs of the agent.
@@ -80,8 +86,8 @@ struct AppJobs(Arc<Jobs>);
 impl RequestJobs for AppJobs {
     fn start(&self, ctx: &Ctx, job: &Job) -> Result<StartedJob, String> {
         let started = match job {
-            Job::Setup { request } => self.0.start_setup(ctx, request),
-            Job::Design { request } => self.0.start_design(ctx, request),
+            Job::Setup { request, assets } => self.0.start_setup(ctx, request, assets.clone()),
+            Job::Design { request, assets } => self.0.start_design(ctx, request, assets.clone()),
             other => return Err(format!("{other:?} is not a job a request starts")),
         };
         let id = started.map_err(|refusal| format!("Could not send the request: {refusal}."))?;
@@ -100,6 +106,10 @@ impl RequestJobs for AppJobs {
                 },
             )
         })
+    }
+
+    fn asset_names(&self, project_id: &str) -> Vec<String> {
+        self.0.asset_names(project_id)
     }
 }
 
@@ -317,8 +327,13 @@ impl RequestsService {
     ) -> Result<Option<String>, AppError> {
         let store = RequestStore::new(root);
         let image = ProjectImage::load(root);
+        // The tags are recognised against the assets that exist now, in the one read of the
+        // request; the request file stays as it is written.
+        let names = self.jobs().asset_names(project_id);
         match store
-            .plan_send(request, model_is_empty(image.model()))
+            .plan_send_tagged(request, model_is_empty(image.model()), &|text| {
+                tags::tagged(text, &names)
+            })
             .map_err(failed)?
         {
             SendPlan::Nothing => Ok(None),
@@ -735,6 +750,8 @@ mod tests {
         started: Mutex<Vec<Job>>,
         finished: Mutex<HashSet<String>>,
         refuse: Mutex<Option<String>>,
+        /// The assets of the project.
+        assets: Mutex<Vec<String>>,
     }
 
     impl RequestJobs for FakeJobs {
@@ -748,6 +765,10 @@ mod tests {
                 id: format!("job{:05}", started.len()),
                 name: "Design".to_owned(),
             })
+        }
+
+        fn asset_names(&self, _project_id: &str) -> Vec<String> {
+            self.assets.lock().unwrap().clone()
         }
 
         fn life(&self, job_id: &str) -> Option<(String, JobLife)> {
@@ -812,7 +833,8 @@ mod tests {
         assert_eq!(
             *f.jobs.started.lock().unwrap(),
             [Job::Setup {
-                request: id.clone()
+                request: id.clone(),
+                assets: vec![]
             }]
         );
         let view = f.service.view(P, f.project.path(), &id).unwrap();
@@ -836,8 +858,31 @@ mod tests {
             .unwrap();
         assert_eq!(
             *f.jobs.started.lock().unwrap(),
-            [Job::Design { request: id }]
+            [Job::Design {
+                request: id,
+                assets: vec![]
+            }]
         );
+    }
+
+    #[test]
+    fn the_assets_a_request_tags_when_it_is_sent_go_to_the_job_and_the_file_stays_as_written() {
+        let f = fixture(true);
+        *f.jobs.assets.lock().unwrap() = vec!["logo.png".to_owned(), "my notes.txt".to_owned()];
+        let text = "Use @my notes.txt and @logo.png, also @missing.png and @LOGO.PNG";
+        let id = written(&f, text);
+        f.service
+            .send_locked(P, f.project.path(), &id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            *f.jobs.started.lock().unwrap(),
+            [Job::Design {
+                request: id.clone(),
+                assets: vec!["my notes.txt".to_owned(), "logo.png".to_owned()]
+            }]
+        );
+        assert_eq!(RequestStore::new(f.project.path()).read(&id).unwrap(), text);
     }
 
     #[test]

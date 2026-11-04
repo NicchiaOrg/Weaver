@@ -32,9 +32,9 @@ question      new
 
 ## project
 
-- `project new {force?}`: refused, creating nothing, when `.weaver/` exists, or when an agent file to install differs (all listed) unless `force: true`.
-- `project edit {}`: Update skills; prints `changed`, `areas` and `generated`, the structured result the app shows too.
-- `project show {}`: the Board: `toDecide` (open Proposals and Drifts), `inWriting` (Drafts with their job), `todo`, `doing` (holder and blockers).
+- `project new {force?, solo?}`: `solo` is `off` (default), `folders` or `files`. Refused, creating nothing, when `.weaver/` exists, when an agent file to install differs (all listed) unless `force: true`, or when `solo` is not `off` and Solo mode cannot be turned on (exit 1 with the reason). Prints `solo` too.
+- `project edit {solo?}`: with `solo`, changes only Solo mode and prints `solo`; without, Update skills: prints `changed`, `areas` and `generated`, the structured result the app shows too.
+- `project show {}`: the Board: `toDecide` (open Proposals and Drifts), `inWriting` (Drafts with their job), `todo`, `doing` (holder and blockers); and `solo` (`requirements/tech#solo-mode`).
 
 ## proposal
 
@@ -44,8 +44,8 @@ question      new
 - `edit <id> {label?, edit?, delete?, drifts?, removeDrifts?, images?, removeImages?, rebase?}`: every call, even without input, sends an Open Proposal back to Draft and says so.
   - `edit`: paths (`model/…`, `requirements/<area>/<fragment>.md`, `specs.yaml`, `tasks/<slug>.md`) made editable, copying the current content and recording `base` the first time; prints the path to write for each. A new Task gets its identity here; Task paths are refused in `import` and `resolution`.
   - `delete` is refused for a path the Proposal holds; `drifts`/`removeDrifts` only in a resolution; `images` `[{task, path}]` copies into `.weaver/task-images/<task>/`, `removeImages` `[{task, name}]`.
-  - `rebase: true` records `base` again and sets `refining`; only a `change` not attached to a Drift.
-- `move <id> open` hands over and prints the warnings and the `show` text. `approved|rejected|discarded` are decisions; `rejected` takes `{feedback?, rework?}`. `rework: true`, and approving a stale `change`, need the running app.
+  - `rebase: true`, any kind, attached to a Drift or not, drops broken `requires` and, in a resolution, the rows of Drifts no longer open, then records `base` again and sets `refining` (`requirements/rules#proposal`); it prints what it dropped.
+- `move <id> open` hands over and prints the warnings and the `show` text. `approved|rejected|discarded` are decisions; `rejected` takes `{feedback?, rework?}`. `rework: true`, and approving a stale Proposal, need the running app.
 
 ## task
 

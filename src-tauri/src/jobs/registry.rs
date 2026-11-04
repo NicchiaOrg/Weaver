@@ -14,6 +14,7 @@ use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, Weak};
 
 use tokio::sync::{mpsc, watch};
+use weaver_core::assets::tags;
 use weaver_core::job_instruction;
 use weaver_core::jobs::admission::StartPlan;
 use weaver_core::jobs::machine::{Effect, Event, JobMachine, MessageId, PermissionEnd, RequestId};
@@ -496,6 +497,11 @@ impl Jobs {
         ghosts.into_iter().map(|(_, ghost)| ghost).collect()
     }
 
+    /// The names of the assets of a project now (`requirements/tech#assets`).
+    pub fn asset_names(&self, project_id: &str) -> Vec<String> {
+        self.host.asset_names(project_id)
+    }
+
     pub fn info(&self, job_id: &str) -> Option<JobInfo> {
         self.lock().jobs.get(job_id).map(Live::info)
     }
@@ -974,6 +980,8 @@ impl Jobs {
         if text.is_empty() {
             return Err("a message cannot be empty".to_owned());
         }
+        // The assets the message tags are the ones that exist now, never recognised again later.
+        let tagged = tags::tagged(text, &self.host.asset_names(project_id));
         let outcome = {
             let mut inner = self.lock();
             let live = inner
@@ -986,7 +994,9 @@ impl Jobs {
             }
             let message = live.next_message;
             live.next_message += 1;
-            live.texts.insert(message, text.to_owned());
+            // What goes to omp has the block of tagged assets; the conversation shows what the
+            // developer wrote.
+            live.texts.insert(message, tags::with_block(text, &tagged));
             live.conversation
                 .developer_message(message, text, Delivery::Queued);
             self.dispatch_in(&mut inner, job_id, Event::SendMessage(message))

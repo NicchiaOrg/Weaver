@@ -22,6 +22,7 @@ import {
   lockReleased,
   lockTaken,
   newTab,
+  readAsImageOrBinary,
   readFoundGone,
   readFromDisk,
   saved,
@@ -88,6 +89,16 @@ export interface FileTabsValue {
   attachView: (view: EditorView | null) => void;
   /** The 1-based line of the cursor of a tab. */
   cursorLine: (id: string) => number | null;
+  /** The text a text tab holds now, unsaved changes included. */
+  textOf: (id: string) => string;
+  /** `Code` or `Preview` of an SVG tab. */
+  setSvgView: (id: string, view: "preview" | "code") => void;
+  /** Switches an image between fitted to the panel and its real size. */
+  toggleActualSize: (id: string) => void;
+  /** The image of a tab loaded with this size in pixels (`null`: nothing is drawn). */
+  imageDrawn: (id: string, pixels: { width: number; height: number } | null) => void;
+  /** The image of a tab could not be drawn. */
+  imageFailed: (id: string) => void;
 }
 
 const FileTabsContext = createContext<FileTabsValue | null>(null);
@@ -249,31 +260,37 @@ export function FileTabsProvider({ children }: { children: ReactNode }) {
     if (notify) call("file_close", { projectId, path: tab.path }).catch(() => {});
   }, [projectId]);
 
+  /** Makes the editor state of a text tab, and loads the colours of its kind. */
+  const startEditor = useCallback(
+    (tab: TabModel, text: string) => {
+      const id = tab.id;
+      states.current.set(
+        id,
+        createEditorState(text, themeRef.current, !canEdit(tab), (update) => {
+          states.current.set(id, update.state);
+          if (isEdit(update) && alive.current) mutate(id, (current) => (current.modified ? current : { ...current, modified: true }));
+        }),
+      );
+      if (tab.readOnly !== "tooLarge") {
+        languageOf(fileName(tab.path)).then((language) => {
+          if (!language || !alive.current || !states.current.has(id)) return;
+          apply(id, { effects: languageCompartment.reconfigure(language.support) });
+          mutate(id, (current) => ({ ...current, language: language.name }));
+        });
+      }
+    },
+    [apply, mutate],
+  );
+
   const addTab = useCallback(
     (tab: TabModel, text: string | null) => {
-      if (text !== null) {
-        const id = tab.id;
-        states.current.set(
-          id,
-          createEditorState(text, themeRef.current, !canEdit(tab), (update) => {
-            states.current.set(id, update.state);
-            if (isEdit(update) && alive.current) mutate(id, (current) => (current.modified ? current : { ...current, modified: true }));
-          }),
-        );
-      }
+      if (text !== null) startEditor(tab, text);
       const next = [...tabsRef.current, tab];
       tabsRef.current = next;
       setTabs(next);
       show(tab.id);
-      if (text !== null && tab.readOnly !== "tooLarge") {
-        languageOf(fileName(tab.path)).then((language) => {
-          if (!language || !alive.current || !states.current.has(tab.id)) return;
-          apply(tab.id, { effects: languageCompartment.reconfigure(language.support) });
-          mutate(tab.id, (current) => ({ ...current, language: language.name }));
-        });
-      }
     },
-    [apply, mutate, show],
+    [show, startEditor],
   );
 
   const openFile = useCallback(
@@ -303,8 +320,9 @@ export function FileTabsProvider({ children }: { children: ReactNode }) {
             if (gone) dropTab(gone.id, false);
           }
           const id = `tab-${nextTab++}`;
+          const image = result.kind === "image" ? result.image : null;
           addTab(
-            newTab(id, result.path, result.kind, result.hash, result.readOnly, result.locked),
+            newTab(id, result.path, result.kind, result.hash, result.readOnly, result.locked, image, result.imageTooLarge),
             result.kind === "text" ? (result.text ?? "") : null,
           );
         })
@@ -334,16 +352,35 @@ export function FileTabsProvider({ children }: { children: ReactNode }) {
         mutate(id, (current) => readFoundGone(current, byAgent));
         return;
       }
-      if (result.kind === "binary") {
+      if (result.kind === "binary" || result.kind === "image") {
+        // Not text (any more): the tab drops its editor and keeps the image, if there is one, for itself.
         if (viewId.current === id) showNothing();
         states.current.delete(id);
-        mutate(id, (current) => ({ ...readFromDisk(current, result.hash), kind: "binary" }));
+        const image = result.kind === "image" ? result.image : null;
+        mutate(id, (current) => readAsImageOrBinary(current, result.hash, image ? "image" : "binary", image, result.imageTooLarge));
+        return;
+      }
+      const now = tabById(id);
+      if (now && (now.kind !== "text" || !states.current.has(id))) {
+        // A file that was binary or an image is text now: it gets an editor.
+        const next: TabModel = {
+          ...readFromDisk(now, result.hash),
+          kind: "text",
+          readOnly: result.readOnly,
+          image: null,
+          imageTooLarge: false,
+          undrawable: false,
+          pixels: null,
+          textRev: now.textRev + 1,
+        };
+        startEditor(next, result.text ?? "");
+        mutate(id, () => next);
         return;
       }
       replaceText(id, result.text ?? "");
-      mutate(id, (current) => ({ ...readFromDisk(current, result.hash), readOnly: result.readOnly }));
+      mutate(id, (current) => ({ ...readFromDisk(current, result.hash), readOnly: result.readOnly, textRev: current.textRev + 1 }));
     },
-    [mutate, projectId, replaceText, tabById],
+    [mutate, projectId, replaceText, startEditor, tabById],
   );
 
   /** `developer.SAVE_FILE` and its variants; says what came of it, never shows the conflict. */
@@ -404,6 +441,21 @@ export function FileTabsProvider({ children }: { children: ReactNode }) {
   const reload = useCallback((id: string) => void readAgain(id, false), [readAgain]);
   const keepUnsaved = useCallback((id: string) => mutate(id, (tab) => ({ ...tab, unlocked: false })), [mutate]);
   const dismissSaveError = useCallback((id: string) => mutate(id, (tab) => ({ ...tab, saveError: null })), [mutate]);
+
+  // --- what a tab shows: the image, the drawing of an SVG ------------------------------------
+
+  /** An SVG tab shows its drawing or its text; the choice holds until the tab closes and never touches the file. */
+  const setSvgView = useCallback((id: string, view: "preview" | "code") => mutate(id, (tab) => (tab.svgView === view ? tab : { ...tab, svgView: view })), [mutate]);
+  /** Fitted to the panel, or one image pixel per CSS pixel: the choice survives the image being read again. */
+  const toggleActualSize = useCallback((id: string) => mutate(id, (tab) => ({ ...tab, actualSize: !tab.actualSize })), [mutate]);
+  /** The image of the tab loaded (`pixels`), or the drawing of its text is gone (`null`). */
+  const imageDrawn = useCallback(
+    (id: string, pixels: { width: number; height: number } | null) =>
+      mutate(id, (tab) => (tab.pixels?.width === pixels?.width && tab.pixels?.height === pixels?.height ? tab : { ...tab, pixels })),
+    [mutate],
+  );
+  /** The `<img>` of an image tab raised `error`: the tab says that the file is binary and the image cannot be shown. */
+  const imageFailed = useCallback((id: string) => mutate(id, (tab) => (tab.undrawable ? tab : { ...tab, undrawable: true, pixels: null })), [mutate]);
 
   const requestClose = useCallback(
     (id: string) => {
@@ -660,10 +712,16 @@ export function FileTabsProvider({ children }: { children: ReactNode }) {
       answerChanged,
       attachView,
       cursorLine,
+      textOf,
+      setSvgView,
+      toggleActualSize,
+      imageDrawn,
+      imageFailed,
     }),
     [
       tabs, activeId, activePath, openFile, closeUnder, moveUnder, unsavedUnder, unsavedPaths, lockedPaths, showTab, saveAll, closeAll, show, requestClose,
       save, overwrite, reload, keepUnsaved, dismissSaveError, dialog, answerClose, answerChanged, attachView, cursorLine,
+      textOf, setSvgView, toggleActualSize, imageDrawn, imageFailed,
     ],
   );
   return (
