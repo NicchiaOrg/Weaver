@@ -202,6 +202,12 @@ impl Watches for FolderWatcher {
         };
         if let (Some(folder), Some(running)) = (folder, self.running.as_mut()) {
             let _ = running.watcher.unwatch(&folder);
+            // On Windows the watch holds a handle on its folder that only the watcher's own
+            // thread closes, after `unwatch` returned, and a folder with a handle open cannot be
+            // renamed, moved or deleted. `configure` is answered by that thread once it worked
+            // through every action sent before it, the unwatch included.
+            #[cfg(windows)]
+            let _ = running.watcher.configure(Config::default());
         }
     }
 

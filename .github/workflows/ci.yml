@@ -43,18 +43,15 @@ jobs:
   build-test:
     name: build-test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
-    # Only macOS is released for now: Windows and Linux still run, but their failures do not fail
-    # `ci`, so they do not stop a release (scripts/release.mjs RELEASED). A timeout would cancel the
-    # whole run, so they get more time than the 25 minutes of macOS.
-    timeout-minutes: ${{ matrix.required && 25 || 60 }}
-    continue-on-error: ${{ !matrix.required }}
+    # Every system is required: a failure on any of them fails `ci`, on `dev` as on `main`.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: macos-arm64, os: macos-latest, required: true }
-          - { name: windows-x64, os: windows-latest, required: false }
-          - { name: linux-x64, os: ubuntu-22.04, required: false }
+          - { name: macos-arm64, os: macos-latest }
+          - { name: windows-x64, os: windows-latest }
+          - { name: linux-x64, os: ubuntu-22.04 }
     env:
       BUILT_WEAVER_CLI: ${{ github.workspace }}/target/release/weaver-cli${{ matrix.os == 'windows-latest' && '.exe' || '' }}
     steps:
@@ -123,7 +120,7 @@ jobs:
         run: cargo test -p weaver --lib generated_types_are_up_to_date --locked
 
       - name: Rust tests
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --no-fail-fast
 
       - name: Vitest
         run: pnpm --dir ui test

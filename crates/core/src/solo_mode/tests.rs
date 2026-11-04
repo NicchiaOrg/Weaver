@@ -43,7 +43,7 @@ fn project(repo: &Path, rel: &str) -> PathBuf {
 }
 
 fn marker(root: &Path) -> String {
-    root.to_string_lossy().replace('\\', "/")
+    marker_of(root)
 }
 
 // --- the block, as bytes --------------------------------------------------------------------------
@@ -459,6 +459,31 @@ fn a_folder_outside_a_repository_is_not_in_a_git_repository() {
     assert_eq!(reason.to_string(), "this folder is not in a git repository");
 }
 
+#[test]
+fn a_search_path_without_git_starts_no_process_whatever_the_system_has() {
+    let sandbox = Sandbox::new();
+    let empty = sandbox.folder("empty-bin");
+    assert_eq!(find_program("git", OsStr::new("")), None);
+    assert_eq!(find_program("git", empty.as_os_str()), None);
+    let repo = sandbox.repo("r");
+    let no_git = Git::system().with_search_path(empty.as_os_str());
+    assert_eq!(locate(&no_git, &repo).unwrap_err(), Reason::NoGit);
+}
+
+#[test]
+fn a_program_is_found_in_the_first_folder_of_the_search_path_that_holds_it() {
+    let sandbox = Sandbox::new();
+    let empty = sandbox.folder("empty-bin");
+    let first = sandbox.folder("first-bin");
+    let second = sandbox.folder("second-bin");
+    let name = if cfg!(windows) { "git.exe" } else { "git" };
+    fs::write(first.join(name), "").unwrap();
+    fs::write(second.join(name), "").unwrap();
+    let path = std::env::join_paths([empty.clone(), first.clone(), second]).unwrap();
+    assert_eq!(find_program("git", &path), Some(first.join(name)));
+}
+
+// The fake `git` is a shell script, which Windows cannot start as `git`: Unix only.
 #[cfg(unix)]
 #[test]
 fn a_git_call_over_its_limit_is_killed_and_says_so() {
@@ -485,6 +510,7 @@ fn a_git_call_over_its_limit_is_killed_and_says_so() {
     );
 }
 
+// The fake `git` is a shell script, which Windows cannot start as `git`: Unix only.
 #[cfg(unix)]
 #[test]
 fn another_git_failure_gives_the_first_line_of_its_error_output() {

@@ -260,12 +260,13 @@ fn run(
 }
 
 /// `solo-mode/On/workspace.PROJECT_FOLDER_REMOVED`: removes the block of this working copy from git's
-/// local exclusions, found by its markers alone. A failure is logged and nothing is shown; when
-/// the folder vanishes while Weaver is closed the block stays.
+/// local exclusions, found by its markers alone. A failure is logged and nothing is shown; a folder
+/// outside a git repository has no block to remove, which is no failure; when the folder vanishes
+/// while Weaver is closed the block stays.
 fn remove_vanished_block(root: &Path) {
     match solo_mode::remove_block_of(&Git::system(), root) {
         Ok(true) => log_debug!("the block of Solo mode of {} was removed", root.display()),
-        Ok(false) => {}
+        Ok(false) | Err(solo_mode::Reason::NotARepository) => {}
         Err(reason) => log_warn!(
             "the block of Solo mode of {} was not removed: {reason}",
             root.display()
@@ -459,7 +460,10 @@ mod tests {
         std::fs::create_dir_all(exclude.parent().unwrap()).unwrap();
         std::fs::write(&exclude, &text).unwrap();
         set_mode(&Git::system(), &root, Mode::Folders).unwrap();
-        let marker = format!("# >>> weaver solo mode: {}", root.to_string_lossy());
+        let marker = format!(
+            "# >>> weaver solo mode: {}",
+            weaver_core::solo_mode::marker_of(&root)
+        );
         assert!(std::fs::read_to_string(&exclude).unwrap().contains(&marker));
 
         let (sender, receiver) = mpsc::channel();
@@ -488,7 +492,10 @@ mod tests {
         let exclude = root.join(".git").join("info").join("exclude");
         let before = std::fs::read_to_string(&exclude).unwrap_or_default();
         set_mode(&Git::system(), &root, Mode::Folders).unwrap();
-        let marker = format!("# >>> weaver solo mode: {}", root.to_string_lossy());
+        let marker = format!(
+            "# >>> weaver solo mode: {}",
+            weaver_core::solo_mode::marker_of(&root)
+        );
         assert!(std::fs::read_to_string(&exclude).unwrap().contains(&marker));
         // Solo mode changed behind Weaver's back: the state is gone, the block stays.
         std::fs::remove_dir_all(root.join(".weaver").join("solo")).unwrap();

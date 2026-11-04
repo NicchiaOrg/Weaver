@@ -375,6 +375,38 @@ impl FileViewService {
             .to_path_buf()
     }
 
+    /// Runs `action`, an action of the tree on the entry `rel`, with the watches of that entry
+    /// released: on Windows a watched folder cannot be renamed, moved or deleted. When the action
+    /// succeeds the caller lists and watches what moved; when it fails or is refused the watches
+    /// come back under the same names, and what they find changed is told to the window.
+    fn without_watches<T>(
+        &self,
+        project_id: &str,
+        window: &Window,
+        rel: &str,
+        action: impl FnOnce() -> Result<T, Refusal>,
+    ) -> Result<T, Refusal> {
+        let released = window
+            .view
+            .lock()
+            .expect("file view poisoned")
+            .release_watches(rel);
+        let result = action();
+        if result.is_err() && !released.is_empty() {
+            let mut view = window.view.lock().expect("file view poisoned");
+            let update = view.restore_watches(&released);
+            if view.state() == State::Open && !update.is_empty() {
+                if let Some(sink) = self.sink.get() {
+                    sink(TreeChanged {
+                        project_id: project_id.to_owned(),
+                        update,
+                    });
+                }
+            }
+        }
+        result
+    }
+
     /// `developer.CREATE_ENTRY`: an empty file or a folder named `name` in the folder `parent`.
     pub fn create(
         &self,
@@ -395,7 +427,9 @@ impl FileViewService {
         let window = self.open_window(project_id)?;
         let root = Self::root_of(&window);
         let locked = |path: &str| self.hooks.is_locked_under(project_id, path);
-        let path = ops::rename(&root, rel, name, &locked)?;
+        let path = self.without_watches(project_id, &window, rel, || {
+            ops::rename(&root, rel, name, &locked)
+        })?;
         let old = rel.trim_matches('/');
         if path != old {
             self.hooks.rename_under(project_id, old, &path);
@@ -414,7 +448,9 @@ impl FileViewService {
         let window = self.open_window(project_id)?;
         let root = Self::root_of(&window);
         let locked = |path: &str| self.hooks.is_locked_under(project_id, path);
-        let path = ops::move_into(&root, rel, target, &locked)?;
+        let path = self.without_watches(project_id, &window, rel, || {
+            ops::move_into(&root, rel, target, &locked)
+        })?;
         let old = rel.trim_matches('/');
         self.hooks.rename_under(project_id, old, &path);
         let update = self.change(
@@ -471,7 +507,9 @@ impl FileViewService {
         let window = self.open_window(project_id)?;
         let root = Self::root_of(&window);
         let locked = |path: &str| self.hooks.is_locked_under(project_id, path);
-        ops::delete(&root, rel, &locked, trash)?;
+        self.without_watches(project_id, &window, rel, || {
+            ops::delete(&root, rel, &locked, trash)
+        })?;
         let old = rel.trim_matches('/');
         self.hooks.close_under(project_id, old);
         Ok(self.change(&window, Some(old), None, &[parent_of(old)]))

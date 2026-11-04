@@ -13,7 +13,7 @@
 //! operation) and `git ls-files -z --cached --ignored --exclude=<line>` for each line of the block.
 
 use std::collections::BTreeSet;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs;
 use std::io;
@@ -205,20 +205,54 @@ impl Git {
         self
     }
 
-    /// The same looking `git` up in `path` instead of the `PATH` (tests: an empty one means no git).
+    /// The same looking `git` up in the folders of `path` instead of the `PATH` (tests: an empty
+    /// one means no git). The program is resolved here, never by the system's own lookup, which on
+    /// Windows also tries the folder of the executable, the system folders and the `PATH` of this
+    /// process; when no folder holds it, no process is started.
     pub fn with_search_path(mut self, path: impl Into<OsString>) -> Self {
         self.search_path = Some(path.into());
         self
     }
 
     fn run(&self, folder: &Path, args: &[&str]) -> Result<timed::Output, Failure> {
-        let mut command = process::command("git", args);
+        let program = match &self.search_path {
+            Some(path) => find_program("git", path).ok_or(Failure::NotStarted)?,
+            None => PathBuf::from("git"),
+        };
+        let mut command = process::command(program, args);
         command.current_dir(folder).env("GIT_OPTIONAL_LOCKS", "0");
         if let Some(path) = &self.search_path {
             command.env("PATH", path);
         }
         timed::run_command(command, self.limit)
     }
+}
+
+/// The first file named `name` in the folders of `search_path` (empty entries are skipped). On
+/// Windows the name is tried with each extension of `PATHEXT`, as the shell does.
+fn find_program(name: &str, search_path: &OsStr) -> Option<PathBuf> {
+    #[cfg(windows)]
+    let extensions: Vec<String> = std::env::var("PATHEXT")
+        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned())
+        .split(';')
+        .filter(|extension| !extension.is_empty())
+        .map(str::to_owned)
+        .collect();
+    std::env::split_paths(search_path)
+        .filter(|folder| !folder.as_os_str().is_empty())
+        .find_map(|folder| {
+            #[cfg(windows)]
+            {
+                extensions
+                    .iter()
+                    .map(|extension| folder.join(format!("{name}{extension}")))
+                    .find(|candidate| candidate.is_file())
+            }
+            #[cfg(not(windows))]
+            {
+                Some(folder.join(name)).filter(|candidate| candidate.is_file())
+            }
+        })
 }
 
 /// The first line of git's error output (or its exit code).
@@ -373,8 +407,15 @@ pub fn locate(git: &Git, root: &Path) -> Result<Location, Reason> {
         exclude,
         prefix: prefix.to_owned(),
         repository,
-        marker: canonical.to_string_lossy().replace('\\', "/"),
+        marker: marker_of(&canonical),
     })
+}
+
+/// What marks the block of the working copy at `canonical_root` in the exclusions file: the
+/// canonical project root with `/` separators on every system. The first line of the block is
+/// `# >>> weaver solo mode: ` followed by it.
+pub fn marker_of(canonical_root: &Path) -> String {
+    canonical_root.to_string_lossy().replace('\\', "/")
 }
 
 fn begin_line(marker: &str) -> String {

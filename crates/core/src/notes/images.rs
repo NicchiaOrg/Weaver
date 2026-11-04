@@ -536,17 +536,24 @@ mod tests {
 
     #[test]
     fn an_invalid_own_name_gives_the_date_and_time() {
-        for own in [
-            ".hidden.png",
-            "a/b.png",
-            "a\\b.png",
-            "",
-            "notes.md",
-            "NOTES.MD",
-        ] {
+        for own in [".hidden.png", "a/b.png", "a\\b.png", "", "notes.md"] {
             let name = choose_name(Some(own), &time(), ImageKind::Png, &|_| false);
             assert_eq!(name, "pasted-2026-11-04-090507.png", "{own:?}");
         }
+    }
+
+    #[test]
+    #[cfg(any(windows, target_os = "macos"))]
+    fn the_sheet_name_in_another_case_is_invalid_where_the_file_system_ignores_case() {
+        let name = choose_name(Some("NOTES.MD"), &time(), ImageKind::Png, &|_| false);
+        assert_eq!(name, "pasted-2026-11-04-090507.png");
+    }
+
+    #[test]
+    #[cfg(not(any(windows, target_os = "macos")))]
+    fn the_sheet_name_in_another_case_is_kept_where_the_file_system_tells_case_apart() {
+        let name = choose_name(Some("NOTES.MD"), &time(), ImageKind::Png, &|_| false);
+        assert_eq!(name, "NOTES.MD");
     }
 
     #[test]

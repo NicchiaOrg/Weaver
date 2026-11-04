@@ -20,16 +20,16 @@ description: "Use when changing CI workflows, packaging, release artifacts, upda
 ### Workflow `ci`
 
 - File `.github/workflows/ci.yml`. Triggers: push to `dev`, pull requests to `dev` or `main`, push to `main`.
-- Matrix `fail-fast: false`, every entry required: `macos-latest` (arm64), `windows-latest` (x64), `ubuntu-22.04` (x64). Windows is x64 only.
+- Matrix `fail-fast: false`, every entry required: `macos-latest` (arm64), `windows-latest` (x64), `ubuntu-22.04` (x64). Windows is x64 only. No job of `ci` has `continue-on-error`: a failure on any system fails the run, on `dev` as on `main`, also while only some systems are released.
 - On Linux the Tauri 2 system packages are installed first (`libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `patchelf`).
-- Steps per platform: install, build the frontend, `cargo test --workspace --locked`, Vitest, build the app in release mode with the bundled `weaver-cli`.
+- Steps per platform: install, build the frontend, `cargo test --workspace --locked --no-fail-fast`, Vitest, build the app in release mode with the bundled `weaver-cli`. `--no-fail-fast` runs the tests of every crate even when an earlier crate fails.
 - On Windows every executable of the `weaver` package, the app and its test binaries, embeds the same application manifest, kept in `src-tauri` and passed to the MSVC linker by `src-tauri/build.rs` (`/MANIFEST:EMBED`, `/MANIFESTINPUT`) only when the target is Windows MSVC. Its content is tauri-build's default: the dependency on `Microsoft.Windows.Common-Controls` 6.0.0.0. tauri-build's own manifest is turned off (`WindowsAttributes::new_without_app_manifest()`), so the app carries one manifest only.
 - Smoke step on every platform, with the `weaver-cli` binary just built and a fresh temporary folder as `--root`: `weaver-cli --help`, `weaver-cli project new --input '{}'`, `weaver-cli model check`; each must exit 0.
 - End-to-end tests with tauri-driver run on Linux and Windows only (macOS has no WebDriver for its webview):
   - Linux: `webkit2gtk-driver` (WebKitWebDriver) under `xvfb-run`;
   - Windows: `msedgedriver` matching the runner's installed Edge version;
   - against the release build of the app, never a dev server.
-- Job timeouts: 25 minutes for build and test jobs, 15 minutes for every other job.
+- Job timeouts: 40 minutes for build and test jobs, the same on every system, 15 minutes for every other job.
 - Caches (Cargo registry and `target`, the JS package store) are keyed by OS, toolchain version and lockfile hash.
 
 ### Workflow `release`

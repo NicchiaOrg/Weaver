@@ -41,7 +41,8 @@ pub trait Watches: Send {
     /// Starts watching the folder `rel` (relative to the root, empty for the root), which is
     /// `folder` on disk (canonical).
     fn watch(&mut self, rel: &str, folder: &Path) -> Result<(), String>;
-    /// Stops watching the folder `rel`.
+    /// Stops watching the folder `rel`. When it returns the folder is no longer held open by the
+    /// watch, so that it can be renamed, moved or deleted.
     fn unwatch(&mut self, rel: &str);
     /// Stops every watch.
     fn unwatch_all(&mut self);
@@ -185,6 +186,71 @@ impl<W: Watches> FileView<W> {
             self.watches.unwatch(key);
         }
         gone
+    }
+
+    // --- the watches around a rename, a move or a delete ------------------------------------
+
+    /// Stops watching the folder `rel` and every expanded folder inside it, so that nothing
+    /// holds them open while they are renamed, moved or deleted (on Windows a watch keeps a
+    /// handle on its folder, which makes the rename fail). The listings stay. The paths released,
+    /// parents first, for [`Self::restore_watches`]; empty for a file, for a folder that is not
+    /// expanded and for the project folder.
+    pub fn release_watches(&mut self, rel: &str) -> Vec<String> {
+        let Ok(rel) = normal(rel) else {
+            return Vec::new();
+        };
+        if rel.is_empty() || self.state == State::Closed {
+            return Vec::new();
+        }
+        let held: Vec<String> = self
+            .folders
+            .keys()
+            .filter(|key| is_within(&rel, key))
+            .cloned()
+            .collect();
+        for key in &held {
+            self.watches.unwatch(key);
+        }
+        held
+    }
+
+    /// Watches again, under the same paths, the folders [`Self::release_watches`] released, after
+    /// the action failed or was refused. Each one is read again, for what changed while it was not
+    /// watched; a folder that cannot be listed or watched any more is dropped with the folders
+    /// inside it.
+    pub fn restore_watches(&mut self, released: &[String]) -> TreeUpdate {
+        let mut update = TreeUpdate {
+            generation: self.generation,
+            folders: Vec::new(),
+            removed: Vec::new(),
+        };
+        if self.state == State::Closed {
+            return update;
+        }
+        for rel in released {
+            if !self.folders.contains_key(rel) {
+                continue;
+            }
+            let watched = path::resolve(&self.root, rel)
+                .map_err(|refusal| refusal.to_string())
+                .and_then(|folder| {
+                    if folder.is_dir() {
+                        self.watches.watch(rel, &folder)
+                    } else {
+                        Err(format!("{folder:?} is not a folder"))
+                    }
+                });
+            if watched.is_err() {
+                update.removed.extend(self.forget(rel));
+                self.bump();
+                continue;
+            }
+            let changed = self.folder_changed(rel);
+            update.folders.extend(changed.folders);
+            update.removed.extend(changed.removed);
+        }
+        update.generation = self.generation;
+        update
     }
 
     // --- developer.OPEN_FILE_VIEW -----------------------------------------------------------
@@ -656,6 +722,54 @@ mod tests {
         let update = f.view.after_change(None, None, &[""]);
         assert_eq!(names(&update.folders[0].entries), ["a.txt", "b.txt"]);
         assert!(update.removed.is_empty());
+    }
+
+    #[test]
+    fn the_watches_of_a_folder_and_of_the_folders_inside_it_are_released_and_restored_as_they_were()
+    {
+        let mut f = fixture();
+        f.view.open().unwrap();
+        f.view.expand("src").unwrap();
+        f.view.expand("src/deep").unwrap();
+        assert_eq!(f.view.release_watches("src/"), ["src", "src/deep"]);
+        assert_eq!(f.recorder.watched(), [""]);
+        // The listings stay while nothing is watched.
+        assert_eq!(f.view.listed(), ["", "src", "src/deep"]);
+        put(&f.root, "src/deep/fresh.rs");
+        let update = f
+            .view
+            .restore_watches(&["src".to_owned(), "src/deep".to_owned()]);
+        assert_eq!(f.recorder.watched(), ["", "src", "src/deep"]);
+        // What changed while nothing was watched is read again.
+        let paths: Vec<&str> = update.folders.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["src/deep"]);
+        assert!(update.removed.is_empty());
+        assert_eq!(update.generation, f.view.generation());
+    }
+
+    #[test]
+    fn nothing_is_released_for_a_file_a_folder_not_expanded_or_the_project_folder() {
+        let mut f = fixture();
+        f.view.open().unwrap();
+        f.view.expand("src").unwrap();
+        assert!(f.view.release_watches("a.txt").is_empty());
+        assert!(f.view.release_watches("src/deep").is_empty());
+        assert!(f.view.release_watches("").is_empty());
+        assert_eq!(f.recorder.watched(), ["", "src"]);
+    }
+
+    #[test]
+    fn a_folder_that_vanished_while_released_is_dropped_when_the_watches_come_back() {
+        let mut f = fixture();
+        f.view.open().unwrap();
+        f.view.expand("src").unwrap();
+        f.view.expand("src/deep").unwrap();
+        let released = f.view.release_watches("src");
+        fs::remove_dir_all(f.root.join("src")).unwrap();
+        let update = f.view.restore_watches(&released);
+        assert_eq!(update.removed, ["src", "src/deep"]);
+        assert_eq!(f.recorder.watched(), [""]);
+        assert_eq!(f.view.listed(), [""]);
     }
 
     #[test]

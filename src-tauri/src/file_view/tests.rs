@@ -330,6 +330,33 @@ fn a_refused_rename_changes_nothing_and_tells_the_tabs_nothing() {
 }
 
 #[test]
+fn a_refused_rename_or_a_refusing_trash_leaves_the_folders_watched_under_their_old_names() {
+    let f = fixture();
+    f.service.open(PROJECT, &f.root).unwrap();
+    f.service.expand(PROJECT, "src").unwrap();
+    f.service.expand(PROJECT, "src/deep").unwrap();
+    assert!(f.service.rename(PROJECT, "src", "a.txt").is_err());
+    settle(&f);
+    put(&f.root, "src/deep/fresh.rs");
+    let changed = f
+        .heard
+        .recv_timeout(Duration::from_secs(20))
+        .expect("an update");
+    assert!(listing_of(&changed.update, "src/deep").is_some());
+
+    let refusing = |_: &Path| -> Result<(), String> { Err("no trash here".to_owned()) };
+    assert!(f.service.delete_with(PROJECT, "src", &refusing).is_err());
+    settle(&f);
+    put(&f.root, "src/deep/fresher.rs");
+    let changed = f
+        .heard
+        .recv_timeout(Duration::from_secs(20))
+        .expect("an update");
+    assert!(listing_of(&changed.update, "src/deep").is_some());
+    assert!(f.tabs.calls().is_empty());
+}
+
+#[test]
 fn moving_takes_the_tabs_along_and_refuses_what_the_rules_refuse() {
     let f = fixture();
     f.service.open(PROJECT, &f.root).unwrap();
@@ -344,6 +371,24 @@ fn moving_takes_the_tabs_along_and_refuses_what_the_rules_refuse() {
         ".weaver is written by Weaver: read-only here."
     );
     assert_eq!(f.tabs.calls().len(), 1);
+}
+
+#[test]
+fn moving_an_expanded_folder_keeps_it_and_the_folders_inside_it_watched_under_their_new_names() {
+    let f = fixture();
+    f.service.open(PROJECT, &f.root).unwrap();
+    f.service.expand(PROJECT, "src").unwrap();
+    f.service.expand(PROJECT, "src/deep").unwrap();
+    let moved = f.service.move_into(PROJECT, "src/deep", "").unwrap();
+    assert_eq!(moved.path, "deep");
+    assert_eq!(moved.update.removed, ["src/deep"]);
+    settle(&f);
+    put(&f.root, "deep/fresh.rs");
+    let changed = f
+        .heard
+        .recv_timeout(Duration::from_secs(20))
+        .expect("an update");
+    assert!(listing_of(&changed.update, "deep").is_some());
 }
 
 #[test]
