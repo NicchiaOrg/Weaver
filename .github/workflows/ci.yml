@@ -144,18 +144,15 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y webkit2gtk-driver xvfb dbus
 
-      - name: Install msedgedriver of the installed Edge version (Windows)
+      - name: Install msedgedriver of the installed WebView2 runtime version (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # The version of the installed browser is the one of msedge.exe: the BLBeacon key of the
-          # user registry is missing on the hosted runner.
-          $edge = $null
-          foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
-            $exe = Join-Path $root 'Microsoft\Edge\Application\msedge.exe'
-            if (Test-Path $exe) { $edge = (Get-Item $exe).VersionInfo.ProductVersion; break }
-          }
-          if (-not $edge) { throw 'Microsoft Edge is not installed on the runner' }
+          # The app runs on the WebView2 runtime, whose version can differ from the one of the Edge
+          # browser (156.0.4314.50 against 156.0.4314.56 on the hosted runner); the driver has to
+          # match the runtime. The BLBeacon key of the user registry is missing on the runner.
+          $edge = (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}').pv
+          if (-not $edge) { throw 'The Microsoft Edge WebView2 runtime is not installed on the runner' }
           $dir = Join-Path $env:RUNNER_TEMP 'msedgedriver'
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
           Invoke-WebRequest "https://msedgedriver.microsoft.com/$edge/edgedriver_win64.zip" -OutFile "$dir\edgedriver.zip"
