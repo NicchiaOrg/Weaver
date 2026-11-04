@@ -148,7 +148,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $edge = (Get-ItemProperty 'HKCU:\Software\Microsoft\Edge\BLBeacon').version
+          # The version of the installed browser is the one of msedge.exe: the BLBeacon key of the
+          # user registry is missing on the hosted runner.
+          $edge = $null
+          foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+            $exe = Join-Path $root 'Microsoft\Edge\Application\msedge.exe'
+            if (Test-Path $exe) { $edge = (Get-Item $exe).VersionInfo.ProductVersion; break }
+          }
           if (-not $edge) { throw 'Microsoft Edge is not installed on the runner' }
           $dir = Join-Path $env:RUNNER_TEMP 'msedgedriver'
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
