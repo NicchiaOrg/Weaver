@@ -23,6 +23,7 @@ import { spawn } from "node:child_process";
 import {
   appProcessName,
   appVersion,
+  closeWindowLikeItsCloseButton,
   applicationPath,
   copyFixtureProject,
   driverOutput,
@@ -177,14 +178,7 @@ describe("Weaver smoke test", function () {
     assert.ok(state.projectWindow, "no project window was found by the earlier stages, so closing it cannot be checked");
     // Closing the last project window opens the welcome window.
     await retryWhileNoSuchWindow(() => browser.switchToWindow(state.projectWindow));
-    // The welcome window is created after the project window is gone, so on Linux the driver can
-    // answer with no window left; WebdriverIO then throws although the window was closed. The
-    // wait below checks that the welcome window really comes back.
-    try {
-      await browser.closeWindow();
-    } catch (error) {
-      if (!String(error?.message).includes("All window handles were removed")) throw error;
-    }
+    await closeWindowLikeItsCloseButton(browser);
     await browser.waitUntil(
       async () => {
         const handles = await retryWhileNoSuchWindow(() => browser.getWindowHandles());

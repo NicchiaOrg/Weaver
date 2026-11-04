@@ -68,11 +68,15 @@ impl Server {
     /// Stops accepting and removes the socket. Connections being served finish on their own.
     pub fn shutdown(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
-        // Wake the blocking accept; the loop sees the flag and drops the listener.
-        let _ = ipc::connect(&self.endpoint);
+        // Wake the blocking accept; the loop sees the flag and drops the listener. The wake
+        // connection stays open until the loop has ended: on Windows a client that connects and
+        // closes before the accept starts is a dead connection that the listener discards, and the
+        // accept would go on waiting for another client for ever.
+        let wake = ipc::connect(&self.endpoint);
         if let Some(handle) = self.accept_loop.take() {
             let _ = handle.join();
         }
+        drop(wake);
     }
 }
 

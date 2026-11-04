@@ -147,3 +147,21 @@ export async function nativeWindowTitle(browser) {
   if (result.error !== undefined) throw new Error(`reading the native window title failed: ${result.error}`);
   return result.title;
 }
+
+/**
+ * Closes the window the browser is switched to the way its close button does it
+ * (`plugin:window|close`: the app gets `CloseRequested` and runs its own close path). WebDriver's
+ * Close Window ends the session when it leaves no window, and the app opens the welcome window only
+ * after the driver has closed the last project window, so that command cannot show the welcome
+ * window coming back. The call is not awaited: the page is destroyed by it.
+ */
+export async function closeWindowLikeItsCloseButton(browser) {
+  await browser.waitUntil(
+    () => browser.execute(() => typeof window.__TAURI_INTERNALS__?.invoke === "function"),
+    { timeoutMsg: "the page of the window has no Tauri bridge" },
+  );
+  await browser.execute(() => {
+    const internals = window.__TAURI_INTERNALS__;
+    internals.invoke("plugin:window|close", { label: internals.metadata.currentWindow.label }).catch(() => {});
+  });
+}
