@@ -195,6 +195,10 @@ jobs:
           "--- stdout"; Get-Content $out -ErrorAction SilentlyContinue
           "--- stderr"; Get-Content $err -ErrorAction SilentlyContinue
           "--- debugging port"; try { (Invoke-WebRequest 'http://127.0.0.1:9333/json/version' -UseBasicParsing -TimeoutSec 5).Content } catch { "no answer: $_" }
+          "--- processes"; Get-Process | Where-Object { $_.Name -match 'weaver|msedgewebview2' } | Select-Object Name, Id, MainWindowTitle, MainWindowHandle | Format-Table | Out-String
+          "--- app log"
+          Get-ChildItem "$env:LOCALAPPDATA\dev.nicchia.weaver" -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+          Get-ChildItem "$env:LOCALAPPDATA\dev.nicchia.weaver\logs" -Filter *.log -ErrorAction SilentlyContinue | ForEach-Object { "== " + $_.FullName; Get-Content $_.FullName -Tail 60 }
           if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
           Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force
 

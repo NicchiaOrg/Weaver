@@ -712,6 +712,7 @@ describe("dragging a row", () => {
     it("expands a collapsed folder that stays under the pointer for a second", async () => {
       renderView();
       await tree();
+      await waitFor(() => expect(names()).toContain("README.md"));
       vi.useFakeTimers();
       const drag = press("README.md");
       drag.moveTo(item("docs"));
@@ -725,6 +726,7 @@ describe("dragging a row", () => {
     it("starts the second again when the pointer leaves the folder, and never expands what it holds a file over", async () => {
       renderView();
       await tree();
+      await waitFor(() => expect(names()).toContain("README.md"));
       vi.useFakeTimers();
       const drag = press("README.md");
       drag.moveTo(item("docs"));
@@ -743,6 +745,7 @@ describe("dragging a row", () => {
     it("scrolls the tree within 24 px of its top or bottom edge, faster nearer the edge, and stops when the drag ends", async () => {
       renderView();
       const view = await tree();
+      await waitFor(() => expect(names()).toContain("README.md"));
       const scroll = placeTree(view, 200);
       vi.useFakeTimers();
       const drag = press("README.md", 150, 300);
