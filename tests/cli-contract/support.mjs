@@ -62,10 +62,10 @@ export function hermeticEnvironment(extra = {}) {
     APPDATA: path.join(sandbox, "roaming"),
   };
   if (process.platform === "win32") {
-    // Windows resolves the config and local data folders of the user through the shell, which
-    // verifies that they exist: with the sandbox homes missing, Weaver finds no folder to keep its
-    // project lock in.
-    for (const name of ["LOCALAPPDATA", "APPDATA"]) mkdirSync(folders[name], { recursive: true });
+    // Windows finds the config and local data folders of the user through the shell, from the
+    // profile folder (`USERPROFILE`, not `APPDATA` or `LOCALAPPDATA`), and fails when they do not
+    // exist: with the sandbox profile empty, Weaver finds no folder to keep its project lock in.
+    for (const name of ["Roaming", "Local"]) mkdirSync(path.join(sandbox, "AppData", name), { recursive: true });
   }
   const env = {};
   for (const [name, value] of Object.entries(process.env)) {
