@@ -179,6 +179,25 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum dbus-run-session -- pnpm --dir e2e test
 
+      # TEMPORARY diagnostic of the Windows end-to-end session failure: removed once it is fixed.
+      - name: Diagnostic start of the app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          "WebView2 runtime: " + (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}').pv
+          $out = Join-Path $env:RUNNER_TEMP 'app.out'; $err = Join-Path $env:RUNNER_TEMP 'app.err'
+          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9333'
+          $p = Start-Process -FilePath "$env:GITHUB_WORKSPACE\target\release\weaver.exe" -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
+          Start-Sleep -Seconds 15
+          "exited: $($p.HasExited)"
+          if ($p.HasExited) { "exit code: $($p.ExitCode)" }
+          "--- stdout"; Get-Content $out -ErrorAction SilentlyContinue
+          "--- stderr"; Get-Content $err -ErrorAction SilentlyContinue
+          "--- debugging port"; try { (Invoke-WebRequest 'http://127.0.0.1:9333/json/version' -UseBasicParsing -TimeoutSec 5).Content } catch { "no answer: $_" }
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force
+
       - name: End-to-end tests (Windows)
         if: runner.os == 'Windows'
         run: pnpm --dir e2e test
