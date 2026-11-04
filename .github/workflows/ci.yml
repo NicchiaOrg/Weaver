@@ -144,15 +144,18 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y webkit2gtk-driver xvfb dbus
 
-      - name: Install msedgedriver of the installed WebView2 runtime version (Windows)
+      - name: Install msedgedriver of the installed Edge version (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # The app runs on the WebView2 runtime, whose version can differ from the one of the Edge
-          # browser (156.0.4314.50 against 156.0.4314.56 on the hosted runner); the driver has to
-          # match the runtime. The BLBeacon key of the user registry is missing on the runner.
-          $edge = (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}').pv
-          if (-not $edge) { throw 'The Microsoft Edge WebView2 runtime is not installed on the runner' }
+          # The version of the installed browser is the one of msedge.exe: the BLBeacon key of the
+          # user registry is missing on the hosted runner.
+          $edge = $null
+          foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+            $exe = Join-Path $root 'Microsoft\Edge\Application\msedge.exe'
+            if (Test-Path $exe) { $edge = (Get-Item $exe).VersionInfo.ProductVersion; break }
+          }
+          if (-not $edge) { throw 'Microsoft Edge is not installed on the runner' }
           $dir = Join-Path $env:RUNNER_TEMP 'msedgedriver'
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
           Invoke-WebRequest "https://msedgedriver.microsoft.com/$edge/edgedriver_win64.zip" -OutFile "$dir\edgedriver.zip"
@@ -176,29 +179,18 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum dbus-run-session -- pnpm --dir e2e test
 
-      # TEMPORARY diagnostic of the Windows end-to-end session failure: removed once it is fixed.
-      - name: Diagnostic start of the app (Windows)
+      # The hosted Windows runners run elevated, and from runtime 150 on WebView2 ignores the
+      # variable that msedgedriver uses to open the debug port when its host is elevated
+      # (https://github.com/tauri-apps/wry/issues/1782), so the tests run at medium integrity.
+      - name: Install gsudo (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Continue'
-          "WebView2 runtime: " + (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}').pv
-          $out = Join-Path $env:RUNNER_TEMP 'app.out'; $err = Join-Path $env:RUNNER_TEMP 'app.err'
-          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9333'
-          $p = Start-Process -FilePath "$env:GITHUB_WORKSPACE\target\release\weaver.exe" -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
-          Start-Sleep -Seconds 15
-          "exited: $($p.HasExited)"
-          if ($p.HasExited) { "exit code: $($p.ExitCode)" }
-          "--- stdout"; Get-Content $out -ErrorAction SilentlyContinue
-          "--- stderr"; Get-Content $err -ErrorAction SilentlyContinue
-          "--- debugging port"; try { (Invoke-WebRequest 'http://127.0.0.1:9333/json/version' -UseBasicParsing -TimeoutSec 5).Content } catch { "no answer: $_" }
-          "--- processes"; Get-Process | Where-Object { $_.Name -match 'weaver|msedgewebview2' } | Select-Object Name, Id, MainWindowTitle, MainWindowHandle | Format-Table | Out-String
-          "--- app log"
-          Get-ChildItem "$env:LOCALAPPDATA\dev.nicchia.weaver" -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
-          Get-ChildItem "$env:LOCALAPPDATA\dev.nicchia.weaver\logs" -Filter *.log -ErrorAction SilentlyContinue | ForEach-Object { "== " + $_.FullName; Get-Content $_.FullName -Tail 60 }
-          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
-          Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force
+        run: choco install gsudo --yes --no-progress
 
       - name: End-to-end tests (Windows)
         if: runner.os == 'Windows'
-        run: pnpm --dir e2e test
+        shell: pwsh
+        run: |
+          icacls "$env:GITHUB_WORKSPACE" /grant 'Everyone:(OI)(CI)F' | Out-Null
+          $gsudo = Join-Path $env:ChocolateyInstall 'bin\gsudo.exe'
+          & $gsudo --integrity Medium pnpm --dir e2e test
