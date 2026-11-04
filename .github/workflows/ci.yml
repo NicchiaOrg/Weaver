@@ -191,7 +191,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          icacls "$env:GITHUB_WORKSPACE" /grant 'Everyone:(OI)(CI)F' | Out-Null
           $gsudo = 'C:\tools\gsudo\Current\gsudo.exe'
           if (-not (Test-Path $gsudo)) { throw "gsudo is not at $gsudo" }
+          & $gsudo --version
+          # The log records the integrity level the tests run at: it must be Medium, not High.
+          & $gsudo --integrity Medium whoami /groups | Select-String 'Mandatory Label'
           & $gsudo --integrity Medium pnpm --dir e2e test
