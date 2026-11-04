@@ -89,7 +89,8 @@ describe("Weaver smoke test", function () {
   it("starts and shows the welcome window with the name and the version of the app", async () => {
     await browser.waitUntil(async () => (await browser.getWindowHandles()).length === 1, { timeoutMsg: "the welcome window did not appear" });
     state.welcomeWindow = await browser.getWindowHandle();
-    assert.equal(await browser.getTitle(), "Weaver");
+    // The window exists before its page has loaded: the title is empty until then.
+    await browser.waitUntil(async () => (await browser.getTitle()) === "Weaver", { timeoutMsg: "the welcome window did not get the title Weaver" });
     const url = await browser.getUrl();
     assert.ok(!/localhost:1420/.test(url), `the app must be the release build, not the dev server: ${url}`);
     await browser.waitUntil(async () => (await bodyText()).includes(appVersion), {
