@@ -199,12 +199,14 @@ mod tests {
     fn relative_or_missing_xdg_runtime_is_ignored() {
         let rel = AppDirs::from_bases(Path::new("/c"), Path::new("/d"), Some(Path::new("run")));
         assert_eq!(rel.xdg_runtime_dir(), None);
-        let abs = AppDirs::from_bases(
-            Path::new("/c"),
-            Path::new("/d"),
-            Some(Path::new("/run/user/1")),
-        );
-        assert_eq!(abs.xdg_runtime_dir(), Some(Path::new("/run/user/1")));
+        // An absolute folder starts with a drive on Windows, with `/` elsewhere.
+        let absolute = if cfg!(windows) {
+            r"C:\run\user\1"
+        } else {
+            "/run/user/1"
+        };
+        let abs = AppDirs::from_bases(Path::new("/c"), Path::new("/d"), Some(Path::new(absolute)));
+        assert_eq!(abs.xdg_runtime_dir(), Some(Path::new(absolute)));
     }
 
     #[test]

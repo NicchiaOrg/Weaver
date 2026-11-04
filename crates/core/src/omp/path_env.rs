@@ -239,11 +239,13 @@ mod tests {
 
     #[test]
     fn the_child_path_orders_weavers_folder_omps_buns_then_the_base() {
+        // The base is built with the list separator of the system (`:` on Unix, `;` on Windows).
+        let base = std::env::join_paths(["/x", "/y"]).unwrap();
         let path = child_path(
             Path::new("/w/bin"),
             Some(Path::new("/o")),
             Some(Path::new("/b")),
-            OsStr::new("/x:/y"),
+            &base,
         );
         let folders: Vec<PathBuf> = std::env::split_paths(&path).collect();
         assert_eq!(

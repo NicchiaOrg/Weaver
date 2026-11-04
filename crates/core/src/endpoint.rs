@@ -122,6 +122,8 @@ mod tests {
         );
     }
 
+    // The XDG runtime folder is a Unix notion: `/run/user/7` is not an absolute path on Windows.
+    #[cfg(unix)]
     #[test]
     fn socket_goes_to_xdg_runtime_when_set() {
         let dirs = AppDirs::from_bases(

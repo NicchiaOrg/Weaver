@@ -480,7 +480,17 @@ fn a_program_is_found_in_the_first_folder_of_the_search_path_that_holds_it() {
     fs::write(first.join(name), "").unwrap();
     fs::write(second.join(name), "").unwrap();
     let path = std::env::join_paths([empty.clone(), first.clone(), second]).unwrap();
-    assert_eq!(find_program("git", &path), Some(first.join(name)));
+    let found = find_program("git", &path).expect("git is found in the search path");
+    // On Windows the file name takes its extension from `PATHEXT` (`git.EXE`), and the file system
+    // ignores the case.
+    if cfg!(windows) {
+        assert_eq!(
+            found.to_string_lossy().to_lowercase(),
+            first.join(name).to_string_lossy().to_lowercase()
+        );
+    } else {
+        assert_eq!(found, first.join(name));
+    }
 }
 
 // The fake `git` is a shell script, which Windows cannot start as `git`: Unix only.
