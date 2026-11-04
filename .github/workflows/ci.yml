@@ -192,5 +192,6 @@ jobs:
         shell: pwsh
         run: |
           icacls "$env:GITHUB_WORKSPACE" /grant 'Everyone:(OI)(CI)F' | Out-Null
-          $gsudo = Join-Path $env:ChocolateyInstall 'bin\gsudo.exe'
+          $gsudo = 'C:\tools\gsudo\Current\gsudo.exe'
+          if (-not (Test-Path $gsudo)) { throw "gsudo is not at $gsudo" }
           & $gsudo --integrity Medium pnpm --dir e2e test
