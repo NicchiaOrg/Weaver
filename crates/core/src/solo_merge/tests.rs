@@ -10,6 +10,8 @@ use crate::solo_mode::testing::{git, put, Sandbox};
 
 // --- helpers ------------------------------------------------------------------------------------
 
+/// The repository's own config, which also binds Weaver's git (it runs with the system config):
+/// `core.autocrlf` off, so that a Windows git does not turn the LF files of the tests into CRLF.
 fn configure(repo: &Path) {
     git(repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
     for (key, value) in [
@@ -17,6 +19,7 @@ fn configure(repo: &Path) {
         ("user.email", "test@example.com"),
         ("commit.gpgsign", "false"),
         ("merge.ff", "true"),
+        ("core.autocrlf", "false"),
     ] {
         git(repo, &["config", key, value]);
     }

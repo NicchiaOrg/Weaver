@@ -37,7 +37,8 @@ fn save(root: &Path, rel: &str, content: &str, message: &str) {
     git(root, &["commit", "-q", "-m", message]);
 }
 
-/// A repository on `main`, with a project in it in Solo mode `mode`.
+/// A repository on `main`, with a project in it in Solo mode `mode`. `core.autocrlf` is off in its
+/// own config, which also binds Weaver's git, so that a Windows git keeps the LF files of the tests.
 fn repository(dir: &Path, mode: Mode) -> PathBuf {
     let root = weaver_core::paths::canonical_root(dir).unwrap();
     git(&root, &["init", "-q"]);
@@ -47,6 +48,7 @@ fn repository(dir: &Path, mode: Mode) -> PathBuf {
         ("user.email", "test@example.com"),
         ("commit.gpgsign", "false"),
         ("merge.ff", "true"),
+        ("core.autocrlf", "false"),
     ] {
         git(&root, &["config", key, value]);
     }

@@ -2104,7 +2104,10 @@ mod tests {
         assert_eq!(exec.calls.lock().unwrap().len(), 1);
     }
 
+    // The tests that reach the download need the folder of `home(Os::Linux)`, a real temporary
+    // folder, to be absolute for `/bin/sh`: only on a Unix host.
     #[test]
+    #[cfg(unix)]
     fn after_a_failed_omp_update_the_download_runs_hidden_for_the_folder_with_omps_version() {
         let home = home(Os::Linux);
         let exec = Scripted::new(Ok(Output {
@@ -2172,6 +2175,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn the_exit_code_decides_between_update_ended_and_update_failed_and_its_reason() {
         let home = home(Os::Linux);
         let own = "update failed".to_owned();
@@ -2249,6 +2253,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn an_omp_whose_version_cannot_be_read_is_older_than_any_release() {
         let home = home(Os::Linux);
         let mut exec = Scripted::new(Scripted::exit(0, ""));
@@ -2261,6 +2266,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn the_download_is_tried_only_for_an_omp_in_the_folder_of_its_installer() {
         let failing = || Scripted::new(Scripted::exit(0, ""));
         let own = Err("update failed".to_owned());
