@@ -28,10 +28,10 @@ jobs:
   # Version alignment (requirements/release#General) and the tests of the scripts of this folder.
   versions:
     name: versions
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: useblacksmith/checkout@v1
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
@@ -49,9 +49,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: macos-arm64, os: macos-latest }
-          - { name: windows-x64, os: windows-latest }
-          - { name: linux-x64, os: ubuntu-22.04 }
+          - { name: macos-arm64, os: blacksmith-6vcpu-macos-26 }
+          - { name: windows-x64, os: blacksmith-4vcpu-windows-2025 }
+          - { name: linux-x64, os: blacksmith-4vcpu-ubuntu-2204 }
     env:
       BUILT_WEAVER_CLI: ${{ github.workspace }}/target/release/weaver-cli${{ matrix.os == 'windows-latest' && '.exe' || '' }}
     steps:
