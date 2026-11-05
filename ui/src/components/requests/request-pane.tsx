@@ -27,9 +27,10 @@ import {
   toBase64,
 } from "@/components/requests/request-model";
 import { useRequests } from "@/components/requests/use-requests";
+import { TaggedTextarea } from "@/components/assets/tagged-textarea";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { useViewShown } from "@/components/view-shown";
 import { call, isAppError, onFilesDropped } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
@@ -169,7 +170,7 @@ export function RequestPane({ projectId, requestId, modelEmpty, wide, onGone, on
         // An outside change is a disk text that is neither the typed one nor one this pane wrote.
         if (sameText(latest.current, next.text) || written.current.some((own) => sameText(own, next.text))) return;
         if (dirty.current) {
-          toast(TOAST_KEPT);
+          toast.warning(TOAST_KEPT);
           await save();
         } else {
           latest.current = next.text;
@@ -296,14 +297,16 @@ export function RequestPane({ projectId, requestId, modelEmpty, wide, onGone, on
     [projectId, requestId, insertLinks],
   );
 
-  // Files dropped on the window (the system drag and drop of the webview).
+  // Files dropped on the window (the system drag and drop of the webview), only while this view is
+  // the one shown: the Assets view takes the drops made over it.
+  const viewShown = useViewShown();
   useEffect(() => {
-    if (!writable) return;
+    if (!writable || !viewShown) return;
     const stop = onFilesDropped((paths) => void importPaths(paths));
     return () => {
       stop.then((unlisten) => unlisten()).catch(() => {});
     };
-  }, [writable, importPaths]);
+  }, [writable, viewShown, importPaths]);
 
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
     const files = [...event.clipboardData.files];
@@ -362,7 +365,7 @@ export function RequestPane({ projectId, requestId, modelEmpty, wide, onGone, on
   const sideBySide = preview && wide;
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col">
-      <header className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
+      <header className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
         <h2 className="text-sm font-semibold">{heading}</h2>
         {writable ? <SaveStatus save={saveState} /> : null}
         <div className="ml-auto flex items-center gap-2">
@@ -414,13 +417,14 @@ export function RequestPane({ projectId, requestId, modelEmpty, wide, onGone, on
       {writable ? (
         <div className={cn("grid min-h-0 flex-1 gap-3 p-3", sideBySide ? "grid-cols-2" : "grid-cols-1")}>
           {!preview || sideBySide ? (
-            <Textarea
+            <TaggedTextarea
               ref={areaRef}
               aria-label="Request text"
               value={text}
               placeholder="Describe what to add or change. Markdown, images pasted or dropped."
               spellCheck={false}
-              className="h-full min-h-0 resize-none font-mono"
+              className="h-full min-h-0 font-mono"
+              areaClassName="resize-none"
               onChange={(event) => change(event.target.value)}
               onBlur={() => void save()}
               onKeyDown={onKeyDown}

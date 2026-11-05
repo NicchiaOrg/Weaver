@@ -16,6 +16,11 @@
 //! checks (an unregistered file, Task files where there must be none, a Task whose `technical`
 //! disagrees with its references, an `## Already present` reference that would not exist, the
 //! rules of a resolution); never for staleness or required Proposals.
+//!
+//! Approving a stale Proposal, which refines it, is refused for two reasons only
+//! ([`Analysis::refinement_refusals`]): `The agent is still finishing`, and for a resolution none
+//! of whose Drifts is still open, `None of its Drifts is still open`. The hand-over checks
+//! above still apply when the refined Proposal is handed over.
 
 use std::collections::BTreeSet;
 
@@ -177,6 +182,26 @@ pub struct Gate {
     pub run_in_progress: bool,
 }
 
+/// Why a refinement is refused, the only two reasons there are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefinementRefusal {
+    AgentFinishing,
+    /// A resolution none of whose listed Drifts is still open.
+    NoOpenDrift,
+}
+
+/// `None of its Drifts is still open`: why a resolution cannot be refined or continued.
+pub const REASON_NO_OPEN_DRIFT: &str = "None of its Drifts is still open";
+
+impl RefinementRefusal {
+    pub fn text(self) -> &'static str {
+        match self {
+            RefinementRefusal::AgentFinishing => REASON_AGENT_FINISHING,
+            RefinementRefusal::NoOpenDrift => REASON_NO_OPEN_DRIFT,
+        }
+    }
+}
+
 /// Everything computed about one Proposal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Analysis {
@@ -200,6 +225,9 @@ pub struct Analysis {
     pub handover_only: Vec<String>,
     /// Whether a Draft, Open or Refining Proposal is attached to a Drift (decided through it).
     pub attached: bool,
+    /// A resolution none of whose listed Drifts is still open (the only way a refinement is
+    /// refused beside the agent finishing); false for any other kind.
+    pub no_open_drift: bool,
 }
 
 impl Analysis {
@@ -235,13 +263,26 @@ impl Analysis {
         reasons
     }
 
-    /// Staleness is the only thing that blocks it, a Run apart: Approve refines it.
+    /// Why a refinement is refused: `The agent is still finishing`, and for a resolution none of
+    /// whose Drifts is still open, `None of its Drifts is still open`. Empty: it can be refined
+    /// (or continued, when it was left half-way). Nothing else counts: not a Run, not a required
+    /// Proposal, not an invalid file, not an uncovered scope entry.
+    pub fn refinement_refusals(&self, gate: Gate) -> Vec<RefinementRefusal> {
+        let mut refusals = Vec::new();
+        if gate.agent_finishing {
+            refusals.push(RefinementRefusal::AgentFinishing);
+        }
+        if self.no_open_drift {
+            refusals.push(RefinementRefusal::NoOpenDrift);
+        }
+        refusals
+    }
+
+    /// A stale Proposal of any kind, attached to a Drift or not, whatever else blocks it and
+    /// whatever a Run does, that nothing in [`Analysis::refinement_refusals`] refuses: Approve
+    /// refines it.
     pub fn refinable(&self, gate: Gate) -> bool {
-        !gate.agent_finishing
-            && self.kind == Kind::Change
-            && !self.attached
-            && !self.stale.is_empty()
-            && self.blocking().iter().all(Reason::is_stale)
+        !self.stale.is_empty() && self.refinement_refusals(gate).is_empty()
     }
 
     /// The reasons the hand-over is refused: 5 to 7, then what only the hand-over checks.
@@ -296,6 +337,30 @@ fn required_states(image: &ProjectImage, card: &Card) -> Vec<Required> {
                 },
             };
             Required { id, problem }
+        })
+        .collect()
+}
+
+/// The entries of `requires` of `id` a refinement drops: a Proposal that was rejected (but not
+/// one rejected with Rework whose rework was not handed over: it counts as still being written
+/// here, though Approve still says `was rejected`),
+/// was discarded or is missing, and the entry through which `id` forms a cycle (only its own;
+/// the other Proposals of the cycle are not touched). Each with what is wrong, in `requires`
+/// order; empty for a Proposal that does not exist.
+pub fn broken_requires(image: &ProjectImage, id: &str) -> Vec<Required> {
+    let Some(card) = image.card(CardKind::Proposal, id) else {
+        return Vec::new();
+    };
+    required_states(image, card)
+        .into_iter()
+        .filter(|r| match r.problem {
+            Some(RequiredProblem::Rejected) => !image
+                .card(CardKind::Proposal, &r.id)
+                .is_some_and(|required| data::rework_pending(image, required)),
+            Some(
+                RequiredProblem::Discarded | RequiredProblem::Missing | RequiredProblem::Cycle,
+            ) => true,
+            Some(RequiredProblem::BeingWritten | RequiredProblem::NotApproved) | None => false,
         })
         .collect()
 }
@@ -535,7 +600,7 @@ pub fn analyse(
     let base = data::base_of(card);
     for (path, _) in folder.held() {
         if !base.contains_key(path) {
-            handover_only.push(format!("`{path}` is not registered: make a file editable with `trama proposal edit`, never by creating it in the folder"));
+            handover_only.push(format!("`{path}` is not registered: make a file editable with `weaver proposal edit`, never by creating it in the folder"));
         }
     }
     for path in base.keys() {
@@ -616,5 +681,6 @@ pub fn analyse(
         fixes,
         handover_only,
         attached,
+        no_open_drift: kind == Kind::Resolution && resolution::none_open(image, card),
     })
 }

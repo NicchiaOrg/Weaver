@@ -1,9 +1,9 @@
 //! The app side of the request kinds `command` and `question.new`.
 //!
-//! `command` is a `trama` command the CLI sent instead of running it itself. It runs in the queue
+//! `command` is a `weaver` command the CLI sent instead of running it itself. It runs in the queue
 //! of its project, under the OS project lock, with the same function the CLI uses when no app
-//! answers (`trama_cli::exec::execute`), so the checks are the same in both places. The identities
-//! it carries (`TRAMA_JOB`, `TRAMA_GENERAL`) are vouched for by the authority of the jobs.
+//! answers (`weaver_cli::exec::execute`), so the checks are the same in both places. The identities
+//! it carries (`WEAVER_JOB`, `WEAVER_GENERAL`) are vouched for by the authority of the jobs.
 //!
 //! `question.new` is a round of questions ([`crate::rounds`]).
 
@@ -11,11 +11,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tauri::{AppHandle, Manager};
-use trama_cli::exec::{self, Authority};
-use trama_cli::spec::Caller;
-use trama_core::command::{code, CommandRequest, KIND};
-use trama_core::paths::project_hash_of_canonical;
-use trama_core::protocol::{Request, Response};
+use weaver_cli::exec::{self, Authority};
+use weaver_cli::spec::Caller;
+use weaver_core::command::{code, CommandRequest, KIND};
+use weaver_core::paths::project_hash_of_canonical;
+use weaver_core::protocol::{Request, Response};
 
 use crate::error::ErrorCode;
 use crate::mutations::MutationQueues;
@@ -29,7 +29,7 @@ pub fn handler(app: AppHandle) -> Handler {
     Arc::new(move |request, peer| {
         // A round waits for the developer with no time limit: it never goes through the project's
         // queue, and the closing of its connection withdraws it.
-        if request.kind == trama_core::question::KIND {
+        if request.kind == weaver_core::question::KIND {
             return app
                 .state::<Arc<crate::rounds::Rounds>>()
                 .handle(request, peer);
@@ -39,7 +39,7 @@ pub fn handler(app: AppHandle) -> Handler {
         let response = handle(&state.mutations, &authority, request);
         if response.error.is_none() {
             let command = serde_json::from_value::<CommandRequest>(payload);
-            let reply = serde_json::from_value::<trama_core::command::CommandReply>(
+            let reply = serde_json::from_value::<weaver_core::command::CommandReply>(
                 response.payload.clone(),
             );
             if let (Ok(command), Ok(reply)) = (command, reply) {
@@ -94,7 +94,7 @@ pub fn handle(
         Ok(Err(failure)) => Response::failure(failure.code, failure.message),
         Err(error) if error.code == ErrorCode::ProjectBusy => Response::failure(
             code::PROJECT_BUSY,
-            "the project is busy: another Weaver or trama command holds it",
+            "the project is busy: another Weaver or weaver command holds it",
         ),
         Err(error) => Response::failure(code::FAILED, error.message),
     }
@@ -107,9 +107,9 @@ mod tests {
     use std::time::Duration;
 
     use serde_json::{json, Map, Value};
-    use trama_core::command::CommandReply;
-    use trama_core::lock;
-    use trama_core::paths::{canonical_root, AppDirs};
+    use weaver_core::command::CommandReply;
+    use weaver_core::lock;
+    use weaver_core::paths::{canonical_root, AppDirs};
 
     use super::*;
 
@@ -144,6 +144,7 @@ mod tests {
             state: state.map(Into::into),
             input: input.as_object().cloned().unwrap_or_else(Map::new),
             general: None,
+            ask: None,
         };
         let mut request = Request::new("secret", KIND, serde_json::to_value(command).unwrap());
         request.job = job.map(Into::into);
@@ -185,7 +186,7 @@ mod tests {
         assert!(response.error.is_none(), "{:?}", response.error);
         let reply: CommandReply = serde_json::from_value(response.payload).unwrap();
         assert!(reply.markdown.starts_with("# Project initialised"));
-        assert!(f.root.join(".trama/model/system.md").is_file());
+        assert!(f.root.join(".weaver/model/system.md").is_file());
 
         let check = handle(
             &queues,
@@ -206,7 +207,7 @@ mod tests {
             request(&f.root, None, "model", "check", None, None, json!({})),
         );
         assert_eq!(missing.error.unwrap().code, code::NOT_INITIALISED);
-        assert!(!f.root.join(".trama").exists());
+        assert!(!f.root.join(".weaver").exists());
 
         let invalid = handle(
             &queues,
@@ -224,7 +225,7 @@ mod tests {
         let error = invalid.error.unwrap();
         assert_eq!(error.code, code::INVALID_INPUT);
         assert!(error.message.contains("nope"));
-        assert!(!f.root.join(".trama").exists());
+        assert!(!f.root.join(".weaver").exists());
     }
 
     #[test]
@@ -303,7 +304,7 @@ mod tests {
             request(&f.root, None, "project", "new", None, None, json!({})),
         );
         assert_eq!(response.error.unwrap().code, code::PROJECT_BUSY);
-        assert!(!f.root.join(".trama").exists());
+        assert!(!f.root.join(".weaver").exists());
         release_tx.send(()).unwrap();
         holder.join().unwrap();
     }

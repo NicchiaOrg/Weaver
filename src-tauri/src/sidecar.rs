@@ -1,17 +1,32 @@
-//! The bundled `trama`, a Tauri `externalBin` sidecar.
+//! The bundled `weaver-cli`, a Tauri `externalBin` sidecar.
 //!
-//! At each start Weaver copies it into `<app local data>/bin/` when its content differs, so the
-//! path stays stable even under AppImage (where the bundled copy lives in a changing mount).
-//! That folder holds only `trama` and goes first on the PATH of every omp Weaver starts.
+//! At each start Weaver copies it into `<app local data>/bin/` as `weaver` when its content
+//! differs, so the path stays stable even under AppImage (where the bundled copy lives in a
+//! changing mount), and removes the `trama` left there by earlier versions of Weaver. That folder
+//! holds only `weaver` and goes first on the PATH of every omp Weaver starts.
 
 use std::io;
 use std::path::{Path, PathBuf};
 
-use trama_core::atomic;
-use trama_core::paths::AppDirs;
+use weaver_core::atomic;
+use weaver_core::paths::AppDirs;
 
-/// File name of the CLI inside the bundle and inside `<app local data>/bin/`.
-pub const FILE_NAME: &str = if cfg!(windows) { "trama.exe" } else { "trama" };
+/// File name of the CLI inside the bundle, next to the executable of the app.
+pub const BUNDLED_FILE_NAME: &str = if cfg!(windows) {
+    "weaver-cli.exe"
+} else {
+    "weaver-cli"
+};
+
+/// File name of the CLI inside `<app local data>/bin/`: the name the agent types.
+pub const FILE_NAME: &str = if cfg!(windows) {
+    "weaver.exe"
+} else {
+    "weaver"
+};
+
+/// File name that earlier versions of Weaver put in `<app local data>/bin/`.
+const PREVIOUS_FILE_NAME: &str = if cfg!(windows) { "trama.exe" } else { "trama" };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncOutcome {
@@ -23,17 +38,23 @@ pub enum SyncOutcome {
     SourceMissing,
 }
 
-/// Where the bundled `trama` sits: next to the app executable (Tauri strips the target triple).
+/// Where the bundled `weaver-cli` sits: next to the app executable (Tauri strips the target triple).
 pub fn bundled_path() -> io::Result<PathBuf> {
     let exe = std::env::current_exe()?;
     let folder = exe
         .parent()
         .ok_or_else(|| io::Error::other("the executable has no folder"))?;
-    Ok(folder.join(FILE_NAME))
+    Ok(folder.join(BUNDLED_FILE_NAME))
 }
 
-/// Copies `source` to `<bin_dir>/trama` atomically when the content differs.
+/// Copies `source` to `<bin_dir>/weaver` atomically when the content differs, and removes the
+/// `trama` of earlier versions from `bin_dir`.
 pub fn sync(source: &Path, bin_dir: &Path) -> io::Result<SyncOutcome> {
+    match std::fs::remove_file(bin_dir.join(PREVIOUS_FILE_NAME)) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
     let bytes = match std::fs::read(source) {
         Ok(bytes) if !bytes.is_empty() => bytes,
         Ok(_) => return Ok(SyncOutcome::SourceMissing),
@@ -51,7 +72,7 @@ pub fn sync(source: &Path, bin_dir: &Path) -> io::Result<SyncOutcome> {
     Ok(SyncOutcome::Installed)
 }
 
-/// Installs the bundled `trama` into the app's bin folder. Blocking: call it from the blocking pool.
+/// Installs the bundled `weaver-cli` as `weaver` into the app's bin folder. Blocking: call it from the blocking pool.
 pub fn install(dirs: &AppDirs) -> io::Result<SyncOutcome> {
     sync(&bundled_path()?, &dirs.bin_dir())
 }
@@ -86,8 +107,32 @@ mod tests {
         assert_eq!(
             names(&bin),
             vec![FILE_NAME.to_owned()],
-            "the folder holds only trama"
+            "the folder holds only weaver"
         );
+    }
+
+    #[test]
+    fn the_trama_of_earlier_versions_is_removed_and_the_folder_holds_only_weaver() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("bundled");
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(&source, b"v1").unwrap();
+        std::fs::write(bin.join(PREVIOUS_FILE_NAME), b"old").unwrap();
+
+        assert_eq!(sync(&source, &bin).unwrap(), SyncOutcome::Installed);
+        assert_eq!(names(&bin), vec![FILE_NAME.to_owned()]);
+
+        // Also when the copy is already up to date, or the bundled file is missing.
+        std::fs::write(bin.join(PREVIOUS_FILE_NAME), b"old").unwrap();
+        assert_eq!(sync(&source, &bin).unwrap(), SyncOutcome::UpToDate);
+        assert_eq!(names(&bin), vec![FILE_NAME.to_owned()]);
+        std::fs::write(bin.join(PREVIOUS_FILE_NAME), b"old").unwrap();
+        assert_eq!(
+            sync(&dir.path().join("none"), &bin).unwrap(),
+            SyncOutcome::SourceMissing
+        );
+        assert_eq!(names(&bin), vec![FILE_NAME.to_owned()]);
     }
 
     #[test]

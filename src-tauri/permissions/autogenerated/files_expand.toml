@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-files-expand"
+description = "Enables the files_expand command without any pre-configured scope."
+commands.allow = ["files_expand"]
+
+[[permission]]
+identifier = "deny-files-expand"
+description = "Denies the files_expand command without any pre-configured scope."
+commands.deny = ["files_expand"]

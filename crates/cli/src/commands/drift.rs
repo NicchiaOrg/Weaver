@@ -1,5 +1,5 @@
-//! `trama drift new | show | list | edit | move`. The rules (the fingerprint, the prepared
-//! question, the decisions and their reasons) live in `trama_core::project::drift`; this file reads
+//! `weaver drift new | show | list | edit | move`. The rules (the fingerprint, the prepared
+//! question, the decisions and their reasons) live in `weaver_core::project::drift`; this file reads
 //! the input, applies the changes and prints.
 //!
 //! The decisions of `move` are the developer's: the same functions the app runs for the buttons
@@ -9,20 +9,20 @@ use std::collections::BTreeSet;
 use std::convert::Infallible;
 
 use serde_json::{json, Map, Value};
-use trama_core::command::CommandReply;
-use trama_core::project::board::Refused;
-use trama_core::project::cards::{Card, CardKind};
-use trama_core::project::changes::{self, ChangeSet, MutationError};
-use trama_core::project::clock::{now_instant, SystemClock};
-use trama_core::project::drift::create::{self, EditDrift, NewDrift, PreparedInput};
-use trama_core::project::drift::decide::{self, Decision};
-use trama_core::project::drift::prepared::{self, Preparation, PreparedDecision};
-use trama_core::project::drift::{self, drift_options, reasons, FixOption};
-use trama_core::project::image::ProjectImage;
-use trama_core::project::proposal::data::{self, Status};
-use trama_core::project::random::OsRandom;
-use trama_core::project::resolve::resolve_card;
-use trama_core::project::shortnum::{self, ShortNumbers};
+use weaver_core::command::CommandReply;
+use weaver_core::project::board::Refused;
+use weaver_core::project::cards::{Card, CardKind};
+use weaver_core::project::changes::{self, ChangeSet, MutationError};
+use weaver_core::project::clock::{now_instant, SystemClock};
+use weaver_core::project::drift::create::{self, EditDrift, NewDrift, PreparedInput};
+use weaver_core::project::drift::decide::{self, Decision};
+use weaver_core::project::drift::prepared::{self, Preparation, PreparedDecision};
+use weaver_core::project::drift::{self, drift_options, reasons, FixOption};
+use weaver_core::project::image::ProjectImage;
+use weaver_core::project::proposal::data::{self, Status};
+use weaver_core::project::random::OsRandom;
+use weaver_core::project::resolve::resolve_card;
+use weaver_core::project::shortnum::{self, ShortNumbers};
 
 use super::{card_with, local, question_fields, reply, written};
 use crate::spec::*;
@@ -33,7 +33,7 @@ pub fn commands() -> Vec<Command> {
     vec![
         Command::new("drift", "new", "Files a Drift: the code and the Model or the Requirements disagree.", new)
             .notes(&[
-                "`options` are 2 to 5 fix options, the recommended first; they may be left out only with `proposal` (a Draft or Open Proposal no other Drift holds). `task` is the Task the Drift was found in; `previous` is set automatically when that Task is a fix Task. `announcement` is the identity printed by `trama announcement new`. The job that files it is recorded when `TRAMA_JOB` is set.",
+                "`options` are 2 to 5 fix options, the recommended first; they may be left out only with `proposal` (a Draft or Open Proposal no other Drift holds). `task` is the Task the Drift was found in; `previous` is set automatically when that Task is a fix Task. `announcement` is the identity printed by `weaver announcement new`. The job that files it is recorded when `WEAVER_JOB` is set.",
             ])
             .input(vec![
                 req("title", line(), "The title."),
@@ -49,7 +49,7 @@ pub fn commands() -> Vec<Command> {
             ])
             .output(card_with(vec![req("status", line(), "The status: `open`.")]))
             .place(written)
-            .example("trama drift new --input -"),
+            .example("weaver drift new --input -"),
         Command::new("drift", "show", "Prints a Drift with its options, Task, Proposal and prepared question.", show)
             .notes(&[
                 "`previous` lists the Drifts this one repeats, the nearest first, with the decision taken on each. `prepared` is the prepared question with `valid`; a block that does not read is reported in `problem`.",
@@ -77,10 +77,10 @@ pub fn commands() -> Vec<Command> {
                     opt("prepared", line(), "The instant it was prepared."),
                 ]), "The prepared question."),
             ]))
-            .example("trama drift show d3"),
+            .example("weaver drift show d3"),
         Command::new("drift", "list", "Lists Drifts.", list_drifts)
             .notes(&[
-                "Open Drifts only, unless `all`. `refs` lists the Drifts that concern those references, as the Drifts that block a Task, and marks (`unchanged`) the Dismissed Drifts that concern them whose text is unchanged since the dismissal: the agent never files those differences again. `currentJob` uses `TRAMA_JOB` and lists nothing outside a job. `unprepared` lists the open Drifts that have no valid prepared question and are in no resolution being written or open.",
+                "Open Drifts only, unless `all`. `refs` lists the Drifts that concern those references, as the Drifts that block a Task, and marks (`unchanged`) the Dismissed Drifts that concern them whose text is unchanged since the dismissal: the agent never files those differences again. `currentJob` uses `WEAVER_JOB` and lists nothing outside a job. `unprepared` lists the open Drifts that have no valid prepared question and are in no resolution being written or open.",
             ])
             .input(vec![
                 opt("all", boolean(), "Every Drift, decided ones included."),
@@ -94,10 +94,10 @@ pub fn commands() -> Vec<Command> {
                 opt("unchanged", boolean(), "A Dismissed Drift whose references have the same text as when it was dismissed."),
             ]))), "The Drifts.")])
             .place(local)
-            .example(r#"trama drift list --input '{"currentJob":true,"unprepared":true}'"#),
+            .example(r#"weaver drift list --input '{"currentJob":true,"unprepared":true}'"#),
         Command::new("drift", "edit", "Records the prepared question of a Drift, or attaches a Proposal to it.", edit)
             .notes(&[
-                "`prepared` is `{question, decisions}`: `question` is a question of `trama question new` whose `id` is the Drift identity and whose `multi` is false, and `decisions` has one decision per option, in the same order: every fix option once as `fix-code` with its `option`, plus one `proposal` or `dismissed` (both when the Drift has no fix option). Weaver adds the fingerprint and the instant. `proposal` attaches a Proposal to a Drift that has none.",
+                "`prepared` is `{question, decisions}`: `question` is a question of `weaver question new` whose `id` is the Drift identity and whose `multi` is false, and `decisions` has one decision per option, in the same order: every fix option once as `fix-code` with its `option`, plus one `proposal` or `dismissed` (both when the Drift has no fix option). Weaver adds the fingerprint and the instant. `proposal` attaches a Proposal to a Drift that has none.",
             ])
             .arg(Arg::Card(CardKind::Drift))
             .input(vec![
@@ -116,7 +116,7 @@ pub fn commands() -> Vec<Command> {
                 opt("proposal", line(), "The identity of the Proposal attached by this call."),
             ]))
             .place(written)
-            .example("trama drift edit d3 --input -"),
+            .example("weaver drift edit d3 --input -"),
         Command::new("drift", "move", "Decides a Drift.", move_drift)
             .notes(&[
                 "The developer's decisions: the agent runs them only when the developer explicitly asked for that decision in the conversation. `code-to-be-fixed` needs `option` (from 1) when the Drift has options; `proposal-accepted` and `dismissed` take none.",
@@ -132,7 +132,7 @@ pub fn commands() -> Vec<Command> {
                 opt("task", object(card_with(vec![])), "The fix Task created by `code-to-be-fixed`."),
             ]))
             .place(written)
-            .example("trama drift move d3 dismissed"),
+            .example("weaver drift move d3 dismissed"),
     ]
 }
 
@@ -439,7 +439,7 @@ fn show(call: &Call) -> Result<CommandReply, Failure> {
     if let Some(proposal) = attached {
         let status = data::status_of(proposal).map_or("unknown", Status::as_str);
         markdown.push_str(&format!(
-            "\n## Attached Proposal\n\n{} `{}` {} ({status}). Read it with `trama proposal show {}`.\n",
+            "\n## Attached Proposal\n\n{} `{}` {} ({status}). Read it with `weaver proposal show {}`.\n",
             name(&numbers, CardKind::Proposal, &proposal.id),
             proposal.id,
             proposal.title,
@@ -748,7 +748,7 @@ mod tests {
     use std::path::Path;
 
     use serde_json::{json, Map, Value};
-    use trama_core::project::text::{file_content, sha256_hex};
+    use weaver_core::project::text::{file_content, sha256_hex};
 
     use super::*;
 
@@ -757,7 +757,7 @@ mod tests {
     const ORDER: &str = "# Order\n\nAn order.\n\n## States\n\n### Draft (initial)\nChoosing.\n- `CONFIRM` → Paid\n\n### Paid\n\n## Events\n\n### CONFIRM\nConfirmed.\n";
 
     fn put(root: &Path, rel: &str, text: &str) {
-        let path = root.join(".trama").join(rel);
+        let path = root.join(".weaver").join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
     }
@@ -783,7 +783,7 @@ mod tests {
         value: Value,
         caller: &Caller,
     ) -> Result<CommandReply, Failure> {
-        let request = trama_core::command::CommandRequest {
+        let request = weaver_core::command::CommandRequest {
             object: object.to_owned(),
             verb: verb.to_owned(),
             card: arg.map(str::to_owned),
@@ -791,6 +791,7 @@ mod tests {
             input: input(value),
             root: root.to_string_lossy().into_owned(),
             general: None,
+            ask: None,
         };
         crate::exec::execute(&request, caller, &crate::exec::NoJobs)
     }
@@ -889,7 +890,7 @@ mod tests {
             failure.message
         );
         assert!(
-            !root.join(".trama/drifts").exists(),
+            !root.join(".weaver/drifts").exists(),
             "a refused command writes nothing"
         );
 
@@ -902,7 +903,7 @@ mod tests {
             "{}",
             failure.message
         );
-        assert!(!root.join(".trama/drifts").exists());
+        assert!(!root.join(".weaver/drifts").exists());
     }
 
     #[test]
@@ -1021,7 +1022,7 @@ mod tests {
             "{}",
             shown.markdown
         );
-        let file = fs::read_dir(root.join(".trama/drifts"))
+        let file = fs::read_dir(root.join(".weaver/drifts"))
             .unwrap()
             .next()
             .unwrap()
@@ -1064,7 +1065,7 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
-        let before = fs::read_dir(root.join(".trama/drifts"))
+        let before = fs::read_dir(root.join(".weaver/drifts"))
             .unwrap()
             .next()
             .unwrap()
@@ -1331,7 +1332,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(accepted.json["status"], "proposal-accepted");
-        assert!(fs::read_to_string(root.join(".trama/model/shop/order.md"))
+        assert!(fs::read_to_string(root.join(".weaver/model/shop/order.md"))
             .unwrap()
             .contains("The customer paid."));
     }
@@ -1370,8 +1371,8 @@ mod tests {
             .to_owned();
         // The fix Task is taken by a job, which finds the same difference again.
         let text = fs::read_to_string(root.join(format!(
-                ".trama/tasks/{}",
-                fs::read_dir(root.join(".trama/tasks"))
+                ".weaver/tasks/{}",
+                fs::read_dir(root.join(".weaver/tasks"))
                     .unwrap()
                     .next()
                     .unwrap()
@@ -1380,7 +1381,7 @@ mod tests {
                     .to_string_lossy()
             )))
         .unwrap();
-        let path = fs::read_dir(root.join(".trama/tasks"))
+        let path = fs::read_dir(root.join(".weaver/tasks"))
             .unwrap()
             .next()
             .unwrap()

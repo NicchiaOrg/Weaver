@@ -11,9 +11,11 @@
 //!   "newError": "no provider",              // `session/new` fails
 //!   "loadError": "gone",                    // `session/load` fails
 //!   "replay": [ {"sessionUpdate": "..."} ], // sent as updates while `session/load` runs
+//!   "loadGate": "/tmp/gate",                // `session/load` answers only once this file exists
 //!   "steering": ["injected", "promptRequired", "failed:reason"],   // answers, in order
+//!   "pidFile": "/tmp/pid",                  // the process id is written there at start
 //!   "prompts": [ [ step, ... ], ... ],      // the steps of the 1st, 2nd... `session/prompt`
-//!   "logEnv": ["TRAMA_JOB"],                // log these variables and the arguments at start
+//!   "logEnv": ["WEAVER_JOB"],                // log these variables and the arguments at start
 //!   "ignoreClose": true                     // `session/close` is never answered
 //! }
 //! ```
@@ -23,7 +25,9 @@
 //! `{"elicit": true}` (waits for the answer, logs it), `{"wait_cancel": true}` (until
 //! `session/cancel`), `{"wait_steer": n}` (until n steering messages came), `{"exit": code}`,
 //! `{"hold": true}` (the turn never ends), `{"end": "refusal"}` (stop reason, default `end_turn`),
-//! `{"error": "text"}` (the prompt fails).
+//! `{"error": "text"}` (the prompt fails), `{"write": {"path": "...", "text": "..."}}` (appends
+//! text to a file, creating its folders: the transcripts omp writes for its sub-agents),
+//! `{"wait_file": "/tmp/gate"}` (until that file exists).
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -98,6 +102,9 @@ fn main() {
         changed: Condvar::new(),
     });
     let script = Arc::new(script);
+    if let Some(path) = script.get("pidFile").and_then(Value::as_str) {
+        let _ = std::fs::write(path, std::process::id().to_string());
+    }
     if let Some(names) = script.get("logEnv").and_then(Value::as_array) {
         let env: serde_json::Map<String, Value> = names
             .iter()
@@ -149,6 +156,12 @@ fn main() {
             (Some("session/load"), Some(id)) => {
                 for update in script.get("replay").and_then(Value::as_array).into_iter().flatten() {
                     shared.send(&json!({ "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": session_id, "update": update } }));
+                }
+                // The load answers only once the file exists: a test holds the load open.
+                if let Some(gate) = script.get("loadGate").and_then(Value::as_str) {
+                    while !std::path::Path::new(gate).exists() {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
                 }
                 match script.get("loadError").and_then(Value::as_str) {
                     Some(error) => shared.send(&json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32000, "message": error } })),
@@ -251,6 +264,28 @@ fn run_turn(shared: &Shared, session: &str, id: Value, steps: &[Value]) {
         } else if step.get("hold").is_some() {
             loop {
                 std::thread::sleep(Duration::from_secs(3600));
+            }
+        } else if let Some(write) = step.get("write") {
+            // Appends text to a file, creating its folders: the transcripts omp writes for its
+            // sub-agents. The text is written as given, so a line may be left incomplete.
+            if let (Some(path), Some(text)) = (
+                write.get("path").and_then(Value::as_str),
+                write.get("text").and_then(Value::as_str),
+            ) {
+                let path = std::path::Path::new(path);
+                if let Some(folder) = path.parent() {
+                    std::fs::create_dir_all(folder).expect("the folder of the file is created");
+                }
+                let mut file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .expect("the file opens");
+                std::io::Write::write_all(&mut file, text.as_bytes()).expect("the file is written");
+            }
+        } else if let Some(path) = step.get("wait_file").and_then(Value::as_str) {
+            while !std::path::Path::new(path).exists() {
+                std::thread::sleep(Duration::from_millis(10));
             }
         } else if let Some(reason) = step.get("end").and_then(Value::as_str) {
             stop = reason.to_owned();

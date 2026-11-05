@@ -1,4 +1,4 @@
-//! `trama question new`: a round of questions for the developer. The registry holds the whole
+//! `weaver question new`: a round of questions for the developer. The registry holds the whole
 //! input and its checks; running it is [`crate::round`], which waits with no time limit and so
 //! never goes through the handlers of the registry.
 
@@ -24,7 +24,7 @@ pub fn commands() -> Vec<Command> {
         ])
         .place(in_app)
         .check(check)
-        .example("trama question new --input -")]
+        .example("weaver question new --input -")]
 }
 
 /// The rules of a round that types do not say: ids are unique, labels are unique within a
@@ -140,7 +140,7 @@ mod tests {
         for round in rounds {
             let input = round.as_object().unwrap();
             let by_registry = crate::exec::check_input(registry_command(), input).is_ok();
-            let by_core = trama_core::question::problems(&round).is_empty();
+            let by_core = weaver_core::question::problems(&round).is_empty();
             assert_eq!(by_registry, by_core, "{round}");
         }
     }

@@ -100,7 +100,7 @@ export function SetupLayer({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {empty ? (
-        <div className="flex shrink-0 flex-col gap-3 p-3 pb-0">
+        <div className="flex shrink-0 flex-col gap-4 p-4 pb-0 empty:hidden">
           <OmpNotReady />
           {busy ? null : importing ? (
             <ImportPanel onClose={() => setImporting(false)} onStarted={() => setImporting(false)} />

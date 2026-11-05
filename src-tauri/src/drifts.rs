@@ -1,7 +1,7 @@
 //! The app side of the Drift: the decisions of the developer on its card (`Resolve`, `Fix the
-//! code`, `Accept Proposal`, `Dismiss Drift`) and the prepared question.
+//! code`, `Accept Proposal`, `Refine`, `Dismiss Drift`) and the prepared question.
 //!
-//! The rules live in `trama_core::project::drift`. A decision runs through
+//! The rules live in `weaver_core::project::drift`. A decision runs through
 //! [`crate::decisions::decide`]: in the project's queue, under the project lock, with the facts of
 //! that moment, checked again when applied, and written whole or not at all.
 //!
@@ -28,23 +28,23 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Manager, State};
-use trama_core::job_instruction::{Job, ResolveAnswer};
-use trama_core::jobs::admission::StartPlan;
-use trama_core::project::board::AgentFacts;
-use trama_core::project::cards::CardKind;
-use trama_core::project::changes::{self, MutationError};
-use trama_core::project::clock::{now_instant, SystemClock};
-use trama_core::project::drift::answer::{self, Next};
-use trama_core::project::drift::decide::{self, Decision};
-use trama_core::project::drift::prepared::{self, Preparation, Prepared};
-use trama_core::project::drift::{self, reasons};
-use trama_core::project::image::ProjectImage;
-use trama_core::project::proposal::create::read_project_file;
-use trama_core::project::proposal::files;
-use trama_core::project::proposal::transitions::{self, Decider, SubmitContext};
-use trama_core::project::random::OsRandom;
-use trama_core::project::shortnum::{self, ShortNumbers};
-use trama_core::question::{Answer, Outcome, RoundRequest};
+use weaver_core::job_instruction::{Job, ResolveAnswer};
+use weaver_core::jobs::admission::StartPlan;
+use weaver_core::project::board::AgentFacts;
+use weaver_core::project::cards::CardKind;
+use weaver_core::project::changes::{self, MutationError};
+use weaver_core::project::clock::{now_instant, SystemClock};
+use weaver_core::project::drift::answer::{self, Next};
+use weaver_core::project::drift::decide::{self, Decision};
+use weaver_core::project::drift::prepared::{self, Preparation, Prepared};
+use weaver_core::project::drift::{self, reasons};
+use weaver_core::project::image::ProjectImage;
+use weaver_core::project::proposal::create::read_project_file;
+use weaver_core::project::proposal::files;
+use weaver_core::project::proposal::transitions::{self, Decider, SubmitContext};
+use weaver_core::project::random::OsRandom;
+use weaver_core::project::shortnum::{self, ShortNumbers};
+use weaver_core::question::{Answer, Outcome, RoundRequest};
 
 use crate::decisions;
 use crate::error::{AppError, ErrorCode};
@@ -61,13 +61,13 @@ use crate::windows::jobs::BoxFuture;
 // Decisions
 // ---------------------------------------------------------------------------------------------
 
-fn refused(notice: impl Into<String>) -> trama_core::project::board::Refused {
-    trama_core::project::board::Refused {
+fn refused(notice: impl Into<String>) -> weaver_core::project::board::Refused {
+    weaver_core::project::board::Refused {
         notice: notice.into(),
     }
 }
 
-fn now() -> Result<String, MutationError<trama_core::project::board::Refused>> {
+fn now() -> Result<String, MutationError<weaver_core::project::board::Refused>> {
     now_instant(&SystemClock)
         .map_err(|e| MutationError::Refused(refused(format!("the clock gives no valid time: {e}"))))
 }
@@ -88,6 +88,44 @@ pub async fn decide_drift(
         Ok(image)
     })
     .await
+}
+
+/// `Refine` on the Proposal attached to a Drift (`developer.REFINE_DRIFT_PROPOSAL`): writes
+/// Refining on it under the project lock, the Drift unchanged, then starts the refinement job the
+/// way `Approve` does on a stale Proposal. Refused before anything is written when no job can
+/// start. Returns the new revision.
+pub async fn refine_attached(
+    state: &AppState,
+    project_id: &str,
+    drift_id: &str,
+) -> Result<Option<Revision>, AppError> {
+    let jobs = state.proposal_jobs.get();
+    let started: Arc<Mutex<Option<String>>> = Arc::default();
+    let (slot, check, project, drift) = (
+        started.clone(),
+        jobs.clone(),
+        project_id.to_owned(),
+        drift_id.to_owned(),
+    );
+    let revision = decisions::decide(state, project_id, move |root, facts| {
+        let decided_at = now()?;
+        let (image, decided) = decide::decide_with(
+            root,
+            facts,
+            &drift,
+            &Decision::RefineProposal,
+            &decided_at,
+            &mut OsRandom,
+            &|| check.can_start(&project),
+        )?;
+        *slot.lock().expect("refinement slot poisoned") = decided.refine;
+        Ok(image)
+    })
+    .await?;
+    if let Some(proposal) = started.lock().expect("refinement slot poisoned").take() {
+        jobs.start_refinement(project_id, &proposal);
+    }
+    Ok(revision)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -278,9 +316,13 @@ impl Drifts {
                 let request = RoundRequest {
                     questions: vec![prepared.question.clone()],
                 };
-                let outcome =
-                    self.rounds
-                        .present_prepared(project_id, &label, &drift.title, request);
+                let outcome = self.rounds.present_prepared(
+                    project_id,
+                    drift_id,
+                    &label,
+                    &drift.title,
+                    request,
+                );
                 Ok(Pressed::Asked(Asked {
                     outcome,
                     prepared: *prepared,
@@ -441,7 +483,7 @@ impl Drifts {
         root: &Path,
         project_id: &str,
         drift_id: &str,
-        row: &trama_core::project::board::ResolutionRow,
+        row: &weaver_core::project::board::ResolutionRow,
         answer: ResolveAnswer,
     ) -> MutationResult {
         let image = ProjectImage::load(root);
@@ -615,6 +657,33 @@ pub async fn accept_drift_proposal(
     )
 }
 
+/// **Refine**: adapts the stale Proposal attached to the Drift to the current Model and
+/// Requirements, or continues a refinement of it left half-way. The Drift is not decided.
+#[tauri::command]
+pub async fn refine_drift_proposal(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    project_id: String,
+    drift_id: String,
+) -> Result<(), AppError> {
+    announce(&app, refine_attached(&state, &project_id, &drift_id).await?)
+}
+
+/// **Discard**, once confirmed: throws away the attached Draft a refinement left half-way. The
+/// Drift is not decided.
+#[tauri::command]
+pub async fn discard_drift_proposal(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    project_id: String,
+    drift_id: String,
+) -> Result<(), AppError> {
+    announce(
+        &app,
+        decide_drift(&state, &project_id, &drift_id, Decision::DiscardProposal).await?,
+    )
+}
+
 /// **Dismiss Drift**, once confirmed.
 #[tauri::command]
 pub async fn dismiss_drift(
@@ -635,12 +704,12 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use serde_json::json;
-    use trama_core::paths::AppDirs;
-    use trama_core::project::drift::create::{self, EditDrift, NewDrift, PreparedInput};
-    use trama_core::project::drift::prepared::PreparedDecision;
-    use trama_core::project::drift::FixOption;
-    use trama_core::project::proposal::data::{self as proposal_data, Kind, Status};
-    use trama_core::question::{Action, Position};
+    use weaver_core::paths::AppDirs;
+    use weaver_core::project::drift::create::{self, EditDrift, NewDrift, PreparedInput};
+    use weaver_core::project::drift::prepared::PreparedDecision;
+    use weaver_core::project::drift::FixOption;
+    use weaver_core::project::proposal::data::{self as proposal_data, Kind, Status};
+    use weaver_core::question::{Action, Position};
 
     use super::*;
     use crate::agent_work::{AgentWork, Ghost};
@@ -716,13 +785,13 @@ mod tests {
     }
 
     fn put(root: &Path, rel: &str, text: &str) {
-        let path = root.join(".trama").join(rel);
+        let path = root.join(".weaver").join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
     }
 
-    fn apply(root: &Path, changes: &trama_core::project::changes::ChangeSet) {
-        trama_core::project::changes::apply(root, changes, |_| Ok::<(), Infallible>(())).unwrap();
+    fn apply(root: &Path, changes: &weaver_core::project::changes::ChangeSet) {
+        weaver_core::project::changes::apply(root, changes, |_| Ok::<(), Infallible>(())).unwrap();
     }
 
     /// A project with one Open Drift that has two fix options and a valid prepared question
@@ -765,13 +834,13 @@ mod tests {
         )
         .unwrap();
         let text = match filed.changes.get(&filed.path) {
-            Some(trama_core::project::changes::Change::Write(text)) => text.replace(
+            Some(weaver_core::project::changes::Change::Write(text)) => text.replace(
                 "- order\n",
                 &refs.iter().map(|r| format!("- {r}\n")).collect::<String>(),
             ),
             _ => unreachable!(),
         };
-        let mut changes = trama_core::project::changes::ChangeSet::new();
+        let mut changes = weaver_core::project::changes::ChangeSet::new();
         changes.write(&filed.path, text);
         apply(root, &changes);
         let image = ProjectImage::load(root);
@@ -909,7 +978,7 @@ mod tests {
         );
         let image = ProjectImage::load(f.project.path());
         let resolution = image.cards_of(CardKind::Proposal).next().unwrap();
-        let rows = trama_core::project::board::resolution_rows(resolution);
+        let rows = weaver_core::project::board::resolution_rows(resolution);
         assert_eq!(
             (
                 rows[0].decision.as_str(),
@@ -922,7 +991,7 @@ mod tests {
             f.host.started.lock().unwrap().is_empty() && f.host.notices.lock().unwrap().is_empty()
         );
         // Nothing was decided: the Drift is still open, now in a resolution waiting for the developer.
-        assert!(trama_core::project::drift::is_open(
+        assert!(weaver_core::project::drift::is_open(
             image.card(CardKind::Drift, &f.id).unwrap()
         ));
     }
@@ -942,7 +1011,7 @@ mod tests {
         let resolution = image.cards_of(CardKind::Proposal).next().unwrap();
         assert_eq!(proposal_data::status_of(resolution), Some(Status::Open));
         assert_eq!(
-            trama_core::project::board::resolution_rows(resolution)[0].decision,
+            weaver_core::project::board::resolution_rows(resolution)[0].decision,
             "dismissed"
         );
         assert!(f.host.started.lock().unwrap().is_empty());
@@ -1055,9 +1124,9 @@ mod tests {
             .unwrap()
             .path
             .clone();
-        let text = fs::read_to_string(f.project.path().join(".trama").join(&path)).unwrap();
+        let text = fs::read_to_string(f.project.path().join(".weaver").join(&path)).unwrap();
         fs::write(
-            f.project.path().join(".trama").join(&path),
+            f.project.path().join(".weaver").join(&path),
             text.replace("status: open", "status: dismissed"),
         )
         .unwrap();
@@ -1108,7 +1177,7 @@ mod tests {
         );
         assert!(f.host.started.lock().unwrap().is_empty());
         assert!(
-            !f.project.path().join(".trama/proposals").exists(),
+            !f.project.path().join(".weaver/proposals").exists(),
             "a refusal writes nothing"
         );
     }
@@ -1121,9 +1190,9 @@ mod tests {
             .unwrap()
             .path
             .clone();
-        let text = fs::read_to_string(f.project.path().join(".trama").join(&path)).unwrap();
+        let text = fs::read_to_string(f.project.path().join(".weaver").join(&path)).unwrap();
         fs::write(
-            f.project.path().join(".trama").join(&path),
+            f.project.path().join(".weaver").join(&path),
             text.replacen("created:", "job: jjjjjjjj\ncreated:", 1),
         )
         .unwrap();
@@ -1142,7 +1211,7 @@ mod tests {
 
     #[test]
     fn a_resolve_job_without_an_answer_is_refused_while_a_valid_question_exists() {
-        use trama_core::jobs::{names, JobKind};
+        use weaver_core::jobs::{names, JobKind};
         let f = fixture();
         let image = ProjectImage::load(f.project.path());
         let plan = |answer: Option<ResolveAnswer>| StartPlan {
@@ -1242,7 +1311,7 @@ mod tests {
         let f = fixture();
         let base = tempfile::tempdir().unwrap();
         let (state, id) = open(&f, base.path()).await;
-        let path = f.project.path().join(".trama").join(
+        let path = f.project.path().join(".weaver").join(
             &state
                 .pictures
                 .get(&id)
@@ -1286,7 +1355,7 @@ mod tests {
                 error.message
             );
         }
-        assert!(!f.project.path().join(".trama/tasks").exists());
+        assert!(!f.project.path().join(".weaver/tasks").exists());
     }
 
     #[tokio::test]
@@ -1317,7 +1386,7 @@ mod tests {
         fs::remove_file(
             f.project
                 .path()
-                .join(".trama/proposals/rrrrrrrr-r/proposal.md"),
+                .join(".weaver/proposals/rrrrrrrr-r/proposal.md"),
         )
         .unwrap();
         state
@@ -1339,5 +1408,143 @@ mod tests {
             ),
             (Some("dismissed"), Some(true))
         );
+    }
+
+    /// Records the refinement jobs it is asked to start.
+    #[derive(Default)]
+    struct RecordingJobs {
+        started: Mutex<Vec<String>>,
+        cannot_start: Mutex<Option<String>>,
+    }
+
+    impl crate::proposals::ProposalJobs for RecordingJobs {
+        fn can_start(&self, _: &str) -> Result<(), String> {
+            self.cannot_start
+                .lock()
+                .unwrap()
+                .clone()
+                .map_or(Ok(()), Err)
+        }
+
+        fn start_refinement(&self, _: &str, proposal: &str) {
+            self.started.lock().unwrap().push(proposal.to_owned());
+        }
+
+        fn start_rework(&self, _: &str, _: &str) {}
+
+        fn run_all_after_setup(&self, _: &str) {}
+    }
+
+    /// Attaches a Proposal `pppppppp` to the Drift of the fixture: a stale Open one, or `status`.
+    async fn attach_stale_proposal(f: &Fixture, state: &AppState, id: &str, status: &str) {
+        let hash = |text: &str| {
+            weaver_core::project::text::sha256_hex(&weaver_core::project::text::file_content(text))
+        };
+        let path = f.project.path().join(".weaver").join(
+            &state
+                .pictures
+                .get(id)
+                .unwrap()
+                .image
+                .card(CardKind::Drift, &f.id)
+                .unwrap()
+                .path,
+        );
+        let text = fs::read_to_string(&path).unwrap();
+        fs::write(
+            &path,
+            text.replacen("created:", "proposal: pppppppp\ncreated:", 1),
+        )
+        .unwrap();
+        put(
+            f.project.path(),
+            "proposals/pppppppp-p/proposal.md",
+            &format!(
+                "---\nstatus: {status}\nkind: change\nbase:\n  model/shop/order.md: {}\ncreated: 2026-11-02T07:00:00.000Z\n---\n# Already paid\n",
+                hash("another text")
+            ),
+        );
+        put(
+            f.project.path(),
+            "proposals/pppppppp-p/model/shop/order.md",
+            &ORDER.replace("### Paid\n", "### Paid\nPaid.\n"),
+        );
+        state
+            .pictures
+            .rebuild(id, crate::pictures::Rebuild::All)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn refining_writes_refining_on_the_attached_proposal_leaves_the_drift_open_and_starts_the_job(
+    ) {
+        let f = fixture();
+        let base = tempfile::tempdir().unwrap();
+        let (state, id) = open(&f, base.path()).await;
+        state
+            .agent_work
+            .set(Arc::new(Working(AtomicBool::new(false))));
+        let jobs = Arc::new(RecordingJobs::default());
+        state.proposal_jobs.set(jobs.clone());
+        attach_stale_proposal(&f, &state, &id, "open").await;
+
+        let revision = refine_attached(&state, &id, &f.id).await.unwrap();
+        assert!(revision.is_some());
+        let image = state.pictures.get(&id).unwrap().image;
+        let proposal = image.card(CardKind::Proposal, "pppppppp").unwrap();
+        assert_eq!(proposal_data::status_of(proposal), Some(Status::Refining));
+        assert!(proposal_data::refining_flag(proposal));
+        assert_eq!(
+            image
+                .card(CardKind::Drift, &f.id)
+                .unwrap()
+                .str_key("status"),
+            Some("open"),
+            "the Drift is not decided"
+        );
+        assert_eq!(*jobs.started.lock().unwrap(), ["pppppppp"]);
+
+        // Being refined, every decision is refused.
+        let error = refine_attached(&state, &id, &f.id).await.unwrap_err();
+        assert_eq!(
+            error.message,
+            "Could not refine the Proposal of D1: Being refined."
+        );
+        let error = decide_drift(&state, &id, &f.id, Decision::AcceptProposal)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.message,
+            "Could not accept the Proposal of D1: Being refined."
+        );
+        assert_eq!(jobs.started.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn refining_writes_nothing_and_starts_nothing_when_no_job_can_start() {
+        let f = fixture();
+        let base = tempfile::tempdir().unwrap();
+        let (state, id) = open(&f, base.path()).await;
+        state
+            .agent_work
+            .set(Arc::new(Working(AtomicBool::new(false))));
+        let jobs = Arc::new(RecordingJobs::default());
+        *jobs.cannot_start.lock().unwrap() = Some("no agent job can start yet".to_owned());
+        state.proposal_jobs.set(jobs.clone());
+        attach_stale_proposal(&f, &state, &id, "open").await;
+
+        let error = refine_attached(&state, &id, &f.id).await.unwrap_err();
+        assert_eq!(error.code, ErrorCode::Refused);
+        assert_eq!(
+            error.message,
+            "Could not refine the Proposal of D1: no agent job can start yet."
+        );
+        let image = state.pictures.get(&id).unwrap().image;
+        assert_eq!(
+            proposal_data::status_of(image.card(CardKind::Proposal, "pppppppp").unwrap()),
+            Some(Status::Open)
+        );
+        assert!(jobs.started.lock().unwrap().is_empty());
     }
 }

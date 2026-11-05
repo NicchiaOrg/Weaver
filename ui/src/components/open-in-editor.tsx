@@ -9,8 +9,8 @@ import { call, isAppError } from "@/lib/backend";
 export interface OpenInEditorProps extends Pick<ButtonProps, "className" | "variant" | "size"> {
   /** The file: absolute, or relative to the project root. */
   file: string;
-  /** The 1-based line; the file opens at its start without one. */
-  line?: number | null;
+  /** The 1-based line, or what gives it when the button is pressed; the file opens at its start without one. */
+  line?: number | null | (() => number | null);
   /** The project a relative `file` belongs to; defaults to the project of the window. */
   projectId?: string;
 }
@@ -23,7 +23,8 @@ export interface OpenInEditorProps extends Pick<ButtonProps, "className" | "vari
 export function OpenInEditor({ file, line = null, projectId, variant = "ghost", size = "sm", className }: OpenInEditorProps) {
   const project = useContext(ProjectContext);
   const open = () => {
-    call("open_in_editor", { file, line, projectId: projectId ?? project?.projectId ?? null }).catch((error: unknown) =>
+    const at = typeof line === "function" ? line() : line;
+    call("open_in_editor", { file, line: at, projectId: projectId ?? project?.projectId ?? null }).catch((error: unknown) =>
       toast.error("Could not open the file in the editor.", {
         description: isAppError(error) ? error.message : "The editor could not be started.",
       }),

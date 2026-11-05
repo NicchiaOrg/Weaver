@@ -7,9 +7,11 @@
 //! <config>/dev.nicchia.weaver/            settings, recent projects (later Tasks)
 //! <local data>/dev.nicchia.weaver/
 //!   runtime.json                          endpoint, secret, pid, version of the running app
-//!   bin/trama                             copy of the bundled CLI (only file in this folder)
+//!   bin/weaver                            copy of the bundled `weaver-cli` (only file in this folder)
 //!   locks/<project hash>.lock             advisory lock of a project
 //!   run/                                  socket folder when XDG_RUNTIME_DIR is not set (Unix)
+//!   system-certificates.pem               the bundle of System Certificates (all windows and projects)
+//!   omp-install/                          marker files of omp's installer: `<nonce>.code`
 //! ```
 //!
 //! `<config>` and `<local data>` are what Tauri's `app_config_dir` and `app_local_data_dir`
@@ -92,7 +94,7 @@ impl AppDirs {
         self.local_data.join(RUNTIME_FILE_NAME)
     }
 
-    /// `<local data>/bin`: holds only the `trama` copy.
+    /// `<local data>/bin`: holds only the `weaver` copy.
     pub fn bin_dir(&self) -> PathBuf {
         self.local_data.join("bin")
     }
@@ -105,6 +107,19 @@ impl AppDirs {
     /// `<local data>/locks/<project hash>.lock`.
     pub fn lock_file(&self, project_hash: &str) -> PathBuf {
         self.locks_dir().join(format!("{project_hash}.lock"))
+    }
+
+    /// `<local data>/system-certificates.pem`: the System Certificates bundle, one for every
+    /// window and project.
+    pub fn system_certificates_file(&self) -> PathBuf {
+        self.local_data
+            .join(crate::system_certificates::BUNDLE_FILE_NAME)
+    }
+
+    /// `<local data>/omp-install`: where the installer of omp leaves its exit code, one
+    /// `<nonce>.code` file for each `INSTALL_OMP` (`omp.INSTALL_FAILED`).
+    pub fn omp_install_dir(&self) -> PathBuf {
+        self.local_data.join("omp-install")
     }
 
     /// `<local data>/run`: socket folder when `XDG_RUNTIME_DIR` is not set.
@@ -158,6 +173,14 @@ mod tests {
         );
         assert_eq!(dirs.bin_dir(), Path::new("/data/dev.nicchia.weaver/bin"));
         assert_eq!(
+            dirs.system_certificates_file(),
+            Path::new("/data/dev.nicchia.weaver/system-certificates.pem")
+        );
+        assert_eq!(
+            dirs.omp_install_dir(),
+            Path::new("/data/dev.nicchia.weaver/omp-install")
+        );
+        assert_eq!(
             dirs.lock_file("0123456789abcdef"),
             Path::new("/data/dev.nicchia.weaver/locks/0123456789abcdef.lock")
         );
@@ -176,12 +199,14 @@ mod tests {
     fn relative_or_missing_xdg_runtime_is_ignored() {
         let rel = AppDirs::from_bases(Path::new("/c"), Path::new("/d"), Some(Path::new("run")));
         assert_eq!(rel.xdg_runtime_dir(), None);
-        let abs = AppDirs::from_bases(
-            Path::new("/c"),
-            Path::new("/d"),
-            Some(Path::new("/run/user/1")),
-        );
-        assert_eq!(abs.xdg_runtime_dir(), Some(Path::new("/run/user/1")));
+        // An absolute folder starts with a drive on Windows, with `/` elsewhere.
+        let absolute = if cfg!(windows) {
+            r"C:\run\user\1"
+        } else {
+            "/run/user/1"
+        };
+        let abs = AppDirs::from_bases(Path::new("/c"), Path::new("/d"), Some(Path::new(absolute)));
+        assert_eq!(abs.xdg_runtime_dir(), Some(Path::new(absolute)));
     }
 
     #[test]

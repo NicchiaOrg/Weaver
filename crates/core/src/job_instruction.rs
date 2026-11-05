@@ -15,6 +15,7 @@
 use serde::Serialize;
 
 use crate::agent_files::SKILL_NAMES;
+use crate::assets::tags;
 use crate::project::{ids, requests};
 
 const SETUP: &str = SKILL_NAMES[0];
@@ -27,10 +28,18 @@ const RESOLVE: &str = SKILL_NAMES[6];
 /// One job and what its first sentence names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Job {
-    /// The setup of an empty Model, from its written request (identity of the request file).
-    Setup { request: String },
-    /// A design, from its written request (identity of the request file).
-    Design { request: String },
+    /// The setup of an empty Model, from its written request (identity of the request file);
+    /// `assets` are the names of the assets the request tags when it is sent, each told to the
+    /// agent as a file to read. They live in memory with the job until its instruction is sent.
+    Setup {
+        request: String,
+        assets: Vec<String>,
+    },
+    /// A design, from its written request (identity of the request file), with the assets it tags.
+    Design {
+        request: String,
+        assets: Vec<String>,
+    },
     /// An import; `excluded` holds the project-relative paths the developer left out (none: every
     /// folder is imported).
     Import { excluded: Vec<String> },
@@ -46,9 +55,15 @@ pub enum Job {
         answer: Option<ResolveAnswer>,
     },
     /// The rework of a rejected Proposal.
-    Rework { proposal: String, kind: ReworkKind },
+    Rework {
+        proposal: String,
+        kind: ProposalKind,
+    },
     /// The refinement of a stale Proposal.
-    Refinement { proposal: String },
+    Refinement {
+        proposal: String,
+        kind: ProposalKind,
+    },
 }
 
 /// Which Tasks of a Run all, by the model they need.
@@ -72,16 +87,16 @@ pub struct ResolveAnswer {
     pub text: Option<String>,
 }
 
-/// The kind of the rejected Proposal being reworked; it picks the skill.
+/// The kind of the Proposal being reworked or refined; it picks the skill.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ReworkKind {
-    /// An ordinary change: `trama-design`.
+pub enum ProposalKind {
+    /// An ordinary change: `weaver-design`.
     Change,
-    /// A setup: `trama-setup` while the Model is empty, `trama-design` otherwise.
+    /// A setup: `weaver-setup` while the Model is empty, `weaver-design` otherwise.
     Setup { model_is_empty: bool },
-    /// An import: `trama-import`.
+    /// An import: `weaver-import`.
     Import,
-    /// A resolution: `trama-resolve-drifts`, on its Drifts still open (never none).
+    /// A resolution: `weaver-resolve-drifts`, on its Drifts still open (never none).
     Resolution { open_drifts: Vec<String> },
 }
 
@@ -89,7 +104,7 @@ pub enum ReworkKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     /// The sub-agent limit: for a Run all group, its share (the same number is the `max` of
-    /// `trama task list`). At least 1.
+    /// `weaver task list`). At least 1.
     pub max_agents: u32,
     /// The language name of the developer's texts, when one is set.
     pub language: Option<String>,
@@ -106,7 +121,7 @@ pub enum InstructionError {
     BadLanguage,
     #[error("the sub-agent limit is at least 1")]
     NoAgents,
-    #[error("a resolution is reworked on at least one open Drift")]
+    #[error("a resolution is reworked or refined on at least one open Drift")]
     NoDrifts,
 }
 
@@ -134,7 +149,7 @@ pub fn compose(job: &Job, settings: &Settings) -> Result<String, InstructionErro
         " Pass each sub-agent what you have already read that concerns its part, as the \"Sub-agents context sharing\" section of your skill says.",
     );
     line.push_str(
-        " Ask the developer only with `trama question new`, as the skill says, never with your own question tool; run it with no time limit and wait until it ends.",
+        " Ask the developer only with `weaver question new`, as the skill says, never with your own question tool; run it with no time limit and wait until it ends.",
     );
     if let Some(language) = language {
         line.push_str(&format!(
@@ -187,16 +202,29 @@ fn backticked(field: &'static str, values: &[String]) -> Result<String, Instruct
         .join(", "))
 }
 
+/// The sentences of the assets a request tags, each after a space; a name that cannot be written
+/// between backticks in the line is refused.
+fn asset_sentences(assets: &[String]) -> Result<String, InstructionError> {
+    if let Some(bad) = assets.iter().find(|name| !tags::is_quotable(name)) {
+        return Err(InstructionError::BadPath(bad.clone()));
+    }
+    Ok(tags::instruction_sentences(assets))
+}
+
 fn first_sentence(job: &Job, max: u32) -> Result<String, InstructionError> {
     Ok(match job {
-        Job::Setup { request } => {
-            request_identity(request)?;
-            format!("Use the {SETUP} skill on the setup request in `.trama/requests/{request}.md`.")
-        }
-        Job::Design { request } => {
+        Job::Setup { request, assets } => {
             request_identity(request)?;
             format!(
-                "Use the {DESIGN} skill on the design request in `.trama/requests/{request}.md`."
+                "Use the {SETUP} skill on the setup request in `.weaver/requests/{request}.md`.{}",
+                asset_sentences(assets)?
+            )
+        }
+        Job::Design { request, assets } => {
+            request_identity(request)?;
+            format!(
+                "Use the {DESIGN} skill on the design request in `.weaver/requests/{request}.md`.{}",
+                asset_sentences(assets)?
             )
         }
         Job::Import { excluded } if excluded.is_empty() => {
@@ -230,7 +258,7 @@ fn first_sentence(job: &Job, max: u32) -> Result<String, InstructionError> {
                 }
             };
             format!(
-                "Use the {IMPLEMENT} skill on the runnable Tasks: take them from `trama task list --input '{{\"runnable\":true,\"max\":{max},\"groups\":true{filter}}}'`, one batch at a time, until it says there is none."
+                "Use the {IMPLEMENT} skill on the runnable Tasks: take them from `weaver task list --input '{{\"runnable\":true,\"max\":{max},\"groups\":true{filter}}}'`, one batch at a time, until it says there is none."
             )
         }
         Job::Resolve { drift, answer } => {
@@ -246,30 +274,45 @@ fn first_sentence(job: &Job, max: u32) -> Result<String, InstructionError> {
         }
         Job::Rework { proposal, kind } => {
             identity("proposal", proposal)?;
-            let (skill, drifts) = match kind {
-                ReworkKind::Change => (DESIGN, String::new()),
-                ReworkKind::Setup {
-                    model_is_empty: true,
-                } => (SETUP, String::new()),
-                ReworkKind::Setup {
-                    model_is_empty: false,
-                } => (DESIGN, String::new()),
-                ReworkKind::Import => (IMPORT, String::new()),
-                ReworkKind::Resolution { open_drifts } => {
-                    if open_drifts.is_empty() {
-                        return Err(InstructionError::NoDrifts);
-                    }
-                    (
-                        RESOLVE,
-                        format!(" on the Drifts {}", backticked("drifts", open_drifts)?),
-                    )
-                }
+            let (skill, drifts) = skill_of(kind)?;
+            let drifts = if drifts.is_empty() {
+                String::new()
+            } else {
+                format!(" on the Drifts {drifts}")
             };
             format!("Use the {skill} skill to rework the rejected Proposal {proposal} with the developer's feedback{drifts}.")
         }
-        Job::Refinement { proposal } => {
+        Job::Refinement { proposal, kind } => {
             identity("proposal", proposal)?;
-            format!("Use the {DESIGN} skill to refine the stale Proposal {proposal} on the current Model and Requirements.")
+            let (skill, drifts) = skill_of(kind)?;
+            let drifts = if drifts.is_empty() {
+                String::new()
+            } else {
+                format!(", on the Drifts {drifts}")
+            };
+            format!("Use the {skill} skill to refine the stale Proposal {proposal} on the current Model and Requirements{drifts}.")
+        }
+    })
+}
+
+/// The skill that follows the kind of a Proposal, shared by a rework and a refinement, with the
+/// Drifts of a resolution (backticked, comma separated; empty for any other kind). A resolution
+/// with no Drift still open has no instruction.
+fn skill_of(kind: &ProposalKind) -> Result<(&'static str, String), InstructionError> {
+    Ok(match kind {
+        ProposalKind::Change => (DESIGN, String::new()),
+        ProposalKind::Setup {
+            model_is_empty: true,
+        } => (SETUP, String::new()),
+        ProposalKind::Setup {
+            model_is_empty: false,
+        } => (DESIGN, String::new()),
+        ProposalKind::Import => (IMPORT, String::new()),
+        ProposalKind::Resolution { open_drifts } => {
+            if open_drifts.is_empty() {
+                return Err(InstructionError::NoDrifts);
+            }
+            (RESOLVE, backticked("drifts", open_drifts)?)
         }
     })
 }
@@ -282,7 +325,7 @@ fn json(ids: &[String]) -> String {
 mod tests {
     use super::*;
 
-    const SUBAGENTS: &str = " Run at most 4 sub-agents at once. Pass each sub-agent what you have already read that concerns its part, as the \"Sub-agents context sharing\" section of your skill says. Ask the developer only with `trama question new`, as the skill says, never with your own question tool; run it with no time limit and wait until it ends.";
+    const SUBAGENTS: &str = " Run at most 4 sub-agents at once. Pass each sub-agent what you have already read that concerns its part, as the \"Sub-agents context sharing\" section of your skill says. Ask the developer only with `weaver question new`, as the skill says, never with your own question tool; run it with no time limit and wait until it ends.";
     const LANGUAGE: &str = " Write the texts for the developer in Italian, as the Language section of your skill says.";
 
     fn settings(language: Option<&str>) -> Settings {
@@ -305,70 +348,86 @@ mod tests {
     fn cases() -> Vec<(Job, String)> {
         vec![
             (
-                Job::Setup { request: request(1) },
-                "Use the trama-setup skill on the setup request in `.trama/requests/2026-11-02T09-30-01.md`.".into(),
+                Job::Setup { request: request(1), assets: vec![] },
+                "Use the weaver-setup skill on the setup request in `.weaver/requests/2026-11-02T09-30-01.md`.".into(),
             ),
             (
-                Job::Design { request: request(2) },
-                "Use the trama-design skill on the design request in `.trama/requests/2026-11-02T09-30-02.md`.".into(),
+                Job::Design { request: request(2), assets: vec![] },
+                "Use the weaver-design skill on the design request in `.weaver/requests/2026-11-02T09-30-02.md`.".into(),
             ),
             (
                 Job::Import { excluded: vec![] },
-                "Use the trama-import skill on this repository. Import every folder and do not ask which folders to import.".into(),
+                "Use the weaver-import skill on this repository. Import every folder and do not ask which folders to import.".into(),
             ),
             (
                 Job::Import { excluded: vec!["node_modules".into(), "docs/old drafts".into()] },
-                "Use the trama-import skill on this repository. Do not import these paths and do not ask which folders to import: `node_modules`, `docs/old drafts`.".into(),
+                "Use the weaver-import skill on this repository. Do not import these paths and do not ask which folders to import: `node_modules`, `docs/old drafts`.".into(),
             ),
-            (Job::Scan, "Use the trama-scan skill on the whole System.".into()),
-            (Job::RunTask { task: id(3) }, "Use the trama-implement skill on Task abcdef03.".into()),
+            (Job::Scan, "Use the weaver-scan skill on the whole System.".into()),
+            (Job::RunTask { task: id(3) }, "Use the weaver-implement skill on Task abcdef03.".into()),
             (
                 Job::RunAll { filter: RunAllFilter::All },
-                "Use the trama-implement skill on the runnable Tasks: take them from `trama task list --input '{\"runnable\":true,\"max\":4,\"groups\":true}'`, one batch at a time, until it says there is none.".into(),
+                "Use the weaver-implement skill on the runnable Tasks: take them from `weaver task list --input '{\"runnable\":true,\"max\":4,\"groups\":true}'`, one batch at a time, until it says there is none.".into(),
             ),
             (
                 Job::RunAll { filter: RunAllFilter::Proposals(vec![id(4), id(5)]) },
-                "Use the trama-implement skill on the runnable Tasks: take them from `trama task list --input '{\"runnable\":true,\"max\":4,\"groups\":true,\"proposals\":[\"abcdef04\",\"abcdef05\"]}'`, one batch at a time, until it says there is none.".into(),
+                "Use the weaver-implement skill on the runnable Tasks: take them from `weaver task list --input '{\"runnable\":true,\"max\":4,\"groups\":true,\"proposals\":[\"abcdef04\",\"abcdef05\"]}'`, one batch at a time, until it says there is none.".into(),
             ),
             (
                 Job::RunAll { filter: RunAllFilter::NotProposals(vec![id(4), id(5)]) },
-                "Use the trama-implement skill on the runnable Tasks: take them from `trama task list --input '{\"runnable\":true,\"max\":4,\"groups\":true,\"notProposals\":[\"abcdef04\",\"abcdef05\"]}'`, one batch at a time, until it says there is none.".into(),
+                "Use the weaver-implement skill on the runnable Tasks: take them from `weaver task list --input '{\"runnable\":true,\"max\":4,\"groups\":true,\"notProposals\":[\"abcdef04\",\"abcdef05\"]}'`, one batch at a time, until it says there is none.".into(),
             ),
-            (Job::Resolve { drift: id(6), answer: None }, "Use the trama-resolve-drifts skill on Drift abcdef06.".into()),
+            (Job::Resolve { drift: id(6), answer: None }, "Use the weaver-resolve-drifts skill on Drift abcdef06.".into()),
             (
                 Job::Resolve {
                     drift: id(6),
                     answer: Some(ResolveAnswer { selected: vec!["Keep the code".into()], text: Some("Only for \"guests\"\nplease".into()) }),
                 },
-                "Use the trama-resolve-drifts skill on Drift abcdef06. The developer already answered its prepared question: {\"selected\":[\"Keep the code\"],\"text\":\"Only for \\\"guests\\\"\\nplease\"}.".into(),
+                "Use the weaver-resolve-drifts skill on Drift abcdef06. The developer already answered its prepared question: {\"selected\":[\"Keep the code\"],\"text\":\"Only for \\\"guests\\\"\\nplease\"}.".into(),
             ),
             (
                 Job::Resolve { drift: id(6), answer: Some(ResolveAnswer { selected: vec![], text: None }) },
-                "Use the trama-resolve-drifts skill on Drift abcdef06. The developer already answered its prepared question: {\"selected\":[]}.".into(),
+                "Use the weaver-resolve-drifts skill on Drift abcdef06. The developer already answered its prepared question: {\"selected\":[]}.".into(),
             ),
             (
-                Job::Rework { proposal: id(7), kind: ReworkKind::Change },
-                "Use the trama-design skill to rework the rejected Proposal abcdef07 with the developer's feedback.".into(),
+                Job::Rework { proposal: id(7), kind: ProposalKind::Change },
+                "Use the weaver-design skill to rework the rejected Proposal abcdef07 with the developer's feedback.".into(),
             ),
             (
-                Job::Rework { proposal: id(7), kind: ReworkKind::Setup { model_is_empty: true } },
-                "Use the trama-setup skill to rework the rejected Proposal abcdef07 with the developer's feedback.".into(),
+                Job::Rework { proposal: id(7), kind: ProposalKind::Setup { model_is_empty: true } },
+                "Use the weaver-setup skill to rework the rejected Proposal abcdef07 with the developer's feedback.".into(),
             ),
             (
-                Job::Rework { proposal: id(7), kind: ReworkKind::Setup { model_is_empty: false } },
-                "Use the trama-design skill to rework the rejected Proposal abcdef07 with the developer's feedback.".into(),
+                Job::Rework { proposal: id(7), kind: ProposalKind::Setup { model_is_empty: false } },
+                "Use the weaver-design skill to rework the rejected Proposal abcdef07 with the developer's feedback.".into(),
             ),
             (
-                Job::Rework { proposal: id(7), kind: ReworkKind::Import },
-                "Use the trama-import skill to rework the rejected Proposal abcdef07 with the developer's feedback.".into(),
+                Job::Rework { proposal: id(7), kind: ProposalKind::Import },
+                "Use the weaver-import skill to rework the rejected Proposal abcdef07 with the developer's feedback.".into(),
             ),
             (
-                Job::Rework { proposal: id(7), kind: ReworkKind::Resolution { open_drifts: vec![id(8), id(9)] } },
-                "Use the trama-resolve-drifts skill to rework the rejected Proposal abcdef07 with the developer's feedback on the Drifts `abcdef08`, `abcdef09`.".into(),
+                Job::Rework { proposal: id(7), kind: ProposalKind::Resolution { open_drifts: vec![id(8), id(9)] } },
+                "Use the weaver-resolve-drifts skill to rework the rejected Proposal abcdef07 with the developer's feedback on the Drifts `abcdef08`, `abcdef09`.".into(),
             ),
             (
-                Job::Refinement { proposal: id(10) },
-                "Use the trama-design skill to refine the stale Proposal abcdef10 on the current Model and Requirements.".into(),
+                Job::Refinement { proposal: id(10), kind: ProposalKind::Change },
+                "Use the weaver-design skill to refine the stale Proposal abcdef10 on the current Model and Requirements.".into(),
+            ),
+            (
+                Job::Refinement { proposal: id(10), kind: ProposalKind::Setup { model_is_empty: true } },
+                "Use the weaver-setup skill to refine the stale Proposal abcdef10 on the current Model and Requirements.".into(),
+            ),
+            (
+                Job::Refinement { proposal: id(10), kind: ProposalKind::Setup { model_is_empty: false } },
+                "Use the weaver-design skill to refine the stale Proposal abcdef10 on the current Model and Requirements.".into(),
+            ),
+            (
+                Job::Refinement { proposal: id(10), kind: ProposalKind::Import },
+                "Use the weaver-import skill to refine the stale Proposal abcdef10 on the current Model and Requirements.".into(),
+            ),
+            (
+                Job::Refinement { proposal: id(10), kind: ProposalKind::Resolution { open_drifts: vec![id(8), id(9)] } },
+                "Use the weaver-resolve-drifts skill to refine the stale Proposal abcdef10 on the current Model and Requirements, on the Drifts `abcdef08`, `abcdef09`.".into(),
             ),
         ]
     }
@@ -472,6 +531,7 @@ mod tests {
         let err = compose(
             &Job::Setup {
                 request: "../x".into(),
+                assets: vec![],
             },
             &settings(None),
         )
@@ -483,6 +543,48 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn the_assets_a_request_tags_follow_the_first_sentence_on_the_same_line() {
+        let assets = vec!["logo.png".to_owned(), "my notes.txt".to_owned()];
+        let design = compose(
+            &Job::Design {
+                request: request(2),
+                assets: assets.clone(),
+            },
+            &settings(None),
+        )
+        .unwrap();
+        assert_eq!(
+            design,
+            format!("Use the weaver-design skill on the design request in `.weaver/requests/2026-11-02T09-30-02.md`. Read the file `.weaver/assets/logo.png`. Read the file `.weaver/assets/my notes.txt`.{SUBAGENTS}")
+        );
+        let setup = compose(
+            &Job::Setup {
+                request: request(1),
+                assets: assets[..1].to_vec(),
+            },
+            &settings(Some("Italian")),
+        )
+        .unwrap();
+        assert_eq!(
+            setup,
+            format!("Use the weaver-setup skill on the setup request in `.weaver/requests/2026-11-02T09-30-01.md`. Read the file `.weaver/assets/logo.png`.{SUBAGENTS}{LANGUAGE}")
+        );
+        assert!(!design.contains('\n'));
+        // An asset name that would break the line is refused, like a path.
+        for bad in ["a`b", "a\nb", ""] {
+            let err = compose(
+                &Job::Design {
+                    request: request(2),
+                    assets: vec![bad.into()],
+                },
+                &settings(None),
+            )
+            .unwrap_err();
+            assert_eq!(err, InstructionError::BadPath(bad.into()));
+        }
     }
 
     #[test]
@@ -518,16 +620,26 @@ mod tests {
                 "{bad:?}"
             );
         }
-        let rework = Job::Rework {
-            proposal: id(1),
-            kind: ReworkKind::Resolution {
-                open_drifts: vec![],
+        for job in [
+            Job::Rework {
+                proposal: id(1),
+                kind: ProposalKind::Resolution {
+                    open_drifts: vec![],
+                },
             },
-        };
-        assert_eq!(
-            compose(&rework, &settings(None)),
-            Err(InstructionError::NoDrifts)
-        );
+            Job::Refinement {
+                proposal: id(1),
+                kind: ProposalKind::Resolution {
+                    open_drifts: vec![],
+                },
+            },
+        ] {
+            assert_eq!(
+                compose(&job, &settings(None)),
+                Err(InstructionError::NoDrifts),
+                "{job:?}"
+            );
+        }
     }
 
     #[test]
@@ -548,19 +660,25 @@ mod tests {
             assert!(text.contains("## Sub-agents context sharing"), "{name}");
         }
         // The rework and refinement sentences name sections the skills must have.
-        assert!(skill("trama-design").contains("## Reworking a rejected Proposal"));
-        assert!(skill("trama-design").contains("## Refining a stale Proposal"));
-        assert!(skill("trama-setup").contains("## Reworking a rejected setup Proposal"));
-        assert!(skill("trama-import").contains("## Reworking a rejected import Proposal"));
-        assert!(skill("trama-resolve-drifts").contains("## Reworking a rejected resolution"));
+        assert!(skill("weaver-design").contains("## Reworking a rejected Proposal"));
+        assert!(skill("weaver-design").contains("## Refining a stale Proposal"));
+        assert!(skill("weaver-setup").contains("## Reworking a rejected setup Proposal"));
+        assert!(skill("weaver-import").contains("## Reworking a rejected import Proposal"));
+        assert!(skill("weaver-resolve-drifts").contains("## Reworking a rejected resolution"));
         assert!(
-            skill("trama-resolve-drifts").contains("with the developer's feedback on the Drifts")
+            skill("weaver-resolve-drifts").contains("with the developer's feedback on the Drifts")
         );
-        assert!(skill("trama-resolve-drifts")
+        assert!(skill("weaver-resolve-drifts")
             .contains("The developer already answered its prepared question:"));
-        assert!(skill("trama-import")
+        assert!(skill("weaver-import")
             .contains("Do not import these paths and do not ask which folders to import"));
-        assert!(skill("trama-import")
+        assert!(skill("weaver-import")
             .contains("Import every folder and do not ask which folders to import"));
+        // The refinement sentence names the section of each skill that refines its kind.
+        assert!(skill("weaver-setup").contains("## Refining a stale setup Proposal"));
+        assert!(skill("weaver-import").contains("## Refining a stale import Proposal"));
+        assert!(skill("weaver-resolve-drifts").contains("## Refining a stale resolution"));
+        assert!(skill("weaver-resolve-drifts")
+            .contains("on the current Model and Requirements, on the Drifts"));
     }
 }

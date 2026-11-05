@@ -1,4 +1,4 @@
-//! The text and JSON of `trama model show`: the System, an element with the Requirement
+//! The text and JSON of `weaver model show`: the System, an element with the Requirement
 //! sections that apply to it, an Area or one of its sections, the Specs.
 
 use serde_json::{json, Value};

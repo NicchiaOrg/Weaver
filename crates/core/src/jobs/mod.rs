@@ -12,12 +12,14 @@
 //! | [`admission`] | Which job may start: Run, Run all by model with its sub-agent shares, release |
 //! | [`names`] | The fixed names of the jobs |
 //! | [`launch`] | The command line, the environment and the overlay of omp |
-//! | [`notes`] | The notes of `trama job edit` |
+//! | [`notes`] | The notes of `weaver job edit` |
 //! | [`record`] | The registry record `jobs/<job id>.json` and its retention |
 //! | [`subagents`] | Sub-agents read from the `task` tool call and from omp's session files |
 //! | [`general`] | General chat, which is not a job: the Machine `general-chat`, omp's command line, its record |
+//! | [`ask`] | Ask more conversations, which are not jobs: the instruction of Weaver for the chosen thing |
 
 pub mod admission;
+pub mod ask;
 pub mod general;
 pub mod kinds;
 pub mod launch;

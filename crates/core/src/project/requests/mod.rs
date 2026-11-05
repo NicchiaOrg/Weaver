@@ -9,7 +9,7 @@
 //! | [`image`] | Accepted images, their names, base64 for the interface |
 //! | [`store`] | The files of the requests of a project and the operations on them |
 //!
-//! A request is local to the machine of the developer: `.trama/requests/` is never versioned and
+//! A request is local to the machine of the developer: `.weaver/requests/` is never versioned and
 //! the project image never reads it. The app runs the operations that write inside the project's
 //! mutation queue.
 

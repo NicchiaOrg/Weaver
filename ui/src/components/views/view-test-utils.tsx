@@ -4,6 +4,7 @@ import { vi } from "vitest";
 
 import type { ProjectChanged } from "@/bindings/ProjectChanged";
 import type { ViewSnapshot } from "@/bindings/ViewSnapshot";
+import { BoardActionsContext, type BoardActions } from "@/components/board/board-ui";
 import { ProjectContext } from "@/components/project-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ViewsProvider } from "@/components/views/views-state";
@@ -48,12 +49,14 @@ export function fakeBackend(respond: (overlay: string | null) => ViewSnapshot): 
   };
 }
 
-/** Renders `ui` inside a project window context and the provider of the views. */
-export function renderViews(ui: ReactNode, showView: (view: ViewId) => void = vi.fn()) {
+/** Renders `ui` inside a project window context and the provider of the views; `actions` are what the window above the views provides (`Ask more`...). */
+export function renderViews(ui: ReactNode, showView: (view: ViewId) => void = vi.fn(), actions: BoardActions = {}) {
   return render(
     <TooltipProvider>
       <ProjectContext.Provider value={{ projectId: PROJECT, showView, openJob: vi.fn(), openedJob: null }}>
-        <ViewsProvider projectId={PROJECT}>{ui}</ViewsProvider>
+        <BoardActionsContext.Provider value={actions}>
+          <ViewsProvider projectId={PROJECT}>{ui}</ViewsProvider>
+        </BoardActionsContext.Provider>
       </ProjectContext.Provider>
     </TooltipProvider>,
   );

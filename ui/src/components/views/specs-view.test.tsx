@@ -46,6 +46,24 @@ describe("the Specs page", () => {
     expect(fieldTitle("infrastructure")).toBe("Infrastructure");
   });
 
+  it("has no control in its header, only the title Specs: no overlay picker and no `Ask more`", async () => {
+    await show();
+    const header = screen.getByRole("heading", { level: 1, name: "Specs" }).closest("header")!;
+    expect(within(header).queryByRole("button")).toBeNull();
+    expect(within(header).queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Overlay" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Ask more/ })).not.toBeInTheDocument();
+  });
+
+  it("starts with the view header titled Specs, with the focus bar full width right under it", async () => {
+    await show(<FocusOpener refs={["specs#languages"]} subject={{ kind: "ref", ref: "specs#languages" }} />);
+    await userEvent.setup().click(screen.getByRole("button", { name: "open focus" }));
+    const bar = await screen.findByRole("region", { name: "Focus" });
+    const header = screen.getByRole("heading", { level: 1, name: "Specs" }).closest("header")!;
+    expect(header).toHaveClass("h-14", "border-b");
+    expect(header.nextElementSibling).toBe(bar);
+  });
+
   it("shows an entry with its name, version and note, in a grid of columns of at least 300 px, at most 1100 px wide", async () => {
     await show();
     const field = screen.getByRole("region", { name: "Languages" });
@@ -74,7 +92,7 @@ describe("the Specs page", () => {
     const notes = screen.getByRole("region", { name: "Notes" });
     expect(within(notes).getByText("notes").tagName).toBe("EM");
     await user.click(within(notes).getByRole("button", { name: "Open in editor" }));
-    await waitFor(() => expect(backend.opened).toEqual([{ file: ".trama/specs.yaml", line: 9 }]));
+    await waitFor(() => expect(backend.opened).toEqual([{ file: ".weaver/specs.yaml", line: 9 }]));
   });
 
   it("says so when the project has no Specs", async () => {

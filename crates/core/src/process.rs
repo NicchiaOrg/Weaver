@@ -1,9 +1,11 @@
-//! The single function every child process of Weaver and of the `trama` CLI is started with.
+//! The single function every child process of Weaver and of the `weaver` CLI is started with.
 //!
 //! A child starts without a shell, from a program path and an array of arguments; no user text
 //! is ever interpolated into a command line. On Windows it gets `CREATE_NO_WINDOW`.
 //! The few commands that must pass through a shell (terminal launches of the omp setup) quote
 //! their text with their own tested function and still start through [`command`].
+
+pub mod timed;
 
 use std::ffi::OsStr;
 use std::process::Command;

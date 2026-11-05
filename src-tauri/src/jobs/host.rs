@@ -7,15 +7,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, Manager};
-use trama_core::omp::machine::ReadyOmp;
-use trama_core::paths::AppDirs;
-use trama_core::project::image::ProjectImage;
-use trama_core::settings::Settings;
+use weaver_core::omp::machine::ReadyOmp;
+use weaver_core::paths::AppDirs;
+use weaver_core::project::image::ProjectImage;
+use weaver_core::settings::Settings;
+use weaver_core::system_certificates::Variables;
 
 use super::wire::{EntriesEvent, JobsSnapshot};
 use crate::error::{AppError, ErrorCode};
 use crate::omp::OmpSetup;
 use crate::state::AppState;
+use crate::subagents::wire::{SubAgentEntries, SubAgentsEvent};
 use crate::windows::jobs::BoxFuture;
 
 /// The change a mutation of the project makes: the image after its write, to be published, or
@@ -35,9 +37,34 @@ pub trait Host: Send + Sync + 'static {
     fn child_path(&self, omp: &Path) -> OsString;
     /// `omp.MISSING`: a job could not start omp.
     fn report_omp_missing(&self, reason: Option<String>);
-    /// The environment Weaver itself runs in, to be inherited by omp (minus `TRAMA_*`).
+    /// The agent lock of the File view: the actors tell it what the agent's tools change. Hosts
+    /// of tests that do not look at it have none.
+    fn file_locks(&self) -> Option<Arc<crate::file_lock::FileLockService>> {
+        None
+    }
+    /// The names of the assets of a project now, as the app holds them: the `@` tags of a message
+    /// or a request are recognised against them at the moment it is sent. Hosts of tests that do
+    /// not look at assets have none.
+    fn asset_names(&self, _project_id: &str) -> Vec<String> {
+        Vec::new()
+    }
+    /// The environment Weaver itself runs in, to be inherited by omp (minus `WEAVER_*`).
     fn inherited_env(&self) -> Vec<(OsString, OsString)> {
         std::env::vars_os().collect()
+    }
+    /// Whether `System Certificates` is on now: the proxy explanations of a failure say what is
+    /// true at the moment it happens.
+    fn system_certificates_enabled(&self) -> bool {
+        self.settings().system_certificates.enabled
+    }
+    /// The System Certificates variables of an omp process that starts now: the setting and the
+    /// bundle are read at each call, so every start and resume sees the current value. Empty with
+    /// the setting off or without a bundle. Never to be kept in the job registry.
+    fn certificate_variables(&self) -> Variables {
+        weaver_core::system_certificates::variables(
+            self.system_certificates_enabled(),
+            &self.dirs().system_certificates_file(),
+        )
     }
     /// The folder of omp's own session files, where background sub-agents write their records.
     fn sessions_root(&self) -> Option<PathBuf> {
@@ -51,6 +78,10 @@ pub trait Host: Send + Sync + 'static {
     }
     fn emit_jobs(&self, snapshot: &JobsSnapshot);
     fn emit_entries(&self, event: &EntriesEvent);
+    /// The list of the sub-agents of a job changed: the whole list.
+    fn emit_sub_agents(&self, event: &SubAgentsEvent);
+    /// The conversation of a sub-agent on screen changed.
+    fn emit_sub_agent_entries(&self, event: &SubAgentEntries);
     /// What the Board shows changed with no file changing (a job started or ended, a ghost came
     /// or went): a new revision, announced for the `board` slice.
     fn board_changed(&self, project_id: &str);
@@ -117,6 +148,19 @@ impl Host for TauriHost {
         self.app.state::<OmpSetup>().report_missing(reason);
     }
 
+    fn file_locks(&self) -> Option<Arc<crate::file_lock::FileLockService>> {
+        Some(self.state().file_locks.clone())
+    }
+
+    fn asset_names(&self, project_id: &str) -> Vec<String> {
+        self.state()
+            .assets
+            .assets(project_id)
+            .iter()
+            .map(|asset| asset.name.clone())
+            .collect()
+    }
+
     fn emit_jobs(&self, snapshot: &JobsSnapshot) {
         let _ = self
             .app
@@ -127,6 +171,18 @@ impl Host for TauriHost {
         let _ = self
             .app
             .emit(crate::events::EventName::JobEntries.as_str(), event);
+    }
+
+    fn emit_sub_agents(&self, event: &SubAgentsEvent) {
+        let _ = self
+            .app
+            .emit(crate::events::EventName::SubAgentsChanged.as_str(), event);
+    }
+
+    fn emit_sub_agent_entries(&self, event: &SubAgentEntries) {
+        let _ = self
+            .app
+            .emit(crate::events::EventName::SubAgentEntries.as_str(), event);
     }
 
     fn board_changed(&self, project_id: &str) {

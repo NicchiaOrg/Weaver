@@ -93,5 +93,7 @@ export function settingText(settings: Settings, key: SettingKey): string {
       return settings.editor.command;
     case "permissions":
       return settings.permissions;
+    case "systemCertificates.enabled":
+      return String(settings.systemCertificates.enabled);
   }
 }

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::project::frontmatter;
-use crate::project::layout::{MODEL_DIR, REQUIREMENTS_DIR, SPECS_FILE, TRAMA_DIR};
+use crate::project::layout::{REQUIREMENTS_DIR, SPECS_FILE, WEAVER_DIR};
 use crate::project::md::{self, Outline};
 use crate::project::requirements::AREA_FILE;
 
@@ -18,14 +18,14 @@ use super::Files;
 /// A file of the project and the line in it, as `Open in editor` takes them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Place {
-    /// Relative to the project folder: `.trama/...`.
+    /// Relative to the project folder: `.weaver/...`.
     pub file: String,
     pub line: Option<u32>,
 }
 
 /// One file's text and outline.
 pub struct Doc {
-    /// Relative to `.trama/`.
+    /// Relative to `.weaver/`.
     path: String,
     text: String,
     /// Bytes of front matter before the body the outline was taken from.
@@ -86,41 +86,6 @@ impl Doc {
             .take_while(|h| h.level > 2)
             .find(|h| h.text == name)
             .map(|h| self.line_at(h.range.start))
-    }
-
-    /// The item of State `state` that starts with the code span `event` and goes to `target`.
-    pub fn transition(&self, state: &str, event: &str, target: &str) -> Option<u32> {
-        let index = self
-            .outline
-            .headings
-            .iter()
-            .position(|h| h.level >= 3 && strip_marker(&h.text) == state)?;
-        let start = self.outline.headings[index].range.end;
-        let end = self
-            .outline
-            .headings
-            .get(index + 1)
-            .map_or(usize::MAX, |h| h.range.start);
-        let body_len = self.text.len() - self.prefix;
-        let candidates: Vec<_> = self
-            .outline
-            .items
-            .iter()
-            .filter(|i| {
-                i.range.start >= start
-                    && i.range.start < end.min(body_len)
-                    && i.code.as_ref().is_some_and(|(c, _)| c == event)
-            })
-            .collect();
-        let arrow = format!("→ {target}");
-        let pick = candidates
-            .iter()
-            .find(|i| {
-                let end = (self.prefix + i.range.end).min(self.text.len());
-                self.text[self.prefix + i.range.start..end].contains(&arrow)
-            })
-            .or(candidates.first())?;
-        Some(self.line_at(pick.range.start))
     }
 
     /// The `## <title>` heading of a Requirements section.
@@ -186,25 +151,9 @@ impl<'a> Locator<'a> {
     ) -> Option<Place> {
         let doc = self.doc(rel, removed)?;
         Some(Place {
-            file: format!("{TRAMA_DIR}/{}", doc.path),
+            file: format!("{WEAVER_DIR}/{}", doc.path),
             line: find(&doc),
         })
-    }
-
-    pub fn system_path() -> String {
-        format!("{MODEL_DIR}/system.md")
-    }
-
-    pub fn actor_path(id: &str) -> String {
-        format!("{MODEL_DIR}/actors/{id}.md")
-    }
-
-    pub fn feature_path(id: &str) -> String {
-        format!("{MODEL_DIR}/{id}/feature.md")
-    }
-
-    pub fn machine_path(feature: &str, id: &str) -> String {
-        format!("{MODEL_DIR}/{feature}/{id}.md")
     }
 
     pub fn fragment_path(area: &str, fragment: &str) -> String {

@@ -4,7 +4,7 @@
 //! will decide it. It lives in the Drift's file, in `## Prepared question`, as exactly one fenced
 //! `json` block `{question, decisions, fingerprint, prepared}`:
 //!
-//! * `question` is one single-choice question of `trama question new`, its `id` the identity of the
+//! * `question` is one single-choice question of `weaver question new`, its `id` the identity of the
 //!   Drift;
 //! * `decisions` has one `{decision, option?}` per option of the question, in the same order: every
 //!   fix option once as `fix-code`, then one `proposal` or `dismissed` for the behaviour the code

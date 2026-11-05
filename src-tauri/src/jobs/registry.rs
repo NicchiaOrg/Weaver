@@ -2,7 +2,7 @@
 //! app and the UI ask of them.
 //!
 //! All state lives in [`Jobs`], behind one lock. Everything that changes the state of a job goes
-//! through [`Jobs::dispatch`]: the pure Machine decides ([`trama_core::jobs::machine`]), the
+//! through [`Jobs::dispatch`]: the pure Machine decides ([`weaver_core::jobs::machine`]), the
 //! record is updated and written (by a thread of its own, so that no lock waits on the disk), and
 //! the effects are carried out: bookkeeping here, I/O by the actor of the job ([`super::actor`]).
 //! Events to the UI and calls to the observers happen after the change, in order.
@@ -14,21 +14,27 @@ use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, Weak};
 
 use tokio::sync::{mpsc, watch};
-use trama_core::job_instruction;
-use trama_core::jobs::admission::StartPlan;
-use trama_core::jobs::machine::{Effect, Event, JobMachine, MessageId, PermissionEnd, RequestId};
-use trama_core::jobs::notes::{self, Normalised};
-use trama_core::jobs::{AnnouncementRecord, JobKind, JobRecord, JobState, JobStore};
-use trama_core::project::board::AgentFacts;
-use trama_core::project::clock::{now_instant, Clock, SystemClock};
-use trama_core::project::ids;
-use trama_core::project::random::OsRandom;
+use weaver_core::assets::tags;
+use weaver_core::job_instruction;
+use weaver_core::jobs::admission::StartPlan;
+use weaver_core::jobs::machine::{Effect, Event, JobMachine, MessageId, PermissionEnd, RequestId};
+use weaver_core::jobs::notes::{self, Normalised};
+use weaver_core::jobs::{AnnouncementRecord, JobKind, JobRecord, JobState, JobStore};
+use weaver_core::project::board::AgentFacts;
+use weaver_core::project::clock::{now_instant, Clock, SystemClock};
+use weaver_core::project::ids;
+use weaver_core::project::random::OsRandom;
 
 use super::actor::{Cmd, Mode, Msg};
 use super::conversation::{Conversation, Delivery, EndLine, PermissionState};
 use super::host::Host;
 use super::wire::{ConversationSnapshot, EntriesEvent, JobInfo, JobObserver, JobRow, JobsSnapshot};
 use crate::agent_work::{Ghost, GhostKind, GhostPhase};
+use crate::subagents::poller::{Access, Poller};
+use crate::subagents::reader::{Done, Location};
+use crate::subagents::tree::Plan;
+use crate::subagents::wire::{Outgoing, Owner, Step, SubAgentConversation, SubAgentsEvent};
+use crate::subagents::Agents;
 use crate::{log_info, log_warn};
 
 /// The most finished jobs the Jobs list keeps.
@@ -73,6 +79,9 @@ pub(crate) struct Live {
     pub exit_details: Option<String>,
     /// The order of the announcements, for the ghosts.
     pub announced: HashMap<String, u64>,
+    /// Its sub-agents, and the loop that reads their transcripts.
+    pub agents: Agents,
+    pub poller: Arc<Poller>,
 }
 
 impl Live {
@@ -213,7 +222,7 @@ impl Jobs {
 
     pub(crate) fn now(&self) -> String {
         now_instant(self.clock.as_ref())
-            .unwrap_or_else(|_| trama_core::project::clock::format_instant(1))
+            .unwrap_or_else(|_| weaver_core::project::clock::format_instant(1))
     }
 
     /// Who wants to know when a job waits or ends.
@@ -309,6 +318,103 @@ impl Jobs {
         })
     }
 
+    // -----------------------------------------------------------------------------------------
+    // Sub-agents
+    // -----------------------------------------------------------------------------------------
+
+    /// The sub-agents of a job, as the list shows them.
+    pub fn sub_agents(&self, project_id: &str, job_id: &str) -> Result<SubAgentsEvent, String> {
+        let mut inner = self.lock();
+        let live = inner
+            .jobs
+            .get_mut(job_id)
+            .filter(|l| l.project_id == project_id)
+            .ok_or_else(|| format!("the job {job_id} does not exist"))?;
+        Ok(SubAgentsEvent {
+            project_id: project_id.to_owned(),
+            owner: Owner::Job {
+                id: job_id.to_owned(),
+            },
+            nodes: live.agents.list(&live.conversation),
+        })
+    }
+
+    /// The conversation of the sub-agent at `path` of a job, as it is now.
+    pub fn sub_agent_conversation(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        path: &[Step],
+    ) -> Result<SubAgentConversation, String> {
+        let mut inner = self.lock();
+        let live = inner
+            .jobs
+            .get_mut(job_id)
+            .filter(|l| l.project_id == project_id)
+            .ok_or_else(|| format!("the job {job_id} does not exist"))?;
+        let owner = Owner::Job {
+            id: job_id.to_owned(),
+        };
+        live.agents
+            .conversation(&live.conversation, project_id, &owner, path)
+    }
+
+    /// What the Jobs view shows now: whether the list of the sub-agents of the job is on screen,
+    /// and the conversation of which sub-agent. Transcripts are read only for what is on screen.
+    pub fn sub_agents_view(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        list_shown: bool,
+        shown: Option<Vec<Step>>,
+    ) -> Result<(), String> {
+        let poller = {
+            let mut inner = self.lock();
+            let live = inner
+                .jobs
+                .get_mut(job_id)
+                .filter(|l| l.project_id == project_id)
+                .ok_or_else(|| format!("the job {job_id} does not exist"))?;
+            live.agents.interest(list_shown, shown);
+            live.poller.clone()
+        };
+        poller.poke(|| self.access(job_id));
+        Ok(())
+    }
+
+    fn access(&self, job_id: &str) -> Arc<dyn Access> {
+        Arc::new(JobAccess {
+            jobs: self.arc(),
+            id: job_id.to_owned(),
+        })
+    }
+
+    /// The session of the job is open: its sub-agents' transcripts are under it.
+    pub(crate) fn locate_agents(&self, id: &str, session: &str) {
+        let Some(root) = self.host.sessions_root() else {
+            return;
+        };
+        if let Some(live) = self.lock().jobs.get_mut(id) {
+            live.agents.locate(Location {
+                root,
+                session: session.to_owned(),
+                owner_name: live.record.name.clone(),
+            });
+        }
+    }
+
+    /// The conversation lists sub-agents that may need reading: starts the loop that reads them.
+    pub(crate) fn wake_agents(&self, id: &str) {
+        let poller = self.lock().jobs.get(id).map(|l| l.poller.clone());
+        if let Some(poller) = poller {
+            self.wake_poller(&poller, id);
+        }
+    }
+
+    fn wake_poller(&self, poller: &Arc<Poller>, id: &str) {
+        poller.wake(|| self.access(id));
+    }
+
     /// How many jobs of the project work (the agent runs or waits): what closing the window asks
     /// the developer about.
     pub fn working_count(&self, project_id: &str) -> usize {
@@ -391,6 +497,11 @@ impl Jobs {
         ghosts.into_iter().map(|(_, ghost)| ghost).collect()
     }
 
+    /// The names of the assets of a project now (`requirements/tech#assets`).
+    pub fn asset_names(&self, project_id: &str) -> Vec<String> {
+        self.host.asset_names(project_id)
+    }
+
     pub fn info(&self, job_id: &str) -> Option<JobInfo> {
         self.lock().jobs.get(job_id).map(Live::info)
     }
@@ -470,7 +581,7 @@ impl Jobs {
             let id = ids::draw_identity(&mut OsRandom, &|candidate| {
                 inner.jobs.contains_key(candidate) || self.store.file(candidate).exists()
             });
-            let env = trama_core::jobs::launch::weaver_env(
+            let env = weaver_core::jobs::launch::weaver_env(
                 &id,
                 "",
                 new.plan.kind,
@@ -515,6 +626,8 @@ impl Jobs {
                     instruction,
                     proposal_model: new.plan.proposal_model.clone(),
                     exit_details: None,
+                    agents: Agents::new(),
+                    poller: Arc::new(Poller::default()),
                     announced: HashMap::new(),
                 },
             );
@@ -664,6 +777,7 @@ impl Jobs {
                         },
                     };
                     live.conversation.finish(end);
+                    live.agents.interrupt();
                     live.record.ended = Some(self.now());
                     live.record.pid = None;
                     live.record.pid_started = None;
@@ -700,6 +814,13 @@ impl Jobs {
         if let Some(info) = outcome.ended.clone() {
             log_info!(ctx: crate::logging::Context { project: None, job: Some(&info.id) }, "job ended: {:?}", info.state);
             self.release(&info);
+            // `job.ENDED` (Done, Failed, Stopped): what its agent was changing is not held any more.
+            if let Some(locks) = self.host.file_locks() {
+                locks.conversation_ended(
+                    &info.project_id,
+                    &weaver_core::file_lock::job_conversation(&info.id),
+                );
+            }
             for observer in &observers {
                 observer.job_ended(&info);
             }
@@ -726,12 +847,12 @@ impl Jobs {
                 .mutate(
                     &project,
                     Box::new(move |root| {
-                        let image = trama_core::project::image::ProjectImage::load(root);
-                        let changes = trama_core::jobs::admission::plan_release(&image, &id);
+                        let image = weaver_core::project::image::ProjectImage::load(root);
+                        let changes = weaver_core::jobs::admission::plan_release(&image, &id);
                         if changes.is_empty() {
                             return Ok(None);
                         }
-                        trama_core::project::changes::apply(root, &changes, |_| Ok::<(), ()>(()))
+                        weaver_core::project::changes::apply(root, &changes, |_| Ok::<(), ()>(()))
                             .map(Some)
                             .map_err(|error| {
                                 format!("the Tasks of job {id} could not be released: {error}")
@@ -746,19 +867,30 @@ impl Jobs {
         });
     }
 
-    /// Emits the conversation changes of a job, if any.
+    /// Emits the conversation changes of a job, if any, and what changed in its sub-agents.
     pub(crate) fn emit_entries(&self, live: &mut Live, reset: bool) {
         let changes = live.conversation.take_changes();
-        if changes.is_empty() && !reset {
-            return;
+        if !changes.is_empty() || reset {
+            self.host.emit_entries(&EntriesEvent {
+                project_id: live.project_id.clone(),
+                job_id: live.record.id.clone(),
+                seq: live.conversation.seq(),
+                reset,
+                changes,
+            });
         }
-        self.host.emit_entries(&EntriesEvent {
-            project_id: live.project_id.clone(),
-            job_id: live.record.id.clone(),
-            seq: live.conversation.seq(),
-            reset,
-            changes,
-        });
+        let owner = Owner::Job {
+            id: live.record.id.clone(),
+        };
+        for outgoing in live
+            .agents
+            .collect(&live.conversation, &live.project_id, &owner)
+        {
+            match outgoing {
+                Outgoing::List(event) => self.host.emit_sub_agents(&event),
+                Outgoing::Entries(event) => self.host.emit_sub_agent_entries(&event),
+            }
+        }
     }
 
     /// The list of a project changed: tells the UI and the Board.
@@ -822,12 +954,20 @@ impl Jobs {
             // The conversation of this run is complete: the replay adds nothing.
             return;
         }
+        // The history ends where omp's did: what the agent says next is a message of its own.
+        replayed.end_turn();
         for note in &live.record.notes {
             replayed.note(&note.text, &note.at);
         }
         replayed.mark_sent();
         live.conversation = replayed;
+        // The sub-agents are rebuilt from the replayed history, and their transcripts are read
+        // again from the start.
+        live.agents.reset();
         self.emit_entries(live, true);
+        let poller = live.poller.clone();
+        drop(inner);
+        self.wake_poller(&poller, id);
     }
 
     // -----------------------------------------------------------------------------------------
@@ -840,6 +980,8 @@ impl Jobs {
         if text.is_empty() {
             return Err("a message cannot be empty".to_owned());
         }
+        // The assets the message tags are the ones that exist now, never recognised again later.
+        let tagged = tags::tagged(text, &self.host.asset_names(project_id));
         let outcome = {
             let mut inner = self.lock();
             let live = inner
@@ -852,7 +994,9 @@ impl Jobs {
             }
             let message = live.next_message;
             live.next_message += 1;
-            live.texts.insert(message, text.to_owned());
+            // What goes to omp has the block of tagged assets; the conversation shows what the
+            // developer wrote.
+            live.texts.insert(message, tags::with_block(text, &tagged));
             live.conversation
                 .developer_message(message, text, Delivery::Queued);
             self.dispatch_in(&mut inner, job_id, Event::SendMessage(message))
@@ -918,6 +1062,8 @@ impl Jobs {
                 return Err("A job that works cannot be removed.".to_owned());
             }
             live.hidden = true;
+            // Removing the job removes its sub-agents.
+            live.agents = Agents::new();
         }
         self.changed(project_id, Some(job_id));
         Ok(())
@@ -1088,7 +1234,7 @@ impl Jobs {
         let file = self.counter_file(project_id);
         let text = serde_json::json!({ "doneSinceLastScan": count }).to_string();
         tauri::async_runtime::spawn_blocking(move || {
-            let _ = trama_core::atomic::write(&file, text.as_bytes(), None);
+            let _ = weaver_core::atomic::write(&file, text.as_bytes(), None);
         });
     }
 
@@ -1177,7 +1323,7 @@ impl Jobs {
             let mut changed = false;
             if let (Some(pid), Some(started)) = (record.pid, record.pid_started.clone()) {
                 // A process a crash left behind.
-                trama_core::process_group::kill_leftover(pid, &started);
+                weaver_core::process_group::kill_leftover(pid, &started);
                 record.pid = None;
                 record.pid_started = None;
                 changed = true;
@@ -1220,6 +1366,8 @@ impl Jobs {
                     instruction: String::new(),
                     proposal_model: None,
                     exit_details: None,
+                    agents: Agents::new(),
+                    poller: Arc::new(Poller::default()),
                     announced,
                     record,
                 },
@@ -1244,14 +1392,14 @@ impl Jobs {
             .mutate(
                 project_id,
                 Box::new(move |root| {
-                    let image = trama_core::project::image::ProjectImage::load(root);
-                    let changes = trama_core::project::tasks::plan_orphans(&image, &|holder| {
+                    let image = weaver_core::project::image::ProjectImage::load(root);
+                    let changes = weaver_core::project::tasks::plan_orphans(&image, &|holder| {
                         known.contains(holder)
                     });
                     if changes.is_empty() {
                         return Ok(None);
                     }
-                    trama_core::project::changes::apply(root, &changes, |_| Ok::<(), ()>(()))
+                    weaver_core::project::changes::apply(root, &changes, |_| Ok::<(), ()>(()))
                         .map(Some)
                         .map_err(|error| {
                             format!("the Tasks of ended jobs could not be released: {error}")
@@ -1307,10 +1455,33 @@ impl Jobs {
     }
 }
 
+/// The poller of the sub-agents of a job reads and applies through the registry, under its lock.
+struct JobAccess {
+    jobs: Arc<Jobs>,
+    id: String,
+}
+
+impl Access for JobAccess {
+    fn plan(&self) -> Option<Plan> {
+        let mut inner = self.jobs.lock();
+        let live = inner.jobs.get_mut(&self.id)?;
+        live.agents.plan(&live.conversation)
+    }
+
+    fn apply(&self, generation: u64, done: Vec<Done>) {
+        let mut inner = self.jobs.lock();
+        let Some(live) = inner.jobs.get_mut(&self.id) else {
+            return;
+        };
+        live.agents.apply(&mut live.conversation, generation, done);
+        self.jobs.emit_entries(live, false);
+    }
+}
+
 /// Whether the card a claim names is on the Board of the picture: a Task or a Drift is as soon as
 /// the file is read, a Proposal once it is not a Draft any more.
-fn card_is_on_the_board(image: &trama_core::project::image::ProjectImage, claim: &Claim) -> bool {
-    use trama_core::project::cards::CardKind;
+fn card_is_on_the_board(image: &weaver_core::project::image::ProjectImage, claim: &Claim) -> bool {
+    use weaver_core::project::cards::CardKind;
     match claim.kind {
         GhostKind::Task => image.card(CardKind::Task, &claim.card).is_some(),
         GhostKind::Drift => image.card(CardKind::Drift, &claim.card).is_some(),

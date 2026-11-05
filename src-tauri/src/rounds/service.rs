@@ -2,7 +2,7 @@
 //! the agents and Weaver waiting for their results, and what each change does to the jobs and the
 //! window.
 //!
-//! The decisions are the core's ([`trama_core::question::Queue`]); this module keeps the queues
+//! The decisions are the core's ([`weaver_core::question::Queue`]); this module keeps the queues
 //! and the waiters in memory, never on disk and never in a log, and carries out the effects
 //! outside its lock.
 
@@ -11,11 +11,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use trama_core::ipc::Peer;
-use trama_core::protocol::{Request, Response};
-use trama_core::question::{
-    self, code, Action, ActionError, Effect, Ending, Origin, Outcome, Queue, Round, RoundId,
-    RoundRequest, CANCELLED_MESSAGE, INTERRUPTED_MESSAGE,
+use weaver_core::ipc::Peer;
+use weaver_core::protocol::{Request, Response};
+use weaver_core::question::{
+    self, code, Action, ActionError, Effect, Ending, Origin, Outcome, Position, Queue, Round,
+    RoundId, RoundRequest, CANCELLED_MESSAGE, INTERRUPTED_MESSAGE,
 };
 
 use super::view::{view_of, QuestionRoundChanged, QuestionRoundView};
@@ -74,6 +74,15 @@ impl Project {
         }
         settled
     }
+}
+
+/// The question in view of a presented round, as an Ask more conversation reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuestionInView {
+    pub request: RoundRequest,
+    pub origin: Origin,
+    /// The job that asked, when an agent did: its identity and its name when it is still known.
+    pub job: Option<(String, Option<String>)>,
 }
 
 /// The rounds of every open project.
@@ -177,6 +186,37 @@ impl Rounds {
         Some(view_of(project_id, &round, name, waiting))
     }
 
+    /// What an Ask more conversation reads of the question in view of the round `id` of the
+    /// project: only when that round is the presented one and its position is the question
+    /// `index`. The request holds the questions and never the developer's drafts, choices or
+    /// answers.
+    pub fn question_in_view(
+        &self,
+        project_id: &str,
+        id: RoundId,
+        index: usize,
+    ) -> Option<QuestionInView> {
+        let (request, origin) = {
+            let projects = self.lock();
+            let round = projects.get(project_id)?.queue.presented()?;
+            if round.id != id || round.position != (Position::Question { index }) {
+                return None;
+            }
+            if index >= round.request.questions.len() {
+                return None;
+            }
+            (round.request.clone(), round.origin.clone())
+        };
+        let job = origin
+            .job()
+            .map(|job| (job.to_owned(), self.host.job(job).map(|facts| facts.name)));
+        Some(QuestionInView {
+            request,
+            origin,
+            job,
+        })
+    }
+
     /// Puts a round in the queue of the project; the effects are carried out, and a change is
     /// announced even when the round only waits (the count behind the presented one grew).
     fn submit(
@@ -199,12 +239,14 @@ impl Rounds {
     }
 
     /// `developer.RESOLVE_DRIFT`: the prepared question of a Drift, asked by Weaver with no agent.
-    /// `drift` is how the developer names the Drift (its short number, `D3`) and shows in the
-    /// header, `Question about D3 · <title>`. The receiver gets what the round came to; a Drift
-    /// question that was skipped leaves the Drift open, which the caller reads from the answers.
+    /// `id` is the Drift's permanent identity, which the round keeps; `drift` is how the developer
+    /// names the Drift (its short number, `D3`) and shows in the header, `Question about D3 ·
+    /// <title>`. The receiver gets what the round came to; a Drift question that was skipped
+    /// leaves the Drift open, which the caller reads from the answers.
     pub fn present_prepared(
         &self,
         project_id: &str,
+        id: &str,
         drift: &str,
         title: &str,
         request: RoundRequest,
@@ -212,6 +254,7 @@ impl Rounds {
         self.submit(
             project_id,
             Origin::Drift {
+                id: id.to_owned(),
                 drift: drift.to_owned(),
                 title: title.to_owned(),
             },

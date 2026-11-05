@@ -521,7 +521,7 @@ fn a_draft_is_handed_over_as_open_and_consumes_its_request() {
     let dir = project();
     let root = dir.path();
     ready_change(root, "pppppppp");
-    let text = fs::read_to_string(root.join(".trama/proposals/pppppppp-t/proposal.md")).unwrap();
+    let text = fs::read_to_string(root.join(".weaver/proposals/pppppppp-t/proposal.md")).unwrap();
     put(
         root,
         "proposals/pppppppp-t/proposal.md",
@@ -696,8 +696,8 @@ fn a_setup_of_a_job_that_found_an_empty_model_is_approved_at_the_hand_over_and_r
     let (after, submission) =
         submit(root, "pppppppp", &submit_ctx(true, false), &mut rng()).unwrap();
     assert!(matches!(submission.outcome, Submitted::Approved(_)));
-    assert!(root.join(".trama/model/shop/order.md").is_file());
-    assert!(root.join(".trama/model/actors/user.md").is_file());
+    assert!(root.join(".weaver/model/shop/order.md").is_file());
+    assert!(root.join(".weaver/model/actors/user.md").is_file());
     let tasks: Vec<_> = after.cards_of(CardKind::Task).collect();
     assert_eq!(
         tasks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
@@ -798,8 +798,8 @@ fn a_chain_of_imports_of_one_job_is_approved_whole() {
         );
     }
     assert!(
-        root.join(".trama/model/actors/user.md").is_file()
-            && root.join(".trama/model/shop/order.md").is_file()
+        root.join(".weaver/model/actors/user.md").is_file()
+            && root.join(".weaver/model/shop/order.md").is_file()
     );
     assert!(
         after.cards_of(CardKind::Task).next().is_none(),
@@ -813,7 +813,7 @@ fn the_first_proposal_of_a_rework_takes_the_place_in_the_requirements_of_the_pro
     let dir = project();
     let root = dir.path();
     ready_change(root, "dddddddd");
-    let front = fs::read_to_string(root.join(".trama/proposals/dddddddd-t/proposal.md")).unwrap();
+    let front = fs::read_to_string(root.join(".weaver/proposals/dddddddd-t/proposal.md")).unwrap();
     put(
         root,
         "proposals/dddddddd-t/proposal.md",
@@ -871,7 +871,7 @@ fn approving_an_open_proposal_replaces_the_files_and_creates_its_tasks_in_one_st
         panic!("{approval:?}")
     };
     assert!(!plan.requirements_changed && !plan.start_run_all);
-    assert!(fs::read_to_string(root.join(".trama/model/shop/order.md"))
+    assert!(fs::read_to_string(root.join(".weaver/model/shop/order.md"))
         .unwrap()
         .contains("The customer paid."));
     let task = after
@@ -890,10 +890,10 @@ fn approving_an_open_proposal_replaces_the_files_and_creates_its_tasks_in_one_st
     );
     // The folder stays as it was.
     assert!(root
-        .join(".trama/proposals/pppppppp-t/model/shop/order.md")
+        .join(".weaver/proposals/pppppppp-t/model/shop/order.md")
         .is_file());
     assert!(root
-        .join(".trama/proposals/pppppppp-t/tasks/tttttttt-pay.md")
+        .join(".weaver/proposals/pppppppp-t/tasks/tttttttt-pay.md")
         .is_file());
 }
 
@@ -967,11 +967,12 @@ fn approving_a_change_of_requirements_writes_the_requirement_skills_in_the_same_
         report
             .changes
             .iter()
-            .any(|c| c.path == ".agents/skills/trama-req-ui-main/SKILL.md"),
+            .any(|c| c.path == ".agents/skills/weaver-req-ui-main/SKILL.md"),
         "{:?}",
         report.changes
     );
-    let skill = fs::read_to_string(root.join(".agents/skills/trama-req-ui-main/SKILL.md")).unwrap();
+    let skill =
+        fs::read_to_string(root.join(".agents/skills/weaver-req-ui-main/SKILL.md")).unwrap();
     assert!(skill.contains("changed"), "{skill}");
     // Nothing else of the installed list is written by an approval.
     assert!(!root.join(".omp").exists());
@@ -1092,7 +1093,7 @@ fn approval_creates_a_technical_removal_task_for_a_removed_actor() {
         .find(|t| t.title == "Remove code of `user`")
         .expect("a removal Task");
     assert!(tasks::is_technical(removal) && tasks::refs_of(removal).is_empty());
-    assert!(!root.join(".trama/model/actors/user.md").exists());
+    assert!(!root.join(".weaver/model/actors/user.md").exists());
 }
 
 #[test]
@@ -1100,18 +1101,14 @@ fn approve_is_refused_with_every_reason_in_order_and_writes_nothing() {
     let dir = project();
     let root = dir.path();
     ready_change(root, "pppppppp");
-    put(root, "specs.yaml", "languages:\n  - name: Go\n");
-    let front = fs::read_to_string(root.join(".trama/proposals/pppppppp-t/proposal.md")).unwrap();
+    let front = fs::read_to_string(root.join(".weaver/proposals/pppppppp-t/proposal.md")).unwrap();
+    // No label, and a required Proposal that does not exist.
     put(
         root,
         "proposals/pppppppp-t/proposal.md",
-        &front.replace(
-            "base:\n",
-            &format!(
-                "requires:\n  - zzzzzzzz\nbase:\n  specs.yaml: {}\n",
-                hash(SPECS)
-            ),
-        ),
+        &front
+            .replace("label: Shop\n", "")
+            .replace("base:\n", "requires:\n  - zzzzzzzz\nbase:\n"),
     );
     let facts = AgentFacts {
         run_in_progress: true,
@@ -1130,83 +1127,161 @@ fn approve_is_refused_with_every_reason_in_order_and_writes_nothing() {
     };
     assert_eq!(
         refused.notice,
-        "Could not approve P1: A run is in progress; Proposal zzzzzzzz is missing; Stale: `specs.yaml` changed since the Proposal started."
+        "Could not approve P1: A run is in progress; Proposal zzzzzzzz is missing; The label is missing."
     );
     assert_eq!(snapshot(root), before, "a refusal writes nothing");
 }
 
-#[test]
-fn a_change_that_only_staleness_blocks_is_refined_also_during_a_run() {
-    let dir = project();
-    let root = dir.path();
-    ready_change(root, "pppppppp");
+/// Turns the `kind: change` of the Proposal `id` into `kind`.
+fn with_kind(root: &Path, id: &str, kind: &str) {
+    let path = root.join(format!(".weaver/proposals/{id}-t/proposal.md"));
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(path, text.replace("kind: change", &format!("kind: {kind}"))).unwrap();
+}
+
+fn make_order_stale(root: &Path) {
     put(
         root,
         "model/shop/order.md",
         &ORDER.replace("The customer is choosing.", "The customer is browsing."),
     );
-    for run in [false, true] {
-        let gate = Gate {
-            agent_finishing: false,
-            run_in_progress: run,
-        };
-        let approval = approve_plan(root, "pppppppp", gate, Decider::Developer).unwrap();
-        let Approval::Refine(changes) = approval else {
-            panic!("{approval:?}")
-        };
-        let Some(Change::Write(text)) = changes.get("proposals/pppppppp-t/proposal.md") else {
-            panic!()
-        };
-        assert!(
-            text.contains("status: refining") && text.contains("refining: true"),
-            "{text}"
-        );
-    }
-    // Not while the agent is still finishing.
-    let gate = Gate {
-        agent_finishing: true,
-        run_in_progress: false,
-    };
-    let refusal = approve_plan(root, "pppppppp", gate, Decider::Developer).unwrap_err();
-    assert_eq!(refusal.0[0], "The agent is still finishing");
 }
 
 #[test]
-fn staleness_with_anything_else_is_not_refined_and_a_drift_attached_one_never_is() {
+fn a_stale_open_proposal_of_any_kind_is_refined_also_during_a_run() {
+    let dir = project();
+    let root = dir.path();
+    for kind in ["change", "setup", "import"] {
+        ready_change(root, "pppppppp");
+        with_kind(root, "pppppppp", kind);
+        make_order_stale(root);
+        for run in [false, true] {
+            let gate = Gate {
+                agent_finishing: false,
+                run_in_progress: run,
+            };
+            let approval = approve_plan(root, "pppppppp", gate, Decider::Developer).unwrap();
+            let Approval::Refine(changes) = approval else {
+                panic!("{kind}: {approval:?}")
+            };
+            let Some(Change::Write(text)) = changes.get("proposals/pppppppp-t/proposal.md") else {
+                panic!()
+            };
+            assert!(
+                text.contains("status: refining")
+                    && text.contains("refining: true")
+                    && text.contains(&format!("kind: {kind}")),
+                "{text}"
+            );
+        }
+        // Not while the agent is still finishing.
+        let gate = Gate {
+            agent_finishing: true,
+            run_in_progress: false,
+        };
+        let refusal = approve_plan(root, "pppppppp", gate, Decider::Developer).unwrap_err();
+        assert_eq!(refusal.0, ["The agent is still finishing"], "{kind}");
+    }
+}
+
+#[test]
+fn a_stale_proposal_is_refined_whatever_else_blocks_it_and_a_drift_decides_for_its_own() {
     let dir = project();
     let root = dir.path();
     ready_change(root, "pppppppp");
-    put(
-        root,
-        "model/shop/order.md",
-        &ORDER.replace("The customer is choosing.", "The customer is browsing."),
-    );
-    let front = fs::read_to_string(root.join(".trama/proposals/pppppppp-t/proposal.md")).unwrap();
-    // Also unlabeled: the label is a reason beyond staleness.
+    make_order_stale(root);
+    let front = fs::read_to_string(root.join(".weaver/proposals/pppppppp-t/proposal.md")).unwrap();
+    // Also unlabeled and requiring a missing Proposal: reasons beyond staleness do not matter.
     put(
         root,
         "proposals/pppppppp-t/proposal.md",
-        &front.replace("label: Shop\n", ""),
+        &front
+            .replace("label: Shop\n", "")
+            .replace("base:\n", "requires:\n  - zzzzzzzz\nbase:\n"),
     );
-    let refusal = approve_plan(root, "pppppppp", Gate::default(), Decider::Developer).unwrap_err();
-    assert_eq!(refusal.0.len(), 2, "{refusal:?}");
-    assert!(refusal.0[0].starts_with("Stale:") && refusal.0[1] == "The label is missing");
+    let gate = Gate {
+        agent_finishing: false,
+        run_in_progress: true,
+    };
+    assert!(matches!(
+        approve_plan(root, "pppppppp", gate, Decider::Developer).unwrap(),
+        Approval::Refine(_)
+    ));
 
-    // Attached to a Drift: decided only through it.
+    // Attached to a Drift: the developer's own approval is refused, the Drift refines it.
     put(root, "proposals/pppppppp-t/proposal.md", &front);
     put(
         root,
         "drifts/dddddddd-d.md",
         &drift_file("open", "pppppppp"),
     );
-    let refusal = approve_plan(root, "pppppppp", Gate::default(), Decider::Developer).unwrap_err();
+    let refusal = approve_plan(root, "pppppppp", gate, Decider::Developer).unwrap_err();
     assert!(
         refusal.0[0].contains("decided through its Drift"),
         "{refusal:?}"
     );
-    // Through the Drift it is approved or refused with the same conditions, never refined.
-    let refusal = approve_plan(root, "pppppppp", Gate::default(), Decider::Drift).unwrap_err();
-    assert!(refusal.0[0].starts_with("Stale:"), "{refusal:?}");
+    assert!(matches!(
+        approve_plan(root, "pppppppp", gate, Decider::Drift).unwrap(),
+        Approval::Refine(_)
+    ));
+    let finishing = Gate {
+        agent_finishing: true,
+        run_in_progress: false,
+    };
+    assert_eq!(
+        approve_plan(root, "pppppppp", finishing, Decider::Drift)
+            .unwrap_err()
+            .0,
+        ["The agent is still finishing"]
+    );
+}
+
+#[test]
+fn a_stale_resolution_is_refined_only_while_one_of_its_drifts_is_open() {
+    let dir = project();
+    let root = dir.path();
+    let rows = "drifts:\n  - drift: dddddddd\n    decision: dismissed\n";
+    let front = format!(
+        "status: open\nkind: resolution\n{rows}{}",
+        base_lines(&[("model/shop/order.md", &hash(ORDER))])
+    );
+    proposal(
+        root,
+        "pppppppp",
+        &front,
+        "# R\n",
+        &[("model/shop/order.md", &changed_order())],
+        &[],
+    );
+    make_order_stale(root);
+    put(root, "drifts/dddddddd-d.md", &drift_file("open", ""));
+    assert!(matches!(
+        approve_plan(root, "pppppppp", Gate::default(), Decider::Developer).unwrap(),
+        Approval::Refine(_)
+    ));
+    put(root, "drifts/dddddddd-d.md", &drift_file("dismissed", ""));
+    assert_eq!(
+        approve_plan(root, "pppppppp", Gate::default(), Decider::Developer)
+            .unwrap_err()
+            .0,
+        ["None of its Drifts is still open"]
+    );
+
+    // A resolution with no file has no `base`: never stale, never refined.
+    put(root, "drifts/dddddddd-d.md", &drift_file("open", ""));
+    proposal(
+        root,
+        "pppppppp",
+        &format!("status: open\nkind: resolution\n{rows}"),
+        "# R\n",
+        &[],
+        &[],
+    );
+    assert!(analyse_of(root, "pppppppp").stale.is_empty());
+    assert!(matches!(
+        approve_plan(root, "pppppppp", Gate::default(), Decider::Developer).unwrap(),
+        Approval::Approve(_)
+    ));
 }
 
 #[test]
@@ -1246,6 +1321,77 @@ fn a_draft_cannot_be_approved_unless_a_refinement_left_it_half_way() {
             .0,
         ["Being refined"]
     );
+}
+
+#[test]
+fn an_interrupted_draft_is_continued_with_the_same_conditions_as_a_refinement() {
+    let dir = project();
+    let root = dir.path();
+    let finishing = Gate {
+        agent_finishing: true,
+        run_in_progress: false,
+    };
+    proposal(
+        root,
+        "pppppppp",
+        "status: draft\nrefining: true\n",
+        "# P\n",
+        &[],
+        &[],
+    );
+    assert_eq!(
+        approve_plan(root, "pppppppp", finishing, Decider::Developer)
+            .unwrap_err()
+            .0,
+        ["The agent is still finishing"]
+    );
+
+    // A resolution continues only while one of its Drifts is still open.
+    let resolution = "status: draft\nrefining: true\nkind: resolution\ndrifts:\n  - drift: dddddddd\n    decision: dismissed\n";
+    proposal(root, "pppppppp", resolution, "# R\n", &[], &[]);
+    put(root, "drifts/dddddddd-d.md", &drift_file("dismissed", ""));
+    assert_eq!(
+        approve_plan(root, "pppppppp", Gate::default(), Decider::Developer)
+            .unwrap_err()
+            .0,
+        ["None of its Drifts is still open"]
+    );
+    put(root, "drifts/dddddddd-d.md", &drift_file("open", ""));
+    assert!(matches!(
+        approve_plan(root, "pppppppp", Gate::default(), Decider::Developer).unwrap(),
+        Approval::Continue(_)
+    ));
+    // Both refusals are named.
+    put(root, "drifts/dddddddd-d.md", &drift_file("dismissed", ""));
+    assert_eq!(
+        approve_plan(root, "pppppppp", finishing, Decider::Developer)
+            .unwrap_err()
+            .0,
+        [
+            "The agent is still finishing",
+            "None of its Drifts is still open"
+        ]
+    );
+
+    // Attached to a Drift, it is continued from the Drift, never from the Board.
+    proposal(
+        root,
+        "pppppppp",
+        "status: draft\nrefining: true\n",
+        "# P\n",
+        &[],
+        &[],
+    );
+    put(
+        root,
+        "drifts/dddddddd-d.md",
+        &drift_file("open", "pppppppp"),
+    );
+    assert!(approve_plan(root, "pppppppp", Gate::default(), Decider::Developer).is_err());
+    assert!(matches!(
+        approve_plan(root, "pppppppp", Gate::default(), Decider::Drift).unwrap(),
+        Approval::Continue(_)
+    ));
 }
 
 #[test]
@@ -1289,7 +1435,7 @@ fn a_refined_proposal_handed_over_is_approved_waits_for_a_run_or_goes_back_to_op
     let dir = project();
     let root = dir.path();
     ready_change(root, "pppppppp");
-    let front = fs::read_to_string(root.join(".trama/proposals/pppppppp-t/proposal.md")).unwrap();
+    let front = fs::read_to_string(root.join(".weaver/proposals/pppppppp-t/proposal.md")).unwrap();
     put(
         root,
         "proposals/pppppppp-t/proposal.md",
@@ -1316,12 +1462,73 @@ fn a_refined_proposal_handed_over_is_approved_waits_for_a_run_or_goes_back_to_op
 }
 
 #[test]
+fn a_refined_proposal_attached_to_a_drift_is_always_open_and_a_refined_setup_keeps_its_kind() {
+    let dir = project();
+    let root = dir.path();
+    ready_change(root, "pppppppp");
+    let refining = |root: &Path| {
+        let path = root.join(".weaver/proposals/pppppppp-t/proposal.md");
+        let text = fs::read_to_string(&path).unwrap();
+        fs::write(
+            path,
+            text.replace("status: open", "status: refining\nrefining: true"),
+        )
+        .unwrap();
+    };
+    // Attached to a Drift it carries no Task: its scope is covered by what the code already does.
+    fs::remove_file(root.join(".weaver/proposals/pppppppp-t/tasks/tttttttt-pay.md")).unwrap();
+    let path = root.join(".weaver/proposals/pppppppp-t/proposal.md");
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(
+        path,
+        format!("{text}\n## Already present\n\n- `order` — `src/order.rs`\n"),
+    )
+    .unwrap();
+    refining(root);
+    put(
+        root,
+        "drifts/dddddddd-d.md",
+        &drift_file("open", "pppppppp"),
+    );
+    // Nothing blocks it, and still it is not approved nor does it wait for a Run.
+    for run in [false, true] {
+        let open = submit_plan(root, "pppppppp", &submit_ctx(false, run)).unwrap();
+        assert_eq!(open.outcome, Submitted::Open, "run: {run}");
+        let Some(Change::Write(text)) = open.changes.get("proposals/pppppppp-t/proposal.md") else {
+            panic!()
+        };
+        assert!(
+            text.contains("status: open") && !text.contains("refining"),
+            "{text}"
+        );
+    }
+
+    // A refined setup is approved at hand-over like any change and still starts Run all.
+    fs::remove_file(root.join(".weaver/drifts/dddddddd-d.md")).unwrap();
+    ready_change(root, "pppppppp");
+    with_kind(root, "pppppppp", "setup");
+    refining(root);
+    let approved = submit_plan(root, "pppppppp", &submit_ctx(false, false)).unwrap();
+    let Submitted::Approved(plan) = approved.outcome else {
+        panic!("{:?}", approved.outcome)
+    };
+    assert!(plan.start_run_all);
+    let Some(Change::Write(text)) = plan.changes.get("proposals/pppppppp-t/proposal.md") else {
+        panic!()
+    };
+    assert!(
+        text.contains("kind: setup") && text.contains("status: approved"),
+        "{text}"
+    );
+}
+
+#[test]
 fn an_approval_that_fails_half_way_leaves_every_file_as_it_was() {
     let dir = project();
     let root = dir.path();
     ready_change(root, "pppppppp");
     // `tasks` is a file: the Task cannot be created, after the Model and the Proposal were written.
-    fs::write(root.join(".trama/tasks"), "in the way").unwrap();
+    fs::write(root.join(".weaver/tasks"), "in the way").unwrap();
     let before = snapshot(root);
     let result = approve(
         root,
@@ -1341,9 +1548,11 @@ fn an_approval_that_fails_half_way_leaves_every_file_as_it_was() {
         before,
         "the files written before the failure are put back"
     );
-    assert!(!fs::read_to_string(root.join(".trama/model/shop/order.md"))
-        .unwrap()
-        .contains("The customer paid."));
+    assert!(
+        !fs::read_to_string(root.join(".weaver/model/shop/order.md"))
+            .unwrap()
+            .contains("The customer paid.")
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1433,7 +1642,7 @@ fn rework_marks_the_proposal_and_is_allowed_once() {
         "{text}"
     );
     // A Proposal that already reworks another one is not reworked again.
-    let open = fs::read_to_string(root.join(".trama/proposals/pppppppp-t/proposal.md")).unwrap();
+    let open = fs::read_to_string(root.join(".weaver/proposals/pppppppp-t/proposal.md")).unwrap();
     put(
         root,
         "proposals/pppppppp-t/proposal.md",
@@ -1490,7 +1699,7 @@ fn reject_and_rework_are_refused_while_the_agent_finishes_or_the_proposal_is_ref
     };
     assert!(reject_plan(root, "pppppppp", None, false, run, Decider::Developer).is_ok());
 
-    let open = fs::read_to_string(root.join(".trama/proposals/pppppppp-t/proposal.md")).unwrap();
+    let open = fs::read_to_string(root.join(".weaver/proposals/pppppppp-t/proposal.md")).unwrap();
     put(
         root,
         "proposals/pppppppp-t/proposal.md",
@@ -2255,7 +2464,7 @@ fn delete_is_refused_for_a_path_the_proposal_holds_or_that_does_not_exist() {
 }
 
 #[test]
-fn drifts_belong_to_a_resolution_and_rebase_to_a_change_not_attached_to_a_drift() {
+fn drifts_belong_to_a_resolution() {
     let dir = project();
     let root = dir.path();
     let decision = |decision: &str, option: Option<u32>, note: Option<&str>| DriftDecision {
@@ -2316,15 +2525,7 @@ fn drifts_belong_to_a_resolution_and_rebase_to_a_change_not_attached_to_a_drift(
     };
     assert!(text.contains("drifts: []"), "{text}");
 
-    // Rebase.
-    proposal(
-        root,
-        "pppppppp",
-        "status: open\nkind: resolution\n",
-        "# R\n",
-        &[],
-        &[],
-    );
+    // Rebase of a resolution is served as for any other kind (`rebase_serves_every_kind…`).
     assert!(edit_plan(
         root,
         "pppppppp",
@@ -2333,8 +2534,182 @@ fn drifts_belong_to_a_resolution_and_rebase_to_a_change_not_attached_to_a_drift(
             ..EditRequest::default()
         }
     )
-    .unwrap_err()[0]
-        .contains("only a `change`"));
+    .is_ok());
+}
+
+/// The `requires` of `id` in the project after `changes`.
+fn requires_after(root: &Path, changes: &ChangeSet, id: &str) -> Vec<String> {
+    let image = ProjectImage::load(root).with_changes(changes);
+    data::requires_of(image.card(CardKind::Proposal, id).unwrap())
+}
+
+#[test]
+fn rebase_drops_broken_requirements_and_closed_drifts_of_a_resolution_and_lists_them() {
+    let dir = project();
+    let root = dir.path();
+    let current = ORDER.replace("The customer is choosing.", "The customer is browsing.");
+    put(root, "model/shop/order.md", &current);
+    put(root, "drifts/dddddddd-d.md", &drift_file("open", ""));
+    put(root, "drifts/eeeeeeee-e.md", &drift_file("dismissed", ""));
+    proposal(root, "aaaaaaaa", "status: approved\n", "# A\n", &[], &[]);
+    proposal(root, "rrrrrrrr", "status: rejected\n", "# R\n", &[], &[]);
+    proposal(root, "ssssssss", "status: discarded\n", "# S\n", &[], &[]);
+    // Rejected with Rework, nothing handed over yet: it counts as still being written.
+    proposal(
+        root,
+        "oooooooo",
+        "status: rejected\nreworkRequested: true\n",
+        "# O\n",
+        &[],
+        &[],
+    );
+    // Rejected with Rework, and the rework was handed over: it is dropped.
+    proposal(
+        root,
+        "tttttttt",
+        "status: rejected\nreworkRequested: true\n",
+        "# T\n",
+        &[],
+        &[],
+    );
+    proposal(
+        root,
+        "uuuuuuuu",
+        "status: open\nreworks: tttttttt\n",
+        "# U\n",
+        &[],
+        &[],
+    );
+    proposal(root, "qqqqqqqq", "status: open\n", "# Q\n", &[], &[]);
+    // A cycle: only the entry of the refined Proposal goes; the other Proposal is not touched.
+    proposal(
+        root,
+        "cccccccc",
+        "status: open\nrequires:\n  - pppppppp\n",
+        "# C\n",
+        &[],
+        &[],
+    );
+    let front = format!(
+        "status: open\nkind: resolution\nrequires:\n  - rrrrrrrr\n  - ssssssss\n  - mmmmmmmm\n  - aaaaaaaa\n  - oooooooo\n  - tttttttt\n  - qqqqqqqq\n  - cccccccc\ndrifts:\n  - drift: dddddddd\n    decision: fix-code\n    option: 1\n    note: Lock it\n  - drift: eeeeeeee\n    decision: dismissed\n  - drift: ffffffff\n    decision: dismissed\n{}",
+        base_lines(&[("model/shop/order.md", &hash(ORDER))])
+    );
+    proposal(
+        root,
+        "pppppppp",
+        &front,
+        "# R\n",
+        &[("model/shop/order.md", &changed_order())],
+        &[],
+    );
+    let edited = edit_plan(
+        root,
+        "pppppppp",
+        &EditRequest {
+            rebase: true,
+            ..EditRequest::default()
+        },
+    )
+    .unwrap();
+    let dropped: Vec<&str> = edited
+        .dropped_requires
+        .iter()
+        .map(|r| r.id.as_str())
+        .collect();
+    assert_eq!(
+        dropped,
+        ["rrrrrrrr", "ssssssss", "mmmmmmmm", "tttttttt", "cccccccc"]
+    );
+    let problems: Vec<&str> = edited
+        .dropped_requires
+        .iter()
+        .map(|r| r.problem.unwrap().text())
+        .collect();
+    assert_eq!(
+        problems,
+        [
+            "was rejected",
+            "was discarded",
+            "is missing",
+            "was rejected",
+            "forms a cycle"
+        ]
+    );
+    let rows: Vec<&str> = edited
+        .dropped_drifts
+        .iter()
+        .map(|r| r.drift.as_str())
+        .collect();
+    assert_eq!(rows, ["eeeeeeee", "ffffffff"]);
+    assert_eq!(
+        requires_after(root, &edited.changes, "pppppppp"),
+        ["aaaaaaaa", "oooooooo", "qqqqqqqq"]
+    );
+    assert!(
+        edited
+            .changes
+            .get("proposals/cccccccc-t/proposal.md")
+            .is_none(),
+        "the other Proposal of the cycle is not touched"
+    );
+    let image = ProjectImage::load(root).with_changes(&edited.changes);
+    let card = image.card(CardKind::Proposal, "pppppppp").unwrap();
+    let kept = crate::project::board::resolution_rows(card);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(
+        (
+            kept[0].drift.as_str(),
+            kept[0].option,
+            kept[0].note.as_deref()
+        ),
+        ("dddddddd", Some(1), Some("Lock it")),
+        "the decision on a Drift still open stays taken"
+    );
+    assert!(data::refining_flag(card));
+    assert_eq!(
+        data::base_of(card).get("model/shop/order.md"),
+        Some(&hash(&current)),
+        "base is recorded again"
+    );
+}
+
+#[test]
+fn rebase_serves_every_kind_attached_to_a_drift_or_not() {
+    let dir = project();
+    let root = dir.path();
+    let current = ORDER.replace("The customer is choosing.", "The customer is browsing.");
+    put(root, "model/shop/order.md", &current);
+    for kind in ["change", "setup", "import"] {
+        ready_change(root, "pppppppp");
+        with_kind(root, "pppppppp", kind);
+        for attached in [false, true] {
+            if attached {
+                put(
+                    root,
+                    "drifts/dddddddd-d.md",
+                    &drift_file("open", "pppppppp"),
+                );
+            }
+            let edited = edit_plan(
+                root,
+                "pppppppp",
+                &EditRequest {
+                    rebase: true,
+                    ..EditRequest::default()
+                },
+            )
+            .unwrap();
+            assert!(edited.dropped_requires.is_empty() && edited.dropped_drifts.is_empty());
+            let Some(Change::Write(text)) = edited.changes.get("proposals/pppppppp-t/proposal.md")
+            else {
+                panic!()
+            };
+            assert!(
+                text.contains("refining: true") && text.contains(&hash(&current)),
+                "{kind}: {text}"
+            );
+        }
+    }
 }
 
 #[test]

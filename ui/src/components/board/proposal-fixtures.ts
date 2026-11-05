@@ -13,7 +13,7 @@ export function proposalView(patch: Partial<ProposalView> = {}): ProposalView {
     tasks: [],
     removalTasks: [],
     requires: [],
-    approve: { reasons: [], tooltip: null },
+    approve: { reasons: [], tooltip: null, refines: false },
     rejectReasons: [],
     canRework: true,
     scopeRefs: [],

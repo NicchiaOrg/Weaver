@@ -4,7 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
 
 import type { AppError } from "@/bindings/AppError";
 import type { AppInfo } from "@/bindings/AppInfo";
@@ -23,9 +23,12 @@ import type { OmpStatus } from "@/bindings/OmpStatus";
 import type { InitialiseResult } from "@/bindings/InitialiseResult";
 import type { ProjectChanged } from "@/bindings/ProjectChanged";
 import type { ProjectStatus } from "@/bindings/ProjectStatus";
+import type { SoloChange } from "@/bindings/SoloChange";
+import type { SoloMode } from "@/bindings/SoloMode";
 import type { SkillsReport } from "@/bindings/SkillsReport";
 import type { TreeEntry } from "@/bindings/TreeEntry";
 import type { ShowRequest } from "@/bindings/ShowRequest";
+import type { HideFailed } from "@/bindings/HideFailed";
 import type { SettingChange } from "@/bindings/SettingChange";
 import type { SettingsSnapshot } from "@/bindings/SettingsSnapshot";
 import type { ViewSnapshot } from "@/bindings/ViewSnapshot";
@@ -37,7 +40,46 @@ import type { ActionInput } from "@/bindings/ActionInput";
 import type { QuestionRoundChanged } from "@/bindings/QuestionRoundChanged";
 import type { QuestionRoundView } from "@/bindings/QuestionRoundView";
 import type { RequestsSnapshot } from "@/bindings/RequestsSnapshot";
+import type { Step } from "@/bindings/Step";
+import type { SubAgentConversation } from "@/bindings/SubAgentConversation";
+import type { SubAgentEntries } from "@/bindings/SubAgentEntries";
+import type { SubAgentsEvent } from "@/bindings/SubAgentsEvent";
+import type { UsageStatus } from "@/bindings/UsageStatus";
 import type { WelcomeState } from "@/bindings/WelcomeState";
+import type { SystemCertificatesStatus } from "@/bindings/SystemCertificatesStatus";
+import type { AskClosed } from "@/bindings/AskClosed";
+import type { AskEntries } from "@/bindings/AskEntries";
+import type { AskRow } from "@/bindings/AskRow";
+import type { AskSnapshot } from "@/bindings/AskSnapshot";
+import type { AsksSnapshot } from "@/bindings/AsksSnapshot";
+import type { AskTarget } from "@/bindings/AskTarget";
+import type { CopyInResult } from "@/bindings/CopyInResult";
+import type { EntryChange } from "@/bindings/EntryChange";
+import type { FileEntry } from "@/bindings/FileEntry";
+import type { TreeChanged } from "@/bindings/TreeChanged";
+import type { TreeSnapshot } from "@/bindings/TreeSnapshot";
+import type { TreeUpdate } from "@/bindings/TreeUpdate";
+import type { FilesCloseTab } from "@/bindings/FilesCloseTab";
+import type { FilesFlush } from "@/bindings/FilesFlush";
+import type { FilesSaveFailed } from "@/bindings/FilesSaveFailed";
+import type { TabText } from "@/bindings/TabText";
+import type { FileLockChanged } from "@/bindings/FileLockChanged";
+import type { FileOpenResult } from "@/bindings/FileOpenResult";
+import type { FileReloadResult } from "@/bindings/FileReloadResult";
+import type { FileSaveResult } from "@/bindings/FileSaveResult";
+import type { FileTabChanged } from "@/bindings/FileTabChanged";
+import type { AssetRenamed } from "@/bindings/AssetRenamed";
+import type { AssetsChanged } from "@/bindings/AssetsChanged";
+import type { AssetsCopied } from "@/bindings/AssetsCopied";
+import type { AssetsDeleted } from "@/bindings/AssetsDeleted";
+import type { AssetsSnapshot } from "@/bindings/AssetsSnapshot";
+import type { NotesChanged } from "@/bindings/NotesChanged";
+import type { NotesFlush } from "@/bindings/NotesFlush";
+import type { NotesImagesAdded } from "@/bindings/NotesImagesAdded";
+import type { NotesSheet } from "@/bindings/NotesSheet";
+import type { NotesTrashed } from "@/bindings/NotesTrashed";
+import type { NotesWritten } from "@/bindings/NotesWritten";
+import type { PastedImage } from "@/bindings/PastedImage";
 
 /** Payload of each event, by name. */
 export interface EventPayloads {
@@ -48,26 +90,60 @@ export interface EventPayloads {
   "settings-changed": SettingsSnapshot;
   /** omp's readiness changed: the whole status of the Machine `omp-setup`, with its revision. */
   "omp-changed": OmpStatus;
+  /** The usage limits, or their reading, changed: the whole status, with its revision. */
+  "usage-changed": UsageStatus;
   /** This window came forward because of a notification or a second launch: what to show. */
   "show-requested": ShowRequest;
+  /** This window could not go to the background after `Keep working in background`: it stays as it was; the reason. */
+  "window-hide-failed": HideFailed;
   /** Something to read at the top of the Board: a refused decision, a Proposal sent back to Draft. */
   notice: Notice;
   /** The Jobs list of a project changed: the whole list. */
   "jobs-changed": JobsSnapshot;
   /** The conversation of a job changed: the entries that changed, in batches counted by `seq`. */
   "job-entries": EntriesEvent;
+  /** The list of the sub-agents of a job or of General changed: the whole list. */
+  "sub-agents-changed": SubAgentsEvent;
+  /** The conversation of the sub-agent on screen changed: the entries that changed, in batches counted by `seq`. */
+  "sub-agent-entries": SubAgentEntries;
   /** The state of the General of a project changed: its whole state. */
   "general-changed": GeneralState;
   /** The conversation of a General changed: the entries that changed, in batches counted by `seq`. */
   "general-entries": GeneralEntries;
+  /** An Ask more conversation opened or changed: its row. */
+  "ask-changed": AskRow;
+  /** The conversation of an Ask more conversation changed: the entries that changed. */
+  "ask-entries": AskEntries;
+  /** An Ask more conversation closed. */
+  "ask-closed": AskClosed;
   /** The open design requests of a project changed (a decision, or a file changed on disk). */
   "requests-changed": RequestsEvent;
   /** The window is closing: the request editor saves what is pending and answers with `requests_flushed`. */
   "requests-flush": RequestsEvent;
+  /** The window is closing and the File view has unsaved changes: it answers with `files_flushed`. */
+  "files-flush": FilesFlush;
+  /** `Save all` could not save these files: the File view shows the first one's tab, with the reason. */
+  "files-save-failed": FilesSaveFailed;
+  /** `Cmd+W` / `Ctrl+W` while the File view has a tab: the menu's Close Window closes the active tab instead. */
+  "files-close-tab": FilesCloseTab;
+  /** The file of a tab changed, disappeared or reappeared on disk, by anything but the tab's own save. */
+  "file-tab-changed": FileTabChanged;
+  /** The agent's lock of a file open in a tab was taken or released. */
+  "file-lock-changed": FileLockChanged;
+  /** Listed folders of the File view's tree changed on disk or by an action of the tree: the folders read again and the ones gone, at a generation. */
+  "files-tree-changed": TreeChanged;
   /** The round on screen in a project changed (one opened, ended, or queued behind it). */
   "question-round-changed": QuestionRoundChanged;
   /** The state of a project, the files it installs and the opening check changed: the whole status. */
   "project-state": ProjectStatus;
+  /** The status of System Certificates changed: the whole status, with its revision. */
+  "system-certificates-changed": SystemCertificatesStatus;
+  /** The assets of a project changed (`workspace.ASSETS_CHANGED`): the whole list, at a generation. */
+  "assets-changed": AssetsChanged;
+  /** The notes sheet or an image of the notes folder changed on disk by anything but Weaver's own write (`workspace.NOTES_CHANGED`). */
+  "notes-changed": NotesChanged;
+  /** The window is closing: the Notes view answers with `notes_flushed`, with its waiting text and the images to trash. */
+  "notes-flush": NotesFlush;
 }
 
 /** Arguments and result of each command, by name. */
@@ -106,20 +182,32 @@ export interface Commands {
   fix_drift_code: { args: { projectId: string; driftId: string; option: number | null; note: string | null }; result: null };
   /** **Accept Proposal** on a Drift with an attached Proposal. */
   accept_drift_proposal: { args: { projectId: string; driftId: string }; result: null };
+  /** **Refine** on a Drift whose attached Proposal is stale or was left half-way: a refinement job adapts it; the Drift is not decided. */
+  refine_drift_proposal: { args: { projectId: string; driftId: string }; result: null };
+  /** **Discard** on a Drift whose attached Draft a refinement left half-way; the Drift is not decided. */
+  discard_drift_proposal: { args: { projectId: string; driftId: string }; result: null };
   /** **Dismiss Drift**, once confirmed. */
   dismiss_drift: { args: { projectId: string; driftId: string }; result: null };
   /** The whole History of an open project (entries newest first), worked out at one revision. */
   history_snapshot: { args: { projectId: string }; result: HistorySnapshot };
   /**
-   * The Diagram, Requirements and Specs of an open project at one revision, with the Proposal `overlay`
+   * The Requirements and Specs of an open project at one revision, with the Proposal `overlay`
    * drawn over the Model when it is still open (`null`: the current Model). The answer names the
    * Proposal it really drew.
    */
   view_snapshot: { args: { projectId: string; overlay: string | null }; result: ViewSnapshot };
   /** The state of the project (Not initialised, Empty Model, Has a Model), what Get Started lists and the opening check. */
   project_status: { args: { projectId: string }; result: ProjectStatus };
-  /** **Initialise**: creates `.trama` and the agent files; `force` confirms overwriting agent files that differ (else they come back as `conflicts`). */
-  initialise_project: { args: { projectId: string; force: boolean }; result: InitialiseResult };
+  /**
+   * **Initialise**: creates `.weaver` and the agent files; `force` confirms overwriting agent files that differ (else they
+   * come back as `conflicts`); `solo` is the mode of Solo mode chosen first (`off`: git is not called). A Solo mode that
+   * cannot be turned on refuses the initialisation with its reason and nothing is created.
+   */
+  initialise_project: { args: { projectId: string; force: boolean; solo: SoloMode }; result: InitialiseResult };
+  /** **Solo mode** of the working copy: the new state with the tracked files the block excludes, or the reason it could not change. */
+  set_solo_mode: { args: { projectId: string; mode: SoloMode }; result: SoloChange };
+  /** The files git tracks that Solo mode's block excludes, computed now: asked each time Settings is shown. */
+  solo_tracked_files: { args: { projectId: string }; result: string[] };
   /** **Update skills**: the structured report the command line prints too. */
   update_skills: { args: { projectId: string }; result: SkillsReport };
   /** The entries of one folder of the project (`path` relative, empty for the project folder) for the import tree. */
@@ -134,6 +222,8 @@ export interface Commands {
   omp_log_in: { args: { provider: string }; result: null };
   /** **Log out**: `omp auth-broker logout <provider>`; the outcome arrives with `omp-changed`. */
   omp_log_out: { args: { provider: string }; result: null };
+  /** `omp usage --json` for the connected providers (only while omp is Ready); answers the status when the reading ends. */
+  omp_usage: { args: Record<string, never>; result: UsageStatus };
   /** The name, version and recent projects of the welcome window. */
   welcome_state: { args: Record<string, never>; result: WelcomeState };
   /** `developer.OPEN_PROJECT` for a folder: opens its window or brings it forward. */
@@ -156,6 +246,12 @@ export interface Commands {
   job_answer_permission: { args: { projectId: string; jobId: string; request: number; option: string }; result: null };
   /** The `X` of a finished job's row. */
   job_remove: { args: { projectId: string; jobId: string }; result: null };
+  /** The list of the sub-agents of a job, each with the ones it started. */
+  job_sub_agents: { args: { projectId: string; jobId: string }; result: SubAgentsEvent };
+  /** The read-only conversation of the sub-agent at `path` of a job. */
+  job_sub_agent_conversation: { args: { projectId: string; jobId: string; path: Step[] }; result: SubAgentConversation };
+  /** What the Jobs view shows of a job's sub-agents: whether their list is on screen, and the conversation of which one. */
+  job_sub_agents_view: { args: { projectId: string; jobId: string; listShown: boolean; path: Step[] | null }; result: null };
   /** `Run` on a Task; a refusal (`refused`) carries the notice. */
   run_task: { args: { projectId: string; taskId: string }; result: null };
   /** `Run all`; a refusal carries the notice. */
@@ -172,6 +268,32 @@ export interface Commands {
   general_answer_permission: { args: { projectId: string; request: number; option: string }; result: null };
   /** `Clear General?`, once confirmed: the conversation and its record are deleted. */
   general_clear: { args: { projectId: string }; result: null };
+  /** The list of the sub-agents of the General of an open project. */
+  general_sub_agents: { args: { projectId: string }; result: SubAgentsEvent };
+  /** The read-only conversation of the sub-agent at `path` of the General of an open project. */
+  general_sub_agent_conversation: { args: { projectId: string; path: Step[] }; result: SubAgentConversation };
+  /** What the Chat view shows of the sub-agents: the conversation of which one (`null`: none). */
+  general_sub_agents_view: { args: { projectId: string; path: Step[] | null }; result: null };
+  /** `Ask more`: reads the chosen thing and opens a new conversation; its identity. Refused when the thing is gone. */
+  ask_open: { args: { projectId: string; target: AskTarget }; result: string };
+  /** The Ask more conversations of a project, the most recent first. */
+  ask_list: { args: { projectId: string }; result: AsksSnapshot };
+  /** One Ask more conversation as it is now. */
+  ask_snapshot: { args: { askId: string }; result: AskSnapshot };
+  /** A message to an Ask more conversation; the first one starts omp and carries the instruction. */
+  ask_send_message: { args: { askId: string; text: string }; result: null };
+  /** `Stop` during a turn of an Ask more conversation. */
+  ask_stop: { args: { askId: string }; result: null };
+  /** The developer's choice on a permission card of an Ask more conversation. */
+  ask_answer_permission: { args: { askId: string; request: number; option: string }; result: null };
+  /** Closes an Ask more conversation (confirmed when its agent works). */
+  ask_close: { args: { askId: string }; result: null };
+  /** The list of the sub-agents of an Ask more conversation. */
+  ask_sub_agents: { args: { askId: string }; result: SubAgentsEvent };
+  /** The read-only conversation of the sub-agent at `path` of an Ask more conversation. */
+  ask_sub_agent_conversation: { args: { askId: string; path: Step[] }; result: SubAgentConversation };
+  /** What the Jobs view shows of the sub-agents of an Ask more conversation. */
+  ask_sub_agents_view: { args: { askId: string; listShown: boolean; path: Step[] | null }; result: null };
   /** The open design requests of a project (writing or sent), newest first. */
   requests_list: { args: { projectId: string }; result: RequestsSnapshot };
   /** The text and standing of one request. */
@@ -192,10 +314,76 @@ export interface Commands {
   request_image: { args: { projectId: string; requestId: string; link: string }; result: string };
   /** The editor saved what was pending (the answer to `requests-flush`). */
   requests_flushed: { args: { projectId: string }; result: null };
+  /** The File view says in which files it has unsaved changes (every path, each time; none when it has none). */
+  files_unsaved: { args: { projectId: string; paths: string[] }; result: null };
+  /** The answer to `files-flush`: the texts of the tabs with unsaved changes. */
+  files_flushed: { args: { projectId: string; tabs: TabText[] }; result: null };
+  /** The File view has a tab, so `Cmd+W` / `Ctrl+W` closes it instead of the window (`files-close-tab`). */
+  files_close_key: { args: { projectId: string; claimed: boolean }; result: null };
+  /** `developer.OPEN_FILE`: opens a file in a tab. `tabs` are the open ones, least recently shown first, for the limit of 10. */
+  file_open: { args: { projectId: string; path: string; tabs: { path: string; unsaved: boolean }[] }; result: FileOpenResult };
+  /** Reads the file of a tab again (`developer.RELOAD_FILE`, a change on disk, a release of the lock). */
+  file_reload: { args: { projectId: string; path: string }; result: FileReloadResult };
+  /** `developer.SAVE_FILE` (`check`), `developer.OVERWRITE_FILE` (`overwrite`) and `Save again` (`again`); `hash` is the one the tab read, the one `check` compares with the file on disk. */
+  file_save: { args: { projectId: string; path: string; text: string; hash: string; mode: "check" | "overwrite" | "again" }; result: FileSaveResult };
+  /** `file-tab.CLOSED`: frees the tab's state, its watch and its lock tracking. */
+  file_close: { args: { projectId: string; path: string }; result: null };
+  /** `developer.OPEN_FILE_VIEW`: the root's entries, or the tree as it was within 10 s of leaving. */
+  files_open_view: { args: { projectId: string }; result: TreeSnapshot };
+  /** `developer.EXPAND_FOLDER`: reads that folder only. */
+  files_expand: { args: { projectId: string; path: string }; result: TreeUpdate };
+  /** `developer.COLLAPSE_FOLDER`: the backend forgets the folder and those inside it. */
+  files_collapse: { args: { projectId: string; path: string }; result: null };
+  /** The folders of `path` for the tree of `Move to…`; nothing is kept or watched. */
+  files_folders: { args: { projectId: string; path: string }; result: FileEntry[] };
+  /** `developer.LEAVE_FILE_VIEW`, once the tabs closed: the backend keeps the tree 10 s, then drops it. */
+  files_leave: { args: { projectId: string }; result: null };
+  /** `developer.CREATE_ENTRY`: an empty file, or with `folder` a folder; a refusal (`refused`) carries the reason. */
+  files_create: { args: { projectId: string; parent: string; name: string; folder: boolean }; result: EntryChange };
+  /** `developer.RENAME_ENTRY`. */
+  files_rename: { args: { projectId: string; path: string; name: string }; result: EntryChange };
+  /** `developer.MOVE_ENTRY` into the folder `target` (empty: the project root). */
+  files_move: { args: { projectId: string; path: string; target: string }; result: EntryChange };
+  /** `developer.DROP_EXTERNAL_ENTRIES`: copies the dropped `paths` (absolute, as Tauri reports them) into the folder `target` (empty: the project root); a refusal or a failure (`refused`) carries the reason, and nothing was copied. */
+  files_copy_in: { args: { projectId: string; target: string; paths: string[] }; result: CopyInResult };
+  /** `developer.DELETE_ENTRY`: to the system's trash. */
+  files_delete: { args: { projectId: string; path: string }; result: TreeUpdate };
   /** The round presented in the window of a project, when there is one. */
   question_round_get: { args: { projectId: string }; result: QuestionRoundView | null };
   /** What the developer does in the presented round; the round on screen afterwards. `refused` carries why not. */
   question_round_act: { args: { projectId: string; roundId: number; action: ActionInput }; result: QuestionRoundView | null };
+  /** The status of System Certificates now (the Machine `system-certificates`). */
+  system_certificates_status: { args: Record<string, never>; result: SystemCertificatesStatus };
+  /** **Refresh**: exports the certificates again; refused (`invalid-input`) while the setting is off. */
+  system_certificates_refresh: { args: Record<string, never>; result: SystemCertificatesStatus };
+  /** Closes the notice that Weaver turned System Certificates on, in every window. */
+  system_certificates_dismiss_notice: { args: Record<string, never>; result: SystemCertificatesStatus };
+  /** Closes the banner of a failed automatic export, in every window. */
+  system_certificates_dismiss_failure: { args: Record<string, never>; result: SystemCertificatesStatus };
+  /** The assets of an open project as the backend holds them, at a generation; later changes arrive as `assets-changed`. */
+  assets_list: { args: { projectId: string }; result: AssetsSnapshot };
+  /** `developer.DROP_ASSETS`: copies the dropped `paths` (absolute, as Tauri reports them) into `.weaver/assets/`; a refusal or a failure (`refused`) carries the reason, and nothing was copied. An ignored drop (the project's own assets) copies nothing and answers no names. */
+  assets_copy_in: { args: { projectId: string; paths: string[] }; result: AssetsCopied };
+  /** `developer.RENAME_ASSET`: the asset `name` takes the name `newName`; a refusal (`refused`) carries the reason. */
+  assets_rename: { args: { projectId: string; name: string; newName: string }; result: AssetRenamed };
+  /** `developer.DELETE_ASSETS`: each asset to the system's trash; the ones the trash refused come back with their reasons. */
+  assets_delete: { args: { projectId: string; names: string[] }; result: AssetsDeleted };
+  /** `developer.DRAG_ASSETS_OUT`: starts a native drag of the assets `names` out of this window, as copies; the assets never change. */
+  assets_drag_out: { args: { projectId: string; names: string[] }; result: null };
+  /** The notes sheet as it is on disk (CRLF read as LF), with the SHA-256 of its bytes; no text and no hash when the file is missing. */
+  notes_read: { args: { projectId: string }; result: NotesSheet };
+  /** `developer.EDIT_NOTES`: writes the whole sheet atomically (UTF-8, LF), creating the notes folder first; the new hash. A failure rejects with the reason. */
+  notes_write: { args: { projectId: string; text: string }; result: NotesWritten };
+  /** An image of the notes folder as `data:<mime>;base64,<…>`, from one read; rejects for a name that is not a PNG, JPEG, GIF or WebP file there. */
+  notes_image: { args: { projectId: string; name: string }; result: string };
+  /** `developer.ADD_NOTES_IMAGES`: copies images pasted from the clipboard (bytes in base64, with the file name when there is one); one outcome per file, in order. `localTime` is `YYYY-MM-DDTHH:MM:SS`. */
+  notes_add_pasted: { args: { projectId: string; files: PastedImage[]; localTime: string }; result: NotesImagesAdded };
+  /** `developer.ADD_NOTES_IMAGES`: copies image files dropped on the sheet (absolute paths); one outcome per file, in order. */
+  notes_add_dropped: { args: { projectId: string; paths: string[]; localTime: string }; result: NotesImagesAdded };
+  /** `developer.LEAVE_NOTES_VIEW`: each image `names` to the system's trash, one at a time; the ones the trash refused come back with their reasons. */
+  notes_trash: { args: { projectId: string; names: string[] }; result: NotesTrashed };
+  /** The answer to `notes-flush`: the sheet's waiting text (none when nothing waits) and the images to trash after it is written. */
+  notes_flushed: { args: { projectId: string; text: string | null; trash: string[] }; result: null };
 }
 
 // Compile-time proof that the maps above cover exactly the generated names.
@@ -237,15 +425,24 @@ export function currentWindowLabel(): string {
 }
 
 /**
- * Calls `handler` with the paths of the files dropped on this window (the system drag and drop of
- * the webview; outside Tauri nothing is ever dropped this way). Returns what stops the listening.
+ * Calls `handler` with every event of the system drag and drop of the webview (`enter`, `over`,
+ * `drop`, `leave`; positions in physical pixels). Outside Tauri nothing is ever dragged this way.
+ * Returns what stops the listening.
  */
-export async function onFilesDropped(handler: (paths: string[]) => void): Promise<UnlistenFn> {
+export async function onDragDrop(handler: (event: DragDropEvent) => void): Promise<UnlistenFn> {
   try {
-    return await getCurrentWebview().onDragDropEvent((event) => {
-      if (event.payload.type === "drop") handler(event.payload.paths);
-    });
+    return await getCurrentWebview().onDragDropEvent((event) => handler(event.payload));
   } catch {
     return () => {};
   }
+}
+
+/**
+ * Calls `handler` with the paths of the files dropped on this window (the system drag and drop of
+ * the webview; outside Tauri nothing is ever dropped this way). Returns what stops the listening.
+ */
+export function onFilesDropped(handler: (paths: string[]) => void): Promise<UnlistenFn> {
+  return onDragDrop((event) => {
+    if (event.type === "drop") handler(event.paths);
+  });
 }

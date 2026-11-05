@@ -66,6 +66,7 @@ beforeEach(() => {
         state,
         files: [],
         folderHasFiles,
+        solo: { mode: "off" },
         check: { opening: 0, outcome: { kind: "none" } },
       });
     }

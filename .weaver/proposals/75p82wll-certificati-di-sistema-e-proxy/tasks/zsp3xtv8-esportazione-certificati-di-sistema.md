@@ -1,0 +1,67 @@
+---
+technical: false
+refs:
+  - system-certificates
+  - desktop
+  - desktop.CERTIFICATES_EXPORTED
+  - desktop.CERTIFICATES_EXPORT_FAILED
+  - requirements/data#system-certificates
+  - requirements/data#developer.CHANGE_SETTINGS
+  - requirements/rules#system-certificates
+  - requirements/tech#system-certificates
+  - requirements/quality#system-certificates
+  - specs#frameworks
+---
+# Esportazione dei certificati di sistema
+
+Weaver deve poter esportare le autorità di certificazione di cui il sistema si fida in un bundle unico, tenerne lo stato, mandarlo alle finestre e offrire agli altri punti dell'app la funzione delle variabili e la classificazione degli errori di certificato e HTTP. Questo Task costruisce il motore della Machine `system-certificates` (stati `Off`, `On` con `Exporting`, `Ready`, `Failed`); l'avvio (età del bundle, accensione per Zscaler), il timer giornaliero e i banner sono di un altro Task, l'interruttore e la riga di stato nell'interfaccia di un altro ancora, e il collegamento delle variabili e delle spiegazioni ai singoli processi e superfici di omp spetta ai Task delle altre parti della Proposal, che chiameranno le funzioni descritte qui.
+
+## Impostazione
+
+- Nuova chiave `systemCertificates.enabled`, booleana, default `false`: è la prima impostazione booleana. Va aggiunta a `Settings` (campo `system_certificates.enabled` o equivalente con serializzazione `systemCertificates.enabled`), a `SettingKey` e a `SettingKey::ALL`, allo schema con titolo `System Certificates` e la descrizione (≤160 caratteri) `omp trusts the certificates your system trusts, for proxies that inspect HTTPS. Replaces NODE_EXTRA_CA_CERTS, SSL_CERT_FILE and similar variables.`, con un nuovo tipo di campo booleano in `FieldKind`.
+- La lettura del file accetta un valore JSON booleano per questa chiave; un tipo sbagliato vale il default e Settings dice quale chiave è stata ignorata e perché, come per le altre. Solo i valori diversi dal default si scrivono: `false` toglie la chiave. Il tipo TypeScript resta generato (`bindings.rs`, `export_all`), mai scritto a mano. Le altre regole di `requirements/data#developer.CHANGE_SETTINGS` (scrittura atomica e serializzata, errore mostrato, effetto solo sui processi avviati dopo) valgono anche qui.
+
+## Esportazione (`requirements/tech#system-certificates`, `requirements/rules#system-certificates`)
+
+- Un modulo nuovo di `weaver-core` (per esempio `weaver_core::system_certificates`) con funzioni pure più un sottile strato di I/O; il backend dell'app lo esegue, tiene lo stato e lo manda a ogni finestra. L'interfaccia non legge mai il bundle né i certificati.
+- Lettura del sistema con `rustls-native-certs` (`load_native_certs`) su un thread bloccante, mai sul thread IPC o UI; nessun processo esterno, nessuna rete. Errori su singoli certificati si saltano finché almeno uno si carica; se nessuno si carica: `could not read the system certificates: <first error>`. Attesa massima 30 s, poi `the export did not finish within 30 s` e il risultato tardivo del thread si scarta.
+- Radici pubbliche di `webpki-root-certs`, compilate in Weaver, aggiunte dopo quelle del sistema. Nuove dipendenze in Cargo: `rustls-native-certs`, `webpki-root-certs`, `x509-parser` (`specs#frameworks`).
+- Costruzione del bundle: una funzione pura dai certificati DER (prima il sistema, poi le radici pubbliche) al testo PEM e al conteggio. Un certificato entra solo se si legge come X.509 con `x509-parser` e i basic constraints dicono che è una CA; illeggibili e non-CA si saltano senza fallire; certificati con gli stessi byte DER compaiono una volta sola, al primo posto. Se le fonti del sistema non danno nessuna CA l'esportazione fallisce con `no certificate authority found`, anche se le radici pubbliche basterebbero. PEM: `-----BEGIN CERTIFICATE-----`, base64 in righe di 64 caratteri, `-----END CERTIFICATE-----`, LF; nessuna chiave.
+- Scrittura (`requirements/data#system-certificates`): `system-certificates.pem` nella cartella dei dati locali (`AppDirs::local_data_dir`, da aggiungere allo schema in testa a `paths.rs` insieme a `omp-install/`), condiviso da tutte le finestre e i progetti. Atomica: `system-certificates.pem.<pid>.tmp` nella stessa cartella, poi rename; un errore lascia intero il bundle precedente e rimuove il file temporaneo; il messaggio è `could not write the bundle: <message>`. L'ora di modifica è l'ora della scrittura; spegnere l'impostazione lascia il file sul disco, inutilizzato.
+- Un bundle è vecchio quando manca o la sua ora di modifica è più di 24 h prima di adesso: questa regola resta una funzione pura con l'orologio iniettato, usata dal Task dell'avvio.
+
+## Stato e comandi
+
+- Una sola esportazione alla volta in tutta l'app: una richiesta mentre una corre si unisce a quella e non avvia nulla. Un'esportazione che finisce dopo che l'impostazione è stata spenta non cambia lo stato e non emette nulla.
+- Stato in memoria: se sta esportando, conteggio e ora di scrittura del bundle in uso, ultimo errore, e se l'esportazione in corso è automatica (avvio, accensione per Zscaler, giornaliera) o chiesta (`Refresh`, o accensione a mano da Settings). All'avvio conteggio e ora vengono dal bundle sul disco (conteggio riletto dal file). Ogni cambio va a ogni finestra come un evento (per esempio `system-certificates-changed`, accanto a `emit_update_changed` in `events.rs`); una finestra legge lo stato corrente con un comando al caricamento (per esempio `system_certificates_status`). Il tipo dello stato è generato per TypeScript.
+- Transizioni della Machine: in `Off`, `developer.CHANGE_SETTINGS` che accende l'impostazione → `Exporting` (non automatica); in `On`, `developer.CHANGE_SETTINGS` che la spegne → `Off`: i processi avviati dopo non ricevono variabili, un'esportazione in corso viene ignorata alla fine. In `Exporting`, `desktop.CERTIFICATES_EXPORTED` → `Ready` con conteggio e ora; `desktop.CERTIFICATES_EXPORT_FAILED` → `Failed` con il motivo, e il bundle precedente resta in uso se esiste. In `Ready` e `Failed`, `developer.REFRESH_SYSTEM_CERTIFICATES` → `Exporting`: un comando (per esempio `system_certificates_refresh`) che l'interfaccia può chiamare solo a impostazione accesa; il backend lo rifiuta se è spenta. Il Task del timer giornaliero e dell'avvio usa lo stesso punto d'ingresso con il flag "automatica".
+- Alla fine di ogni esportazione, riuscita o no, a impostazione accesa, il backend emette `system-certificates.EXPORT_ENDED` in una forma che il servizio di omp può ascoltare (per esempio un canale `broadcast` come `SettingsService::subscribe`). Il ricontrollo di omp su `EXPORT_ENDED` e sullo spegnimento dell'impostazione (dallo stesso punto d'ingresso di un cambio di `ompPath`, solo negli stati che la Machine `omp-setup` nomina) è del Task della parte `omp-setup` della Proposal.
+- Ogni esportazione si registra a livello `info`: automatica o chiesta, esito, numero di certificati, durata e, se fallisce, il motivo. Mai il contenuto del bundle, i soggetti dei certificati o i valori delle variabili.
+
+## Variabili per i processi di omp
+
+- Una funzione pubblica del modulo core (per esempio `system_certificates::variables(enabled, bundle_path) -> Vec<(name, value)>`), letta a ogni avvio di un processo. Impostazione accesa e file del bundle presente: `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `PIP_CERT`, `CARGO_HTTP_CAINFO`, `AWS_CA_BUNDLE`, `DENO_CERT`, ciascuna con il percorso assoluto del bundle, più `PI_REQUEST_COMPRESSION=0`. Impostazione spenta o bundle assente: nulla, l'ambiente resta esattamente com'era senza System Certificates.
+- Si applicano dopo l'ambiente ereditato e ne sovrascrivono i valori omonimi; PATH resta come lo imposta `requirements/tech#omp`. Non si registrano mai con un lavoro. Questo Task scrive solo la funzione (con un helper del backend che legge impostazione e percorso dallo stato dell'app); i comandi di omp, i lavori, General, le riprese e i terminali dell'installer e dei login la chiameranno nei Task delle altre parti della Proposal.
+- Weaver non spegne mai il controllo TLS: nessuna `NODE_TLS_REJECT_UNAUTHORIZED`, `GIT_SSL_NO_VERIFY`, `PYTHONHTTPSVERIFY=0`, `-k`/`--insecure` o `strict-ssl=false`. Nessun file di progetto, variabile d'ambiente o messaggio dell'interfaccia sceglie fonti, percorso del bundle, variabili o processi.
+
+## Classificazione degli errori e spiegazioni
+
+- Funzioni pure in `crates/core/src/omp/failure.rs` che, dato un testo (lo stderr intero di un comando di omp fallito, un messaggio d'errore ACP, la coda dello stderr di un lavoro o di General, non solo la riga tenuta come motivo), dicono se è un errore di certificato o HTTP, e con quale codice.
+- Certificato: uno dei codici, con le maiuscole, `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`, `UNABLE_TO_GET_ISSUER_CERT`, `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `SELF_SIGNED_CERT_IN_CHAIN`, `DEPTH_ZERO_SELF_SIGNED_CERT`, `CERT_HAS_EXPIRED`, `CERT_UNTRUSTED`, `ERR_TLS_CERT_ALTNAME_INVALID`; o una delle frasi, senza badare alle maiuscole, `unable to get local issuer certificate`, `self signed certificate in certificate chain`, `self-signed certificate in certificate chain`, `certificate verify failed`, `SSL certificate problem`, `curl: (60)`.
+- HTTP, solo se non è un errore di certificato: codici `403`, `407` e da `500` a `599` come numero intero (non parte di un numero più lungo), nelle forme, senza badare alle maiuscole, `HTTP <code>`, `HTTP/<version> <code>`, `status <code>`, `status: <code>`, `status code <code>`, `statusCode: <code>`, `returned error: <code>`, oppure il codice seguito dalla sua frase standard (`403 Forbidden`, `407 Proxy Authentication Required`, `500 Internal Server Error`, `501 Not Implemented`, `502 Bad Gateway`, `503 Service Unavailable`, `504 Gateway Timeout`, `505 HTTP Version Not Supported`, `506 Variant Also Negotiates`, `507 Insufficient Storage`, `508 Loop Detected`, `510 Not Extended`, `511 Network Authentication Required`). Il primo riscontro nel testo dà il codice. Altri codici (`401`, `404`, `429`…), un codice seguito da parole che non sono la sua frase standard e numeri nudi non sono errori HTTP.
+- Una funzione dà la spiegazione in inglese, senza punto finale, secondo il tipo e l'impostazione (testi esatti in `requirements/ui#system-certificates`, "Proxy explanations"): certificato a impostazione spenta `omp could not verify a server's certificate; a corporate proxy that inspects HTTPS traffic is the usual cause, and turning on System Certificates in Weaver's settings may fix it`; certificato a impostazione accesa `omp could not verify a server's certificate, even with System Certificates on; a corporate proxy that inspects HTTPS traffic is the usual cause`; HTTP a impostazione spenta `omp received an HTTP <code> error; a corporate proxy that inspects HTTPS traffic may be blocking the request, and turning on System Certificates in Weaver's settings may fix it`; HTTP a impostazione accesa `omp received an HTTP <code> error; a corporate proxy that inspects HTTPS traffic may be blocking the request`. Nessun testo d'errore nomina un prodotto.
+- Questo Task costruisce solo le funzioni di classificazione e di spiegazione. Sostituire i vecchi suggerimenti di `failure.rs` (`CERTIFICATE_MARKERS`, `CERTIFICATE_HINT`, `PROXY_HINT`, `reason_with_hint`) e collegare le spiegazioni alle superfici (riquadro di omp, aggiornamento, logout, lista dei modelli, lavori, Chat, `Not delivered`), così come il testo dell'installer fallito, sono dei Task delle altre parti della Proposal: la nuova classificazione deve poter assorbire i marcatori attuali, perché non restino due convenzioni.
+
+## Test (`requirements/quality#system-certificates`)
+
+Con `cargo test`: costruzione del bundle (duplicati, non-CA e illeggibili, nessuna CA del sistema, radici pubbliche dopo quelle del sistema, forma PEM); scrittura atomica con un rename che fallisce e lascia il bundle precedente; limite di 30 s con un lettore lento iniettato; una sola esportazione alla volta ed esportazione ignorata dopo lo spegnimento; variabili con impostazione accesa, spenta e senza bundle e loro precedenza sugli ereditati; ogni marcatore di certificato e ogni forma e codice HTTP, altri codici, numeri nudi, precedenza del certificato, spiegazione con impostazione accesa e spenta, e che nessun testo d'errore nomini un prodotto. I test della presenza delle variabili nei singoli punti di avvio, dell'avvio e di Zscaler, e dell'interfaccia stanno nei rispettivi Task.
+
+## Dove iniziare
+
+- `requirements/data#developer.CHANGE_SETTINGS` — crates/core/src/settings/mod.rs: `Settings`, `SettingKey`, `SettingKey::ALL`, `set_json` (manca il caso booleano), `SettingChange` (valore testuale)
+- `requirements/data#developer.CHANGE_SETTINGS` — crates/core/src/settings/schema.rs: `FieldKind`
+- `system-certificates` — src-tauri/src/settings.rs: `SettingsService::subscribe`, `apply`
+- `requirements/tech#system-certificates` — crates/core/src/lib.rs (nuovo modulo), crates/core/src/paths.rs: `AppDirs::local_data_dir` e schema in testa, `weaver_core::atomic`
+- `system-certificates` — src-tauri/src/events.rs: `emit_update_changed` come modello; src-tauri/src/bindings.rs: `export_all`
+- `system-certificates` — src-tauri/src/settings.rs: `SettingsService::subscribe` come modello del canale di `EXPORT_ENDED`
+- `requirements/rules#system-certificates` — crates/core/src/omp/failure.rs: `CERTIFICATE_MARKERS`, `hint`, `has_refusing_status` (regole attuali da superare), test in fondo

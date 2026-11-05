@@ -1,18 +1,24 @@
-import { ArrowDown, ArrowUp, Eraser, Square } from "lucide-react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { ArrowDown, ArrowLeft, ArrowUp, Eraser, Square } from "lucide-react";
+import { Fragment, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { Entry } from "@/bindings/Entry";
+import type { Step } from "@/bindings/Step";
+import { TaggedTextarea } from "@/components/assets/tagged-textarea";
 import { ConfirmDialog } from "@/components/dialogs";
-import { useGeneral } from "@/components/general/use-general";
+import { generalSubAgentsApi, useGeneral } from "@/components/general/use-general";
 import { GuardedButton } from "@/components/guarded-button";
-import { EntryView } from "@/components/jobs/jobs-view";
+import { ViewHeader } from "@/components/view-header";
+import { EntryView, SubAgentConversationView } from "@/components/jobs/jobs-view";
 import { useProject } from "@/components/project-context";
+import { useSubAgentList, useSubAgentsView } from "@/components/sub-agents/api";
+import { SubAgentNavProvider, type SubAgentNav } from "@/components/sub-agents/sub-agent-ui";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { call } from "@/lib/backend";
+import { useFollowScroll } from "@/hooks/use-follow-scroll";
 import { useOmp } from "@/hooks/use-omp";
 
 const EMPTY = "Talk with omp in this project. Ask it to start a job of Weaver when you want one.";
+const LOADING = "Loading conversation…";
 
 /** The index of the last message of the developer that omp has not received yet, or -1. */
 function lastQueued(entries: readonly Entry[]): number {
@@ -30,12 +36,21 @@ export function GeneralView() {
   const { state, entries, problem, send, stop, answer, clear } = useGeneral(projectId);
   const [text, setText] = useState("");
   const [confirming, setConfirming] = useState(false);
-  const scroller = useRef<HTMLDivElement>(null);
-  const [following, setFollowing] = useState(true);
-  useEffect(() => {
+  const { scrollerRef, contentRef, scroller, following, follow, onScroll } = useFollowScroll(entries);
+  // The chat comes back where it was left: the sub-agent's conversation replaced it, and with it
+  // its scrolled element.
+  const position = useRef(0);
+  const [path, setPath] = useState<Step[] | null>(null);
+  // Only the swap matters: `following` is what it was when the chat was left.
+  useLayoutEffect(() => {
     const element = scroller.current;
-    if (following && element) element.scrollTop = element.scrollHeight;
-  }, [entries, following]);
+    if (path === null && element && !following) element.scrollTop = position.current;
+  }, [path]);
+  const api = useMemo(() => generalSubAgentsApi(projectId), [projectId]);
+  const shown = path ? api : null;
+  const nodes = useSubAgentList(shown);
+  useSubAgentsView(shown, path);
+  const nav = useMemo<SubAgentNav>(() => ({ base: path ?? [], open: setPath }), [path]);
 
   const working = state?.working ?? false;
   const waiting = state?.starting ? lastQueued(entries) : -1;
@@ -46,36 +61,43 @@ export function GeneralView() {
     const message = text.trim();
     if (!message) return;
     setText("");
-    setFollowing(true);
+    follow();
     send(message);
   };
 
-  return (
+  const clearButton = (
+    <GuardedButton variant="outline" size="sm" reasons={[empty && "The conversation is empty"]} onClick={() => setConfirming(true)}>
+      <Eraser aria-hidden />
+      Clear
+    </GuardedButton>
+  );
+
+  const chat = (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center justify-between gap-2 border-b px-3 py-2">
-        <h2 className="text-sm font-semibold">General</h2>
-        <GuardedButton variant="outline" size="sm" reasons={[empty && "The conversation is empty"]} onClick={() => setConfirming(true)}>
-          <Eraser aria-hidden />
-          Clear
-        </GuardedButton>
-      </header>
+      <ViewHeader view="general">{clearButton}</ViewHeader>
       <div
-        ref={scroller}
-        className="relative min-h-0 flex-1 space-y-3 overflow-y-auto p-3"
+        ref={scrollerRef}
+        className="relative min-h-0 flex-1 overflow-y-auto p-4"
         onScroll={(event) => {
-          const element = event.currentTarget;
-          setFollowing(element.scrollHeight - element.scrollTop - element.clientHeight < 24);
+          position.current = event.currentTarget.scrollTop;
+          onScroll(event);
         }}
       >
-        {entries.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">{EMPTY}</p>}
-        {entries.map((entry, index) => (
-          <Fragment key={index}>
-            <EntryView entry={entry} answer={answer} />
-            {index === waiting && <p className="text-right text-xs text-muted-foreground">Starting omp…</p>}
-          </Fragment>
-        ))}
+        <div ref={contentRef} className="space-y-3">
+          {state?.loading ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">{LOADING}</p>
+          ) : (
+            entries.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">{EMPTY}</p>
+          )}
+          {entries.map((entry, index) => (
+            <Fragment key={index}>
+              <EntryView entry={entry} answer={answer} />
+              {index === waiting && <p className="text-right text-xs text-muted-foreground">Starting omp…</p>}
+            </Fragment>
+          ))}
+        </div>
         {!following && (
-          <Button className="sticky bottom-2 ml-auto flex" size="sm" variant="secondary" onClick={() => setFollowing(true)}>
+          <Button className="sticky bottom-2 ml-auto mt-3 flex" size="sm" variant="secondary" onClick={follow}>
             <ArrowDown aria-hidden />
             Jump to latest
           </Button>
@@ -95,7 +117,7 @@ export function GeneralView() {
         </p>
       )}
       <div className="flex items-end gap-2 border-t p-3">
-        <Textarea
+        <TaggedTextarea
           aria-label="Message omp"
           placeholder="Message omp…"
           rows={1}
@@ -119,10 +141,33 @@ export function GeneralView() {
           </Button>
         )}
       </div>
+    </div>
+  );
+
+  return (
+    <SubAgentNavProvider value={nav}>
+      {path ? (
+        <SubAgentConversationView
+          api={api}
+          ownerName="Chat"
+          headerOf="general"
+          nodes={nodes}
+          path={path}
+          back={
+            <Button variant="outline" size="sm" onClick={() => setPath(null)}>
+              <ArrowLeft aria-hidden />
+              Back to Chat
+            </Button>
+          }
+          actions={clearButton}
+        />
+      ) : (
+        chat
+      )}
       <ConfirmDialog
         open={confirming}
         onOpenChange={setConfirming}
-        title="Clear General?"
+        title="Clear Chat?"
         description={
           working
             ? "The agent's turn stops, the conversation is deleted and a new one starts."
@@ -130,8 +175,11 @@ export function GeneralView() {
         }
         confirmLabel="Clear"
         destructive
-        onConfirm={clear}
+        onConfirm={() => {
+          setPath(null);
+          clear();
+        }}
       />
-    </div>
+    </SubAgentNavProvider>
   );
 }

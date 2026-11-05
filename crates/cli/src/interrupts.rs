@@ -1,4 +1,4 @@
-//! What stops a command that waits with no time limit (`trama question new`): SIGINT, SIGTERM or
+//! What stops a command that waits with no time limit (`weaver question new`): SIGINT, SIGTERM or
 //! a closed standard output (on Windows: Ctrl+C, Ctrl+Break, a closing console or a closed pipe).
 //!
 //! The command asks [`Interrupts`] to call a function when that happens and withdraws its round by

@@ -1,8 +1,8 @@
-//! The Diagram, Requirements and Specs views in the app: the snapshot the UI draws.
+//! The Requirements and Specs views in the app: the snapshot the UI draws.
 //!
-//! Everything the views show is worked out in `trama_core::project::view` (graph levels, details,
-//! overlay labels, where each reference is drawn); this module only reads what that needs from
-//! disk, applies the chosen Proposal with `trama_core::project::proposal::analysis` and wraps the
+//! Everything the views show is worked out in `weaver_core::project::view` (sections, fields,
+//! overlay labels, where each reference is shown); this module only reads what that needs from
+//! disk, applies the chosen Proposal with `weaver_core::project::proposal::analysis` and wraps the
 //! result with the revision it was computed from. The UI asks again whenever a `project-changed`
 //! event names the `model`, `requirements`, `specs` or `board` slice (Proposals and cards are in
 //! `board`), and drops an answer older than one it already shows.
@@ -12,23 +12,23 @@ use std::path::Path;
 
 use serde::Serialize;
 use tauri::State;
-use trama_core::project::cards::CardKind;
-use trama_core::project::changes::Change;
-use trama_core::project::image::ProjectImage;
-use trama_core::project::layout;
-use trama_core::project::proposal::analysis;
-use trama_core::project::proposal::data::{self, Status};
-use trama_core::project::proposal::files::{self, Folders};
-use trama_core::project::shortnum;
-use trama_core::project::text;
-use trama_core::project::view::{self, Files, OverlayOption, ViewData, ViewInput};
 use ts_rs::TS;
+use weaver_core::project::cards::CardKind;
+use weaver_core::project::changes::Change;
+use weaver_core::project::image::ProjectImage;
+use weaver_core::project::layout;
+use weaver_core::project::proposal::analysis;
+use weaver_core::project::proposal::data::{self, Status};
+use weaver_core::project::proposal::files::{self, Folders};
+use weaver_core::project::shortnum;
+use weaver_core::project::text;
+use weaver_core::project::view::{self, Files, OverlayOption, ViewData, ViewInput};
 
 use crate::blocking;
 use crate::error::AppError;
 use crate::state::AppState;
 
-/// The three views of a project at one revision.
+/// The two views of a project at one revision.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewSnapshot {
@@ -91,7 +91,7 @@ fn held_files(
 
 /// The three views of `image`, with `overlay` (a Proposal identity) drawn over the Model when it
 /// can be.
-pub fn snapshot(
+fn snapshot(
     project_id: &str,
     revision: u64,
     root: &Path,
@@ -154,8 +154,7 @@ pub fn snapshot(
     }
 }
 
-/// The views of an open project. The layout of the Diagram is not worked out here: the UI does it
-/// off its main thread from the levels this returns.
+/// The Requirements and Specs of an open project, with the chosen Proposal drawn over them.
 #[tauri::command]
 pub async fn view_snapshot(
     state: State<'_, AppState>,
@@ -181,24 +180,28 @@ pub async fn view_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use trama_core::project::view::Change as ViewChange;
+    use weaver_core::project::view::{Change as ViewChange, SectionView};
 
     use super::*;
 
     fn write(root: &Path, rel: &str, text: &str) {
-        let path = root.join(".trama").join(rel);
+        let path = root.join(".weaver").join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
     }
 
     const MACHINE: &str =
         "# Order\n\nAn order.\n\n## States\n\n### Draft (initial)\nChoosing.\n\n### Done (final)\n";
-    const PROPOSAL: &str = "---\nstatus: open\nkind: change\nbase:\n  model/shop/order.md: abc\ncreated: 2026-11-02T07:00:01.000Z\n---\n# Reshape the order\n";
+    const AREA: &str = "---\ndescription: d\n---\n# UI\n";
+    const MAIN: &str = "---\ndescription: d\n---\n# Main\n\n## General\n\nGeneral text.\n\n## order/Draft\n\nChoosing text.\n";
+    const PROPOSAL: &str = "---\nstatus: open\nkind: change\nbase:\n  model/shop/order.md: abc\n  requirements/ui/main.md: abc\ncreated: 2026-11-02T07:00:01.000Z\n---\n# Reshape the order\n";
 
     fn project(root: &Path) {
         write(root, "model/system.md", "# Shop\n");
         write(root, "model/shop/feature.md", "# Shopping\n");
         write(root, "model/shop/order.md", MACHINE);
+        write(root, "requirements/ui/area.md", AREA);
+        write(root, "requirements/ui/main.md", MAIN);
         write(root, "proposals/aaaaaaaa-reshape/proposal.md", PROPOSAL);
         write(
             root,
@@ -207,6 +210,23 @@ mod tests {
                 .replace("Choosing.", "Picking.")
                 .replace("### Done (final)", "### Done (final)\n\n### Lost\n"),
         );
+        write(
+            root,
+            "proposals/aaaaaaaa-reshape/requirements/ui/main.md",
+            &format!(
+                "{}\n## order/Lost\n\nNew text.\n",
+                MAIN.replace("Choosing text.", "Picking text.")
+            ),
+        );
+    }
+
+    fn section<'a>(snapshot: &'a ViewSnapshot, title: &str) -> &'a SectionView {
+        snapshot.data.requirements[0]
+            .fragments
+            .iter()
+            .flat_map(|f| &f.sections)
+            .find(|s| s.title == title)
+            .unwrap_or_else(|| panic!("no section {title}"))
     }
 
     #[test]
@@ -225,18 +245,18 @@ mod tests {
                 .collect::<Vec<_>>(),
             [("aaaaaaaa", "Reshape the order")]
         );
-        assert!(plain.data.model.details["order/Draft"].change.is_none());
+        assert!(section(&plain, "order/Draft").change.is_none());
 
         let drawn = snapshot("0123456789abcdef", 3, dir.path(), &image, Some("aaaaaaaa"));
         assert_eq!(drawn.overlay.as_deref(), Some("aaaaaaaa"));
-        let draft = &drawn.data.model.details["order/Draft"];
+        let draft = section(&drawn, "order/Draft");
         assert_eq!(draft.change, Some(ViewChange::Changed));
         assert_eq!(
             draft.file.as_deref(),
-            Some(".trama/proposals/aaaaaaaa-reshape/model/shop/order.md")
+            Some(".weaver/proposals/aaaaaaaa-reshape/requirements/ui/main.md")
         );
         assert_eq!(
-            drawn.data.model.details["order/Lost"].change,
+            section(&drawn, "order/Lost").change,
             Some(ViewChange::Added)
         );
         // The scope of the Proposal is what the focus opens on.
@@ -260,7 +280,7 @@ mod tests {
         let image = ProjectImage::load(dir.path());
         let shown = snapshot("0123456789abcdef", 1, dir.path(), &image, Some("aaaaaaaa"));
         assert!(shown.overlays.is_empty() && shown.overlay.is_none() && shown.scope.is_empty());
-        assert!(shown.data.model.details["order/Draft"].change.is_none());
+        assert!(section(&shown, "order/Draft").change.is_none());
     }
 
     #[test]
@@ -271,7 +291,7 @@ mod tests {
         let json = serde_json::to_value(snapshot("0123456789abcdef", 2, dir.path(), &image, None))
             .unwrap();
         assert_eq!(json["projectId"], "0123456789abcdef");
-        assert_eq!(json["data"]["model"]["levels"][0]["key"], "");
-        assert_eq!(json["data"]["model"]["levels"][0]["kind"], "root");
+        assert_eq!(json["data"]["requirements"][0]["id"], "ui");
+        assert!(json["data"].get("model").is_none());
     }
 }

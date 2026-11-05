@@ -1,8 +1,8 @@
-//! `trama question new` against a fake app: every outcome with its exit code, a reply that comes
+//! `weaver question new` against a fake app: every outcome with its exit code, a reply that comes
 //! late (no time limit anywhere), and a stop (SIGINT, SIGTERM, a closed standard output) that
 //! closes the connection.
 //!
-//! The real `trama` binary runs with its own `HOME`, so no test touches the developer's folders.
+//! The real `weaver` binary runs with its own `HOME`, so no test touches the developer's folders.
 //! Unix only: on Windows the folders come from the Known Folder API, which no variable redirects,
 //! and the signals are Unix signals.
 #![cfg(unix)]
@@ -15,11 +15,11 @@ use std::thread;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use trama_core::endpoint::{new_endpoint, new_secret};
-use trama_core::ipc::{serve_connection_watched, Listener, Peer};
-use trama_core::paths::AppDirs;
-use trama_core::protocol::{Request, Response};
-use trama_core::runtime::{self, RuntimeInfo};
+use weaver_core::endpoint::{new_endpoint, new_secret};
+use weaver_core::ipc::{serve_connection_watched, Listener, Peer};
+use weaver_core::paths::AppDirs;
+use weaver_core::protocol::{Request, Response};
+use weaver_core::runtime::{self, RuntimeInfo};
 
 const SECRET_JOB: &str = "abcd1234";
 /// Long enough for any real stop to arrive, short enough for a test.
@@ -36,7 +36,7 @@ fn sandbox() -> Sandbox {
     let base = tempfile::tempdir().unwrap();
     let home = base.path().join("home");
     let root = base.path().join("project");
-    std::fs::create_dir_all(root.join(".trama")).unwrap();
+    std::fs::create_dir_all(root.join(".weaver")).unwrap();
     std::fs::create_dir_all(home.join("run")).unwrap();
     let dirs = if cfg!(target_os = "macos") {
         let support = home.join("Library/Application Support");
@@ -124,8 +124,8 @@ fn app(
     }
 }
 
-fn trama(sandbox: &Sandbox, env: &[(&str, &str)]) -> Child {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_trama"));
+fn weaver(sandbox: &Sandbox, env: &[(&str, &str)]) -> Child {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-cli"));
     command
         .args(["question", "new", "--input", "-", "--root"])
         .arg(&sandbox.root)
@@ -177,13 +177,13 @@ impl Result {
 }
 
 fn run(sandbox: &Sandbox, env: &[(&str, &str)], input: &Value) -> Result {
-    let mut child = trama(sandbox, env);
+    let mut child = weaver(sandbox, env);
     give_input(&mut child, input);
     finish(child)
 }
 
 fn in_job(endpoint: &str) -> Vec<(&str, &str)> {
-    vec![("TRAMA_JOB", SECRET_JOB), ("TRAMA_ENDPOINT", endpoint)]
+    vec![("WEAVER_JOB", SECRET_JOB), ("WEAVER_ENDPOINT", endpoint)]
 }
 
 fn assert_unavailable(result: &Result) {
@@ -234,7 +234,7 @@ fn nothing_is_submitted_when_no_app_can_be_reached() {
     // Outside a job.
     assert_unavailable(&run(&sandbox, &[], &round()));
     // In a job, with no runtime file.
-    assert_unavailable(&run(&sandbox, &[("TRAMA_JOB", SECRET_JOB)], &round()));
+    assert_unavailable(&run(&sandbox, &[("WEAVER_JOB", SECRET_JOB)], &round()));
 
     // A runtime file with nobody listening.
     let endpoint = new_endpoint(&sandbox.dirs).unwrap();
@@ -360,7 +360,7 @@ fn signal(child: &Child, name: &str) {
 fn stopped_by(name: &str) {
     let sandbox = sandbox();
     let app = waiting_app(&sandbox);
-    let mut child = trama(&sandbox, &in_job(&app.endpoint.clone()));
+    let mut child = weaver(&sandbox, &in_job(&app.endpoint.clone()));
     give_input(&mut child, &round());
     // The round is submitted and waits.
     app.seen.recv_timeout(PATIENCE).unwrap();
@@ -391,7 +391,7 @@ fn sigterm_withdraws_the_round_and_closes_the_connection() {
 fn a_closed_standard_output_withdraws_the_round() {
     let sandbox = sandbox();
     let app = waiting_app(&sandbox);
-    let mut child = trama(&sandbox, &in_job(&app.endpoint.clone()));
+    let mut child = weaver(&sandbox, &in_job(&app.endpoint.clone()));
     give_input(&mut child, &round());
     app.seen.recv_timeout(PATIENCE).unwrap();
     thread::sleep(Duration::from_millis(300));

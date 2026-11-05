@@ -1,5 +1,7 @@
 import { createContext, useContext } from "react";
 
+import type { AskTarget } from "@/bindings/AskTarget";
+
 import type { FocusSubject, ViewName } from "@/components/views/focus-model";
 
 /** The views a focus on references can open. */
@@ -34,13 +36,18 @@ export interface BoardActions {
   /** `Run` on one Task, by its permanent id. */
   runTask?: (taskId: string) => void;
   /**
-   * How many steps the focus on these references has in a view. `View on diagram` and `View
-   * requirements` exist only when `viewOn` is set and this answers at least 1 for their view.
+   * How many steps the focus on these references has in a view. `View requirements` exists only
+   * when `viewOn` is set and this answers at least 1 for its view.
    * `subject` names what the focus is about when it is a Proposal or a Task.
    */
   focusSteps?: (view: FocusView, refs: readonly string[], subject?: FocusSubject) => number;
   /** Opens a view focused on these references; without `subject` the focus is about the reference. */
   viewOn?: (view: FocusView, refs: readonly string[], subject?: FocusSubject) => void;
+  /**
+   * `Ask more` on a card, a History entry, a question or the Requirements as a whole: opens a
+   * conversation about it, and resolves to its identity (`null` when the thing no longer exists).
+   */
+  askMore?: (target: AskTarget) => Promise<string | null>;
 }
 
 export const BoardActionsContext = createContext<BoardActions>({});

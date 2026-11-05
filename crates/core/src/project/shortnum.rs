@@ -11,7 +11,7 @@ use std::path::Path;
 
 use super::cards::{Card, CardKind};
 use super::ids::looks_like_short_number;
-use super::layout::{ensure_local_folder, trama_dir, SHORT_NUMBERS_DIR};
+use super::layout::{ensure_local_folder, weaver_dir, SHORT_NUMBERS_DIR};
 use super::order::sort_by_creation;
 use super::text;
 
@@ -249,7 +249,7 @@ pub fn short_cards(cards: &[Card]) -> Vec<ShortCard> {
 /// changed. Nothing here fails: a cache that cannot be read counts as empty, and one that
 /// cannot be written is simply not updated.
 pub fn load(project_root: &Path, cards: &[Card]) -> ShortNumbers {
-    let path = trama_dir(project_root)
+    let path = weaver_dir(project_root)
         .join(SHORT_NUMBERS_DIR)
         .join(CACHE_FILE);
     let current = text::read_text(&path).unwrap_or_default();
@@ -265,7 +265,7 @@ pub fn load(project_root: &Path, cards: &[Card]) -> ShortNumbers {
 /// The numbers [`load`] would give, without writing the cache back: for what reads only (the
 /// Board's picture) and for a decision that may still be refused, which must write nothing.
 pub fn peek(project_root: &Path, cards: &[Card]) -> ShortNumbers {
-    let path = trama_dir(project_root)
+    let path = weaver_dir(project_root)
         .join(SHORT_NUMBERS_DIR)
         .join(CACHE_FILE);
     ShortNumbers::assign(
@@ -534,7 +534,7 @@ T cccccccc
             task("aaaaaaaa", "todo", None, "01"),
             task("bbbbbbbb", "todo", None, "02"),
         ];
-        let cache_path = trama_dir(dir.path()).join("short-numbers/assigned");
+        let cache_path = weaver_dir(dir.path()).join("short-numbers/assigned");
 
         // Missing: built and written, with the folder's `.gitignore`.
         let n = load(dir.path(), &cards);
@@ -575,9 +575,9 @@ T cccccccc
     #[test]
     fn a_cache_that_cannot_be_written_does_not_fail_the_load() {
         let dir = tempfile::tempdir().unwrap();
-        // `.trama/short-numbers` is a file: the folder cannot be created.
-        std::fs::create_dir_all(trama_dir(dir.path())).unwrap();
-        std::fs::write(trama_dir(dir.path()).join("short-numbers"), b"x").unwrap();
+        // `.weaver/short-numbers` is a file: the folder cannot be created.
+        std::fs::create_dir_all(weaver_dir(dir.path())).unwrap();
+        std::fs::write(weaver_dir(dir.path()).join("short-numbers"), b"x").unwrap();
         let n = load(dir.path(), &[task("aaaaaaaa", "todo", None, "01")]);
         assert_eq!(n.number_of(CardKind::Task, "aaaaaaaa"), Some(1));
     }

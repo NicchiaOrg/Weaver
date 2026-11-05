@@ -4,7 +4,7 @@
 //! and `{line}` filled, never a shell). The program is looked for on the `PATH` and, because an
 //! app started from the Dock or the Start menu does not get the `PATH` of a terminal, in the folders
 //! where the editors' command line tools are usually installed. It is started through
-//! [`trama_core::process::command`], with no console and no input; a failure comes back as the
+//! [`weaver_core::process::command`], with no console and no input; a failure comes back as the
 //! reason the UI shows in a notice.
 
 use std::ffi::OsString;
@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use trama_core::process;
-use trama_core::settings::Settings;
+use weaver_core::process;
+use weaver_core::settings::Settings;
 
 use crate::log_warn;
 
@@ -182,7 +182,7 @@ pub fn open(
 mod tests {
     use super::*;
 
-    use trama_core::settings::EditorPreset;
+    use weaver_core::settings::EditorPreset;
 
     fn search_in(dir: &Path) -> ProgramSearch {
         ProgramSearch {
@@ -297,7 +297,7 @@ mod tests {
     }
 
     // These tests run a shell script as the editor: Windows has no equivalent without a shell, and
-    // the argument construction is covered by the settings tests of `trama-core` on every OS.
+    // the argument construction is covered by the settings tests of `weaver-core` on every OS.
     #[cfg(unix)]
     mod launching {
         use super::*;

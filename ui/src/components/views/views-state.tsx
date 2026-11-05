@@ -6,7 +6,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type MutableRefObject,
   type ReactNode,
 } from "react";
 
@@ -14,7 +13,6 @@ import type { ViewSnapshot } from "@/bindings/ViewSnapshot";
 import { BoardActionsContext, type FocusView } from "@/components/board/board-ui";
 import type { Notice } from "@/components/notices";
 import { useProject } from "@/components/project-context";
-import { openPath, pathFromLink, ROOT, settlePath } from "@/components/views/diagram-model";
 import {
   EMPTY_PLAN,
   planFocus,
@@ -38,19 +36,6 @@ export interface ActiveFocus {
   nonce: number;
 }
 
-/** Where the Diagram is: the levels from the root, the selected element, the expanded Machines. */
-export interface DiagramNav {
-  path: readonly string[];
-  selected: string | null;
-  expanded: ReadonlySet<string>;
-}
-
-/** The viewport of a level, kept while the window is open. */
-export interface Viewport {
-  zoom: number;
-  pan: { x: number; y: number };
-}
-
 interface FocusState {
   subject: FocusSubject;
   refs: readonly string[];
@@ -58,7 +43,7 @@ interface FocusState {
   index: number;
   only: boolean;
   nonce: number;
-  /** The focus was just opened: the Diagram goes to its first step once the snapshot can tell. */
+  /** The focus was just opened: it goes to its first step once the snapshot can tell. */
   fresh: boolean;
 }
 
@@ -68,7 +53,6 @@ export interface ViewsState {
   reload: () => void;
   /** The Proposal drawn over the Model, or `null` for `Current Model`. */
   overlay: string | null;
-  setOverlay: (id: string | null) => void;
   notices: readonly Notice[];
   closeNotice: (id: string) => void;
   focus: Record<ViewName, ActiveFocus | null>;
@@ -78,13 +62,6 @@ export interface ViewsState {
   setOnly: (only: boolean) => void;
   /** Opens a view focused on `refs`; a Proposal's focus also draws that Proposal. */
   focusOn: (view: ViewName, refs: readonly string[], subject: FocusSubject) => void;
-  nav: DiagramNav;
-  select: (id: string | null) => void;
-  openLevel: (key: string) => void;
-  /** A segment of the breadcrumb. */
-  goCrumb: (index: number) => void;
-  toggleExpanded: (nodeId: string) => void;
-  viewports: MutableRefObject<Map<string, Viewport>>;
 }
 
 const ViewsContext = createContext<ViewsState | null>(null);
@@ -96,31 +73,14 @@ export function useViews(): ViewsState {
 }
 
 const SLICES = ["model", "requirements", "specs", "board"];
-const NO_FOCUS: Record<ViewName, FocusState | null> = { diagram: null, requirements: null, specs: null };
-const FIRST_NAV: DiagramNav = { path: [ROOT], selected: null, expanded: new Set() };
-
-/** The navigation after the levels changed: it keeps level and selection and falls back to the nearest container that still exists. */
-export function settleNav(nav: DiagramNav, snapshot: ViewSnapshot): DiagramNav {
-  const levels = snapshot.data.model.levels;
-  const { path, missing } = settlePath(levels, nav.path);
-  const level = levels.find((l) => l.key === path[path.length - 1]);
-  const ids = new Set(level?.nodes.map((n) => n.id));
-  const edges = new Set(level?.edges.map((e) => e.id));
-  let selected = nav.selected;
-  if (missing !== null) selected = level?.nodes.find((n) => n.opens === missing)?.id ?? null;
-  else if (selected !== null && !ids.has(selected) && !edges.has(selected)) selected = null;
-  const expanded = new Set([...nav.expanded].filter((id) => ids.has(id)));
-  const same =
-    path.length === nav.path.length && path.every((k, i) => k === nav.path[i]) && selected === nav.selected && expanded.size === nav.expanded.size;
-  return same ? nav : { path, selected, expanded };
-}
+const NO_FOCUS: Record<ViewName, FocusState | null> = { requirements: null, specs: null };
 
 /**
- * What the Diagram, Requirements and Specs of one window share: the snapshot the backend worked
- * out, the overlay, each view's focus and the Diagram's level and selection. The UI keeps no copy
- * of the domain: it asks for a snapshot when the window loads, again whenever a `project-changed`
- * event names a slice the views draw, and drops an answer that is no longer the latest asked for.
- * It also gives the Board's cards their `View on diagram` / `View requirements`.
+ * What the Requirements and Specs of one window share: the snapshot the backend worked out, the
+ * overlay and each view's focus. The UI keeps no copy of the domain: it asks for a snapshot when
+ * the window loads, again whenever a `project-changed` event names a slice the views draw, and
+ * drops an answer that is no longer the latest asked for. It also gives the Board's cards their
+ * `View requirements`.
  */
 export function ViewsProvider({ projectId, children }: { projectId: string; children: ReactNode }) {
   const { showView } = useProject();
@@ -130,10 +90,10 @@ export function ViewsProvider({ projectId, children }: { projectId: string; chil
   const [overlay, setOverlayState] = useState<string | null>(null);
   const [notices, setNotices] = useState<readonly Notice[]>([]);
   const [focusState, setFocusState] = useState(NO_FOCUS);
-  const [nav, setNav] = useState(FIRST_NAV);
   const [attempt, setAttempt] = useState(0);
-  const viewports = useRef(new Map<string, Viewport>());
   const overlayRef = useRef<string | null>(null);
+  // The view whose focus drew the overlay: ending that focus ends the overlay.
+  const overlayOwner = useRef<ViewName | null>(null);
   const snapshotRef = useRef<ViewSnapshot | null>(null);
   const sequence = useRef(0);
   const shown = useRef(-1);
@@ -161,6 +121,7 @@ export function ViewsProvider({ projectId, children }: { projectId: string; chil
           const was = snapshotRef.current?.overlays.find((o) => o.id === asked);
           const name = was ? `Proposal ${was.shortNumber ?? was.id}` : "The Proposal";
           overlayRef.current = null;
+          overlayOwner.current = null;
           setOverlayState(null);
           setNotices((previous) => [
             ...previous,
@@ -169,7 +130,6 @@ export function ViewsProvider({ projectId, children }: { projectId: string; chil
         }
         snapshotRef.current = incoming;
         setSnapshot(incoming);
-        setNav((previous) => settleNav(previous, incoming));
         setLoadError(null);
       })
       .catch((error: unknown) => {
@@ -193,6 +153,7 @@ export function ViewsProvider({ projectId, children }: { projectId: string; chil
 
   const setOverlay = useCallback(
     (id: string | null) => {
+      if (overlayRef.current === id) return;
       overlayRef.current = id;
       setOverlayState(id);
       fetchViews();
@@ -207,7 +168,7 @@ export function ViewsProvider({ projectId, children }: { projectId: string; chil
       const drawn = state.subject.kind === "proposal" && snapshot.overlay === state.subject.id;
       return planFocus(view, drawn ? snapshot.scope : state.refs, snapshot.data);
     };
-    return { diagram: plan("diagram"), requirements: plan("requirements"), specs: plan("specs") };
+    return { requirements: plan("requirements"), specs: plan("specs") };
   }, [focusState, snapshot]);
   const plansRef = useRef(plans);
   plansRef.current = plans;
@@ -223,20 +184,11 @@ export function ViewsProvider({ projectId, children }: { projectId: string; chil
       const state = previous[view];
       return state ? { ...previous, [view]: { ...state, key: step.key, index: at, nonce: mine, fresh: false } } : previous;
     });
-    if (view === "diagram" && step.level !== undefined) {
-      const levels = snapshotRef.current?.data.model.levels ?? [];
-      const target = step.level;
-      setNav((previous) => {
-        const at = previous.path.indexOf(target);
-        const path = at >= 0 ? previous.path.slice(0, at + 1) : pathFromLink(levels, target);
-        return { ...previous, path, selected: null };
-      });
-    }
   }, []);
 
   // A focus just opened goes to its first step as soon as the snapshot it needs has arrived.
   useEffect(() => {
-    for (const view of ["diagram", "requirements", "specs"] as const) {
+    for (const view of ["requirements", "specs"] as const) {
       const state = focusState[view];
       if (!state?.fresh || !snapshot) continue;
       const ready = state.subject.kind !== "proposal" || snapshot.overlay === state.subject.id || overlay !== state.subject.id;
@@ -252,15 +204,27 @@ export function ViewsProvider({ projectId, children }: { projectId: string; chil
         ...previous,
         [view]: { subject, refs, key: null, index: 0, only: false, nonce: mine, fresh: true },
       }));
-      if (subject.kind === "proposal" && snapshotRef.current?.overlays.some((o) => o.id === subject.id) && overlayRef.current !== subject.id) {
-        setOverlay(subject.id);
-      }
+      // The overlay is the Proposal of the last focus opened: a focus on anything else, or on a
+      // Proposal that cannot be overlaid, sends both views back to the Current Model.
+      const drawn = subject.kind === "proposal" && snapshotRef.current?.overlays.some((o) => o.id === subject.id) ? subject.id : null;
+      overlayOwner.current = drawn === null ? null : view;
+      setOverlay(drawn);
       showView(view);
     },
     [setOverlay, showView],
   );
 
-  const clearFocus = useCallback((view: ViewName) => setFocusState((previous) => ({ ...previous, [view]: null })), []);
+  const clearFocus = useCallback(
+    (view: ViewName) => {
+      // Ending the focus that drew the Proposal ends the overlay too.
+      if (overlayOwner.current === view) {
+        overlayOwner.current = null;
+        setOverlay(null);
+      }
+      setFocusState((previous) => ({ ...previous, [view]: null }));
+    },
+    [setOverlay],
+  );
   const setOnly = useCallback(
     (only: boolean) =>
       setFocusState((previous) =>
@@ -276,33 +240,8 @@ export function ViewsProvider({ projectId, children }: { projectId: string; chil
       const plan = plans[view];
       return { subject: state.subject, plan, index: settleStep(plan.steps, state.key, state.index), only: state.only, nonce: state.nonce };
     };
-    return { diagram: active("diagram"), requirements: active("requirements"), specs: active("specs") };
+    return { requirements: active("requirements"), specs: active("specs") };
   }, [focusState, plans]);
-
-  const select = useCallback((id: string | null) => setNav((previous) => (previous.selected === id ? previous : { ...previous, selected: id })), []);
-  const openLevel = useCallback((key: string) => {
-    const levels = snapshotRef.current?.data.model.levels ?? [];
-    setNav((previous) => ({ ...previous, path: openPath(levels, previous.path, key), selected: null }));
-  }, []);
-  const goCrumb = useCallback((index: number) => {
-    const levels = snapshotRef.current?.data.model.levels ?? [];
-    setNav((previous) => {
-      const next = previous.path[index + 1];
-      const path = previous.path.slice(0, index + 1);
-      const level = levels.find((l) => l.key === path[path.length - 1]);
-      const opener = next === undefined ? undefined : level?.nodes.find((n) => n.opens === next);
-      return { ...previous, path, selected: opener?.id ?? null };
-    });
-  }, []);
-  const toggleExpanded = useCallback(
-    (nodeId: string) =>
-      setNav((previous) => {
-        const expanded = new Set(previous.expanded);
-        if (!expanded.delete(nodeId)) expanded.add(nodeId);
-        return { ...previous, expanded };
-      }),
-    [],
-  );
 
   const closeNotice = useCallback((id: string) => setNotices((previous) => previous.filter((n) => n.id !== id)), []);
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
@@ -313,7 +252,6 @@ export function ViewsProvider({ projectId, children }: { projectId: string; chil
       loadError,
       reload,
       overlay,
-      setOverlay,
       notices,
       closeNotice,
       focus,
@@ -321,14 +259,8 @@ export function ViewsProvider({ projectId, children }: { projectId: string; chil
       clearFocus,
       setOnly,
       focusOn,
-      nav,
-      select,
-      openLevel,
-      goCrumb,
-      toggleExpanded,
-      viewports,
     }),
-    [snapshot, loadError, reload, overlay, setOverlay, notices, closeNotice, focus, goStep, clearFocus, setOnly, focusOn, nav, select, openLevel, goCrumb, toggleExpanded],
+    [snapshot, loadError, reload, overlay, notices, closeNotice, focus, goStep, clearFocus, setOnly, focusOn],
   );
 
   const actions = useMemo(

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-job-sub-agents"
+description = "Enables the job_sub_agents command without any pre-configured scope."
+commands.allow = ["job_sub_agents"]
+
+[[permission]]
+identifier = "deny-job-sub-agents"
+description = "Denies the job_sub_agents command without any pre-configured scope."
+commands.deny = ["job_sub_agents"]

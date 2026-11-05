@@ -5,6 +5,6 @@
  */
 export type ViewError = { message: string, 
 /**
- * The file, relative to the project folder (`.trama/model/...`).
+ * The file, relative to the project folder (`.weaver/model/...`).
  */
 file: string, line: number | null, };

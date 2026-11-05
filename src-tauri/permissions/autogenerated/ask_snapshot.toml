@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ask-snapshot"
+description = "Enables the ask_snapshot command without any pre-configured scope."
+commands.allow = ["ask_snapshot"]
+
+[[permission]]
+identifier = "deny-ask-snapshot"
+description = "Denies the ask_snapshot command without any pre-configured scope."
+commands.deny = ["ask_snapshot"]

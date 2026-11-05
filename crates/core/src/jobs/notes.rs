@@ -1,4 +1,4 @@
-//! The notes a job declares with `trama job edit` (`requirements/cli#job`).
+//! The notes a job declares with `weaver job edit` (`requirements/cli#job`).
 //!
 //! Line breaks become spaces and the ends are trimmed; an empty note is invalid input; a note over
 //! 120 characters is cut to 119 plus `…`. The last 6 notes are kept with their instants, and a

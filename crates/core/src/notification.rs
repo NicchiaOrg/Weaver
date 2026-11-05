@@ -23,6 +23,10 @@ pub const MESSAGE_FAILED: &str = "The agent stopped before finishing its work.";
 pub const MESSAGE_QUESTION: &str = "The agent is waiting for your answers.";
 /// The message of a notification that says a permission waits.
 pub const MESSAGE_PERMISSION: &str = "The agent is waiting for your approval.";
+/// The title of the notification that says Weaver turned on System Certificates by itself.
+pub const TITLE_SYSTEM_CERTIFICATES: &str = "System Certificates turned on";
+/// The message of that notification (`requirements/ui#system-certificates`, Turn-on notice).
+pub const MESSAGE_SYSTEM_CERTIFICATES: &str = "Weaver turned on System Certificates because Zscaler is installed: omp and the agent's commands now trust the certificates your system trusts.";
 
 /// What the system says of a window at the time a notification would be sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +74,8 @@ pub enum Kind {
     Failed,
     Question,
     Permission,
+    /// Weaver turned on System Certificates by itself. It belongs to no project and is always shown.
+    SystemCertificates,
 }
 
 /// `job.ENDED`: what the end of a job says, if anything. A job the developer stopped never notifies.
@@ -107,12 +113,18 @@ pub struct Notice {
 
 /// Where a click leads.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Click {
-    pub project_id: String,
-    pub destination: Destination,
+pub enum Click {
+    /// A notification of a project: its window comes forward showing `destination`.
+    Project {
+        project_id: String,
+        destination: Destination,
+    },
+    /// The notification of the app (System Certificates turned on), which belongs to no project:
+    /// the project window used most recently comes forward showing Settings, else the welcome window.
+    App,
 }
 
-/// What the window shows when a notification is clicked.
+/// What the window of a project shows when a notification is clicked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Destination {
     /// The window only comes forward: the notification was withdrawn and the system could not remove it.
@@ -142,6 +154,8 @@ enum Target {
         name: String,
         request: u64,
     },
+    /// System Certificates turned on: the notification of the app, never grouped nor withdrawn.
+    SystemCertificates,
 }
 
 impl Target {
@@ -151,6 +165,7 @@ impl Target {
             Target::Failed { .. } => Kind::Failed,
             Target::Question { .. } => Kind::Question,
             Target::Permission { .. } => Kind::Permission,
+            Target::SystemCertificates => Kind::SystemCertificates,
         }
     }
 
@@ -161,6 +176,7 @@ impl Target {
             Target::Failed { job, .. }
             | Target::Question { job, .. }
             | Target::Permission { job, .. } => Some(job),
+            Target::SystemCertificates => None,
         }
     }
 
@@ -182,6 +198,10 @@ impl Target {
             Target::Permission { name, .. } => (
                 format!("{project} – {name} asks permission"),
                 MESSAGE_PERMISSION,
+            ),
+            Target::SystemCertificates => (
+                TITLE_SYSTEM_CERTIFICATES.to_owned(),
+                MESSAGE_SYSTEM_CERTIFICATES,
             ),
         }
     }
@@ -209,12 +229,19 @@ impl Target {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Shown {
     id: i32,
-    project_id: String,
+    /// `None` for the notification of the app, which belongs to no project.
+    project_id: Option<String>,
     project: String,
     target: Target,
     /// No longer true. Where the system cannot remove a delivered notification the mapping stays
     /// bare, so that a later click only brings the window forward.
     withdrawn: bool,
+}
+
+impl Shown {
+    fn of_project(&self, project_id: &str) -> bool {
+        self.project_id.as_deref() == Some(project_id)
+    }
 }
 
 /// The notifications shown (or believed shown) and the ids they were given: the mapping of an id
@@ -258,7 +285,7 @@ impl Book {
     fn post(&mut self, project_id: &str, project: &str, target: Target) -> Notice {
         let (title, message) = target.text(project);
         let position = self.shown.iter().position(|shown| {
-            !shown.withdrawn && shown.project_id == project_id && shown.target.replaced_by(&target)
+            !shown.withdrawn && shown.of_project(project_id) && shown.target.replaced_by(&target)
         });
         let id = match position {
             Some(at) => self.shown[at].id,
@@ -266,7 +293,7 @@ impl Book {
         };
         let entry = Shown {
             id,
-            project_id: project_id.to_owned(),
+            project_id: Some(project_id.to_owned()),
             project: project.to_owned(),
             target,
             withdrawn: false,
@@ -278,6 +305,23 @@ impl Book {
         Notice { id, title, message }
     }
 
+    /// Weaver turned on System Certificates by itself (`system-certificates.AUTO_ENABLED`). The
+    /// notification of the app: it gets an id of the counter but belongs to no project, so it is
+    /// never grouped, never withdrawn by the events of a job and survives the closing of a window.
+    pub fn system_certificates(&mut self) -> Notice {
+        let target = Target::SystemCertificates;
+        let (title, message) = target.text("");
+        let id = self.next_id();
+        self.shown.push(Shown {
+            id,
+            project_id: None,
+            project: String::new(),
+            target,
+            withdrawn: false,
+        });
+        Notice { id, title, message }
+    }
+
     /// A job finished. While a finished notification of the same project is shown it is replaced
     /// by `<n> jobs finished`: at most one per project.
     pub fn finished(&mut self, project_id: &str, project: &str, job: &str, name: &str) -> Notice {
@@ -286,7 +330,7 @@ impl Book {
             .iter()
             .find_map(|shown| match &shown.target {
                 Target::Finished { jobs, .. }
-                    if !shown.withdrawn && shown.project_id == project_id =>
+                    if !shown.withdrawn && shown.of_project(project_id) =>
                 {
                     Some(jobs.clone())
                 }
@@ -370,7 +414,7 @@ impl Book {
     /// `question-round.CLOSED`: the round the notification announced closed.
     pub fn round_closed(&mut self, project_id: &str, job: &str) -> Vec<i32> {
         self.withdraw(|shown| {
-            shown.project_id == project_id
+            shown.of_project(project_id)
                 && matches!(&shown.target, Target::Question { job: j, .. } if j == job)
         })
     }
@@ -378,7 +422,7 @@ impl Book {
     /// `developer.ANSWER_PERMISSION`: the permission the notification announced was answered.
     pub fn permission_answered(&mut self, project_id: &str, job: &str, request: u64) -> Vec<i32> {
         self.withdraw(|shown| {
-            shown.project_id == project_id
+            shown.of_project(project_id)
                 && matches!(&shown.target, Target::Permission { job: j, request: r, .. } if j == job && *r == request)
         })
     }
@@ -387,7 +431,7 @@ impl Book {
     /// end (finished, stopped) stays.
     pub fn job_ended(&mut self, project_id: &str, job: &str) -> Vec<i32> {
         self.withdraw(|shown| {
-            shown.project_id == project_id
+            shown.of_project(project_id)
                 && matches!(&shown.target, Target::Question { job: j, .. } | Target::Permission { job: j, .. } if j == job)
         })
     }
@@ -398,10 +442,10 @@ impl Book {
         let live = self
             .shown
             .iter()
-            .filter(|shown| shown.project_id == project_id && !shown.withdrawn)
+            .filter(|shown| shown.of_project(project_id) && !shown.withdrawn)
             .map(|shown| shown.id)
             .collect();
-        self.shown.retain(|shown| shown.project_id != project_id);
+        self.shown.retain(|shown| !shown.of_project(project_id));
         live
     }
 
@@ -411,6 +455,9 @@ impl Book {
     pub fn clicked(&mut self, id: i32) -> Option<Click> {
         let at = self.shown.iter().position(|shown| shown.id == id)?;
         let shown = self.shown.remove(at);
+        let Some(project_id) = shown.project_id else {
+            return Some(Click::App);
+        };
         let destination = if shown.withdrawn {
             Destination::WindowOnly
         } else {
@@ -418,8 +465,8 @@ impl Book {
                 job_id: shown.target.job().map(str::to_owned),
             }
         };
-        Some(Click {
-            project_id: shown.project_id,
+        Some(Click::Project {
+            project_id,
             destination,
         })
     }
@@ -627,7 +674,7 @@ mod tests {
         let question = book.question(ACME, "Acme", "job3", "Import");
         let permission = book.permission(ACME, "Acme", "job4", "Run", 5);
         book.finished(ACME, "Acme", "job5", "Scan");
-        let click = |book: &mut Book, id| book.clicked(id).map(|c| (c.project_id, c.destination));
+        let click = |book: &mut Book, id| project_click(book.clicked(id));
         let jobs = |job: Option<&str>| Destination::Jobs {
             job_id: job.map(str::to_owned),
         };
@@ -655,7 +702,7 @@ mod tests {
         let mut book = Book::new(true);
         let finished = book.finished(ACME, "Acme", "job1", "Build");
         assert_eq!(
-            book.clicked(finished.id).map(|c| c.destination),
+            project_click(book.clicked(finished.id)).map(|(_, destination)| destination),
             Some(Destination::Jobs {
                 job_id: Some("job1".to_owned())
             })
@@ -714,14 +761,11 @@ mod tests {
             Vec::<i32>::new(),
             "withdrawn once"
         );
-        let click = book.clicked(question).expect("the mapping stays bare");
-        assert_eq!(
-            (click.project_id.as_str(), click.destination),
-            (ACME, Destination::WindowOnly)
-        );
+        let click = project_click(book.clicked(question)).expect("the mapping stays bare");
+        assert_eq!((click.0.as_str(), click.1), (ACME, Destination::WindowOnly));
         assert_eq!(book.clicked(question), None);
         assert!(matches!(
-            book.clicked(finished).map(|c| c.destination),
+            project_click(book.clicked(finished)).map(|(_, destination)| destination),
             Some(Destination::Jobs { .. })
         ));
         let later = book.question(ACME, "Acme", "job1", "Import");
@@ -742,5 +786,47 @@ mod tests {
         assert_eq!(gone, vec![a, b]);
         assert_eq!(book.len(), 1);
         assert_eq!(book.project_of(c), Some("Other"));
+    }
+
+    #[test]
+    fn the_system_certificates_notification_has_its_exact_text_and_belongs_to_no_project() {
+        let mut book = Book::new(true);
+        let notice = book.system_certificates();
+        assert_eq!(
+            (notice.title.as_str(), notice.message),
+            (
+                "System Certificates turned on",
+                "Weaver turned on System Certificates because Zscaler is installed: omp and the agent's commands now trust the certificates your system trusts."
+            )
+        );
+        assert_eq!(book.kind_of(notice.id), Some(Kind::SystemCertificates));
+        let project = book.failed(ACME, "Acme", "job1", "Scan");
+        assert_ne!(notice.id, project.id, "one counter for every notification");
+        let second = book.system_certificates();
+        assert_ne!(second.id, notice.id, "never grouped");
+
+        assert_eq!(book.project_closed(ACME), vec![project.id]);
+        assert_eq!(book.job_ended(ACME, "job1"), Vec::<i32>::new());
+        assert_eq!(
+            book.len(),
+            2,
+            "closing a window and the events of a job leave it alone"
+        );
+        assert_eq!(book.clicked(notice.id), Some(Click::App));
+        assert_eq!(
+            book.clicked(notice.id),
+            None,
+            "a clicked notification is final"
+        );
+    }
+
+    fn project_click(click: Option<Click>) -> Option<(String, Destination)> {
+        click.map(|click| match click {
+            Click::Project {
+                project_id,
+                destination,
+            } => (project_id, destination),
+            Click::App => panic!("a notification of a project led to the app"),
+        })
     }
 }

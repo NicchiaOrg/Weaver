@@ -1,8 +1,8 @@
-//! The `trama` command line.
+//! The `weaver` command line.
 //!
 //! One command registry ([`registry`], filled by [`commands`]) drives the parsing of the
 //! arguments, the validation of the input, the dispatch, the help, the JSON Schemas and the
-//! command reference of the installed skills. The domain logic lives in `trama-core`, never here.
+//! command reference of the installed skills. The domain logic lives in `weaver-core`, never here.
 //!
 //! | Module | Responsibility |
 //! |--------|----------------|
@@ -32,7 +32,7 @@ pub mod validate;
 
 use std::process::ExitCode;
 
-use trama_core::paths::AppDirs;
+use weaver_core::paths::AppDirs;
 
 /// Entry point of the binary.
 pub fn run() -> ExitCode {

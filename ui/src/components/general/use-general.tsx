@@ -3,7 +3,22 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Entry } from "@/bindings/Entry";
 import type { GeneralSnapshot } from "@/bindings/GeneralSnapshot";
 import type { GeneralState } from "@/bindings/GeneralState";
+import type { SubAgentsApi } from "@/components/sub-agents/api";
 import { call, isAppError, on } from "@/lib/backend";
+
+/**
+ * The sub-agents of the General of a project: build it with `useMemo`. The Chat has no list of
+ * them on screen, so what it tells the backend is only the conversation shown.
+ */
+export function generalSubAgentsApi(projectId: string): SubAgentsApi {
+  return {
+    projectId,
+    owns: (owner) => owner.kind === "general",
+    list: () => call("general_sub_agents", { projectId }),
+    conversation: (path) => call("general_sub_agent_conversation", { projectId, path }),
+    view: (_listShown, path) => call("general_sub_agents_view", { projectId, path }),
+  };
+}
 
 /** The General of a project as the backend holds it; the UI keeps no copy beyond this view. */
 export interface GeneralData {

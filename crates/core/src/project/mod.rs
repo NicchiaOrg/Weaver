@@ -1,7 +1,7 @@
-//! Project files: the one code that reads and writes `.trama/`.
+//! Project files: the one code that reads and writes `.weaver/`.
 //!
 //! Everything here is a pure, tested function over text and paths, plus the in-memory
-//! [`image::ProjectImage`]. The app and the `trama` command line both go through it; the
+//! [`image::ProjectImage`]. The app and the `weaver` command line both go through it; the
 //! interface never touches a file. Time and randomness are injected ([`clock`], [`random`]).
 //!
 //! | Module | Responsibility |
@@ -12,14 +12,14 @@
 //! | [`ids`] | Identities `^[a-z0-9]{8}$`, slugs, `<id>-<slug>` names |
 //! | [`frontmatter`] | YAML front matter: ordered keys, unknown keys kept |
 //! | [`diagnostic`] | A file or rule that failed: path, severity, reason |
-//! | [`layout`] | The layout of `.trama/`, what each path is, local-only folders |
+//! | [`layout`] | The layout of `.weaver/`, what each path is, local-only folders |
 //! | [`model`] | System, Actors, Features, Machines (`FORMAT.md`) |
 //! | [`requirements`] | Areas, fragments and sections |
 //! | [`requests`] | Design requests: the Machine `design-request`, their files and `.state.json` |
 //! | [`specs`] | `specs.yaml` |
 //! | [`refs`] | Element, Requirement and Specs references, and their resolution |
 //! | [`resolve`] | Naming a card on the command line: identity, unique prefix or short number |
-//! | [`check`] | Cross-file rules of `trama model check` |
+//! | [`check`] | Cross-file rules of `weaver model check` |
 //! | [`cards`] | What every card file shares |
 //! | [`order`] | Creation order of cards |
 //! | [`shortnum`] | Short numbers `P`/`T`/`D` and their local cache |
@@ -32,9 +32,9 @@
 //! | [`init`] | What a new project holds: the System and the starting Areas |
 //! | [`proposal`] | Proposals: scope, coverage, staleness, reasons, hand-over, approval, rejection, refinement |
 //! | [`drift`] | Drifts: the fingerprint, the prepared question, new and edit, the decisions and their reasons |
-//! | [`model_view`] | The text and JSON of `trama model show`, the text a fingerprint is taken from |
+//! | [`model_view`] | The text and JSON of `weaver model show`, the text a fingerprint is taken from |
 //! | [`tasks`] | Tasks: blocking, take/release/finish, slots, groups, Run all, creation, forgetting |
-//! | [`view`] | What the Diagram, Requirements and Specs views show, with the overlay changes |
+//! | [`view`] | What the Requirements and Specs views show, with the overlay changes |
 
 pub mod board;
 pub mod browse;

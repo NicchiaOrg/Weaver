@@ -1,6 +1,7 @@
-import { Ban, CheckCheck, WandSparkles, Wrench } from "lucide-react";
+import { Ban, CheckCheck, Sparkles, Trash2, WandSparkles, Wrench } from "lucide-react";
 import { useState } from "react";
 
+import { AskMoreButton } from "@/components/ask/ask-button";
 import { useBoard } from "@/components/board/board-state";
 import { registerCardRenderer, type BoardCardOf } from "@/components/board/card-registry";
 import { CardShell } from "@/components/board/card-shell";
@@ -97,14 +98,20 @@ function DriftCard({ card }: { card: DriftCardData }) {
   );
 }
 
-/** The fix decision: the options (recommended preselected), the note and `Fix the code`; `Accept Proposal` with an attached Proposal. */
+/**
+ * The fix decision: the options (recommended preselected), the note and `Fix the code`; with an
+ * attached Proposal `Accept Proposal`, replaced by `Refine` when it is stale and Open, or by
+ * `Refine` and `Discard` when a refinement left it half-way. Every reason comes from the backend.
+ */
 function DecisionForm({ card }: { card: DriftCardData }) {
-  const { fixDriftCode, acceptDriftProposal } = useBoard();
+  const { fixDriftCode, acceptDriftProposal, refineDriftProposal, discardDriftProposal } = useBoard();
   const { head, view } = card;
   const [option, setOption] = useState("1");
   const [note, setNote] = useState("");
+  const [discarding, setDiscarding] = useState(false);
   const name = nameOf(head);
-  const finishing = cardReasons(head.agentFinishing, []);
+  const fixReasons = cardReasons(head.agentFinishing, view.fixReasons);
+  const attached = view.attached;
   return (
     <section aria-label="Decision" className="space-y-3">
       {view.options.length > 0 ? (
@@ -121,7 +128,7 @@ function DecisionForm({ card }: { card: DriftCardData }) {
             <Label htmlFor={`${head.id}-note`}>Note</Label>
             <Textarea id={`${head.id}-note`} value={note} onChange={(event) => setNote(event.target.value)} />
           </div>
-          <GuardedButton size="sm" reasons={finishing} onClick={() => void fixDriftCode(head.id, name, Number(option), note.trim() || null)}>
+          <GuardedButton size="sm" reasons={fixReasons} onClick={() => void fixDriftCode(head.id, name, Number(option), note.trim() || null)}>
             <Wrench aria-hidden />
             Fix the code
           </GuardedButton>
@@ -129,11 +136,46 @@ function DecisionForm({ card }: { card: DriftCardData }) {
       ) : (
         <p className="text-muted-foreground">No code change can respect both the Model and the Requirements.</p>
       )}
-      {view.attached ? (
+      {attached?.refine ? (
+        <div className="flex flex-wrap gap-2">
+          <GuardedButton
+            variant="refine"
+            size="sm"
+            reasons={cardReasons(head.agentFinishing, attached.refine.reasons)}
+            tooltip={attached.refine.tooltip ?? undefined}
+            onClick={() => void refineDriftProposal(head.id, name)}
+          >
+            <Sparkles aria-hidden />
+            Refine
+          </GuardedButton>
+          {attached.discardReasons ? (
+            <>
+              <GuardedButton
+                variant="destructive"
+                size="sm"
+                reasons={cardReasons(head.agentFinishing, attached.discardReasons)}
+                onClick={() => setDiscarding(true)}
+              >
+                <Trash2 aria-hidden />
+                Discard
+              </GuardedButton>
+              <ConfirmDialog
+                open={discarding}
+                onOpenChange={setDiscarding}
+                title={`Discard ${nameOf(attached)}?`}
+                description="The half-refined Proposal is thrown away. The Model stays as it is."
+                confirmLabel="Discard"
+                destructive
+                onConfirm={() => void discardDriftProposal(head.id, name)}
+              />
+            </>
+          ) : null}
+        </div>
+      ) : attached ? (
         <GuardedButton
           variant="outline"
           size="sm"
-          reasons={cardReasons(head.agentFinishing, view.attached.acceptReasons)}
+          reasons={cardReasons(head.agentFinishing, attached.acceptReasons)}
           onClick={() => void acceptDriftProposal(head.id, name)}
         >
           <CheckCheck aria-hidden />
@@ -208,6 +250,11 @@ function DriftDetails({ card }: { card: DriftCardData }) {
         <section aria-label="Attached Proposal" className="space-y-2 rounded-md border p-3">
           <h3 className="text-sm font-semibold">
             Attached Proposal {nameOf(view.attached)}: {view.attached.title} <Badge variant="outline">{view.attached.state}</Badge>
+            {view.attached.stale ? (
+              <Badge variant="warning" className="ml-1">
+                stale
+              </Badge>
+            ) : null}
           </h3>
           <Markdown holderHeadingLevel={3}>{view.attached.body}</Markdown>
           <ul className="font-mono text-xs">
@@ -226,9 +273,15 @@ function DriftDetails({ card }: { card: DriftCardData }) {
   );
 }
 
-/** `Resolve` and `Dismiss Drift` repeat in the footer. */
+/** `Resolve` and `Dismiss Drift` repeat in the footer, then `Ask more`. */
 function DriftFooter({ card }: { card: DriftCardData }) {
-  return <DriftControls card={card} />;
+  const { head } = card;
+  return (
+    <>
+      <DriftControls card={card} />
+      <AskMoreButton target={{ kind: "drift", id: head.id }} noun="Drift" name={head.shortNumber ?? head.id} />
+    </>
+  );
 }
 
 registerCardRenderer("drift", { Card: DriftCard, Details: DriftDetails, Footer: DriftFooter, description: () => "Open" });

@@ -1,4 +1,4 @@
-//! What `trama project new` writes in a folder without `.trama/`: the System and the starting
+//! What `weaver project new` writes in a folder without `.weaver/`: the System and the starting
 //! Requirement Areas. The Model starts empty (no Feature, no Actor).
 //!
 //! The installation of the agent files and the whole initialisation are in
@@ -59,7 +59,7 @@ pub fn area_text(title: &str, description: &str) -> String {
     format!("---\ndescription: {description}\n---\n# {title}\n")
 }
 
-/// The files of a new project, by path relative to `.trama/`.
+/// The files of a new project, by path relative to `.weaver/`.
 pub fn initial_changes(project_name: &str) -> ChangeSet {
     let mut changes = ChangeSet::new();
     changes.write(&format!("{MODEL_DIR}/system.md"), system_text(project_name));

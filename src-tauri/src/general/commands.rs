@@ -7,6 +7,7 @@ use tauri::State;
 use super::service::General;
 use super::wire::GeneralSnapshot;
 use crate::error::{AppError, ErrorCode};
+use crate::subagents::wire::{Step, SubAgentConversation, SubAgentsEvent};
 
 fn refused(message: impl Into<String>) -> AppError {
     AppError::new(ErrorCode::Refused, message)
@@ -60,4 +61,36 @@ pub async fn general_clear(
     project_id: String,
 ) -> Result<(), AppError> {
     general.clear(&project_id).map_err(refused)
+}
+
+/// The list of the sub-agents of the project's General.
+#[tauri::command]
+pub async fn general_sub_agents(
+    general: State<'_, Arc<General>>,
+    project_id: String,
+) -> Result<SubAgentsEvent, AppError> {
+    general.sub_agents(&project_id).map_err(refused)
+}
+
+/// The read-only conversation of the sub-agent at `path` of the project's General.
+#[tauri::command]
+pub async fn general_sub_agent_conversation(
+    general: State<'_, Arc<General>>,
+    project_id: String,
+    path: Vec<Step>,
+) -> Result<SubAgentConversation, AppError> {
+    general
+        .sub_agent_conversation(&project_id, &path)
+        .map_err(refused)
+}
+
+/// What the Chat view shows of the sub-agents: the conversation of which one, if any. The Chat has
+/// no list of them on screen, and a transcript is read only while it is shown.
+#[tauri::command]
+pub async fn general_sub_agents_view(
+    general: State<'_, Arc<General>>,
+    project_id: String,
+    path: Option<Vec<Step>>,
+) -> Result<(), AppError> {
+    general.sub_agents_view(&project_id, path).map_err(refused)
 }

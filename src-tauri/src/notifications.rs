@@ -1,10 +1,11 @@
 //! System notifications (Machine `notification`, feature `app`): the app side.
 //!
-//! The decisions are the core's ([`trama_core::notification`]): whether the project window is in the
+//! The decisions are the core's ([`weaver_core::notification`]): whether the project window is in the
 //! foreground, which text each event gets, how finished jobs group, where a click leads. This
 //! module listens to the jobs ([`JobObserver`]: `job.ENDED`, and the waits of a round of questions
 //! and of a permission), to the focus of the windows, and to the clicks of the system, and sends
-//! through `tauri-plugin-notification`, called from Rust only.
+//! through `tauri-plugin-notification`, called from Rust only. One notification belongs to the app,
+//! not to a project: System Certificates turned on ([`Notifications::system_certificates_turned_on`]).
 //!
 //! * **Foreground test**, at send time: the project's window exists, is visible, is not minimised
 //!   and has the focus (`WindowEvent::Focused`, tracked here; `is_focused()` for a window whose
@@ -12,7 +13,10 @@
 //! * **Clicks** arrive through `Notification::on_action` (`tap`): the id is looked up in the
 //!   mapping of the core's [`Book`]; a mapped one brings the project's window forward showing the
 //!   Jobs view (in the conversation of the job when there is one), an unmapped one or a project
-//!   whose window is closed is ignored.
+//!   whose window is closed is ignored. The notification of the app is mapped to no project and
+//!   skips the foreground test; its click brings forward only the project window used most
+//!   recently, showing Settings, or the welcome window when no project window is open
+//!   ([`route_click`]).
 //! * **Withdrawing**: Linux removes the delivered notification (`remove_active`); macOS and Windows
 //!   cannot, so only the mapping is withdrawn and a later click on it brings the window forward.
 //!   Every mapping of a project goes when its window is destroyed.
@@ -27,7 +31,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_notification::{NotificationExt, PermissionState};
-use trama_core::notification::{
+use weaver_core::notification::{
     decide_end, decide_wait, in_foreground, kind_of_end, Book, Click, Destination, Focus, Kind,
     Notice, WindowFacts,
 };
@@ -38,6 +42,7 @@ use crate::log_warn;
 use crate::pictures::project_of_label;
 use crate::windows::manager::{ShowRequest, ShowView};
 use crate::windows::registry::label_of;
+use crate::windows::WindowManager;
 
 /// What the system says of a window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,6 +157,15 @@ impl Notifications {
             self.desktop.bring_forward(&click);
         }
     }
+
+    /// `system-certificates.AUTO_ENABLED`: Weaver turned on System Certificates by itself. Always
+    /// shown, also when a window of Weaver is in the foreground: it belongs to no project, so the
+    /// foreground test of the jobs does not apply. A system that does not show it while Weaver is
+    /// in front changes nothing else: the banners say it anyway.
+    pub fn system_certificates_turned_on(&self) {
+        let notice = self.state().book.system_certificates();
+        self.desktop.show(&notice);
+    }
 }
 
 impl JobObserver for Notifications {
@@ -177,7 +191,7 @@ impl JobObserver for Notifications {
                 Kind::Failed => state
                     .book
                     .failed(&job.project_id, &project, &job.id, &job.name),
-                Kind::Question | Kind::Permission => return,
+                Kind::Question | Kind::Permission | Kind::SystemCertificates => return,
             }
         };
         self.desktop.show(&notice);
@@ -255,19 +269,76 @@ impl Desktop for TauriDesktop {
     }
 
     fn bring_forward(&self, click: &Click) {
-        let Some(manager) = crate::windows::manager_of(&self.app) else {
-            return;
-        };
-        let show = match &click.destination {
-            Destination::WindowOnly => None,
-            Destination::Jobs { job_id } => Some(ShowRequest {
-                project_id: click.project_id.clone(),
-                view: ShowView::Jobs,
-                job_id: job_id.clone(),
-            }),
-        };
-        // A project whose window is closed has nothing to show: the click is ignored.
-        manager.focus_project(&click.project_id, show);
+        if let Some(manager) = crate::windows::manager_of(&self.app) {
+            route_click(&*manager, click);
+        }
+    }
+}
+
+/// What the routing of a click asks of the window manager, so that the tests drive it with a fake.
+pub trait Windows {
+    /// The window labels, the most recently focused first.
+    fn focus_order(&self) -> Vec<String>;
+    /// The window of the project comes forward, showing `show` when given; `false` when the
+    /// project has no window.
+    fn focus_project(&self, project_id: &str, show: Option<ShowRequest>) -> bool;
+    /// The welcome window comes forward; it is created when it is not there.
+    fn show_welcome(&self);
+}
+
+impl Windows for WindowManager {
+    fn focus_order(&self) -> Vec<String> {
+        WindowManager::focus_order(self)
+    }
+    fn focus_project(&self, project_id: &str, show: Option<ShowRequest>) -> bool {
+        WindowManager::focus_project(self, project_id, show)
+    }
+    fn show_welcome(&self) {
+        WindowManager::show_welcome(self);
+    }
+}
+
+/// `notification.CLICKED`: the window comes forward showing what the notification was about.
+///
+/// * A notification of a project brings that project's window forward; one whose window is closed
+///   is ignored.
+/// * The notification of the app (System Certificates turned on) brings forward only the project
+///   window used most recently (focus order of the window registry), showing Settings; with no
+///   project window open it brings the welcome window forward.
+pub fn route_click(windows: &dyn Windows, click: &Click) {
+    match click {
+        Click::App => {
+            let focused = windows
+                .focus_order()
+                .iter()
+                .filter_map(|label| project_of_label(label))
+                .any(|project_id| {
+                    let request = ShowRequest {
+                        project_id: project_id.to_owned(),
+                        view: ShowView::Settings,
+                        job_id: None,
+                    };
+                    windows.focus_project(project_id, Some(request))
+                });
+            if !focused {
+                windows.show_welcome();
+            }
+        }
+        Click::Project {
+            project_id,
+            destination,
+        } => {
+            let show = match destination {
+                Destination::WindowOnly => None,
+                Destination::Jobs { job_id } => Some(ShowRequest {
+                    project_id: project_id.clone(),
+                    view: ShowView::Jobs,
+                    job_id: job_id.clone(),
+                }),
+            };
+            // A project whose window is closed has nothing to show: the click is ignored.
+            windows.focus_project(project_id, show);
+        }
     }
 }
 
@@ -309,7 +380,7 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
-    use trama_core::jobs::{JobKind, JobState};
+    use weaver_core::jobs::{JobKind, JobState};
 
     use super::*;
 
@@ -323,6 +394,7 @@ mod tests {
         shown: Mutex<Vec<(i32, String, String)>>,
         removed: Mutex<Vec<i32>>,
         forward: Mutex<Vec<Click>>,
+        routed: FakeWindows,
     }
 
     impl Fake {
@@ -368,6 +440,7 @@ mod tests {
         }
         fn bring_forward(&self, click: &Click) {
             self.forward.lock().unwrap().push(click.clone());
+            route_click(&self.routed, click);
         }
     }
 
@@ -500,7 +573,7 @@ mod tests {
         let forward = fake.forward.lock().unwrap().clone();
         assert_eq!(
             forward,
-            [Click {
+            [Click::Project {
                 project_id: ACME.to_owned(),
                 destination: Destination::Jobs {
                     job_id: Some("j1".to_owned())
@@ -547,7 +620,7 @@ mod tests {
         service.clicked(id);
         assert_eq!(
             *fake.forward.lock().unwrap(),
-            [Click {
+            [Click::Project {
                 project_id: ACME.to_owned(),
                 destination: Destination::WindowOnly
             }]
@@ -565,5 +638,190 @@ mod tests {
         assert!(fake.forward.lock().unwrap().is_empty());
         service.clicked(other);
         assert_eq!(fake.forward.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_system_certificates_notification_is_shown_also_with_a_window_in_the_foreground() {
+        let (service, fake) = service(true);
+        fake.set_window(ACME, true, false, true);
+        service.focus_changed(&label_of(ACME), true);
+        service.system_certificates_turned_on();
+        assert_eq!(fake.shown().len(), 1);
+        // Nothing of the project is shown, so the foreground test is the app's own: none.
+        service.job_ended(&job(ACME, "j1", "Build", JobState::Done));
+        assert_eq!(fake.shown().len(), 1);
+    }
+
+    #[test]
+    fn the_system_certificates_notification_has_its_exact_text() {
+        let (service, fake) = service(true);
+        service.system_certificates_turned_on();
+        assert_eq!(fake.shown()[0].1, "System Certificates turned on");
+        assert_eq!(
+            fake.shown()[0].2,
+            "Weaver turned on System Certificates because Zscaler is installed: omp and the agent's commands now trust the certificates your system trusts."
+        );
+    }
+
+    #[test]
+    fn the_system_certificates_notification_belongs_to_no_project_and_its_click_is_the_apps() {
+        let (service, fake) = service(true);
+        service.round_opened(&job(ACME, "j1", "Import", JobState::Waiting));
+        service.system_certificates_turned_on();
+        let (question, app) = (fake.shown()[0].0, fake.shown()[1].0);
+        assert_ne!(question, app, "one counter for every notification");
+        // Neither the events of a job nor the closing of a window touch it.
+        service.job_ended(&job(ACME, "j1", "Import", JobState::Stopped));
+        service.window_destroyed(&label_of(ACME));
+        assert_eq!(
+            *fake.removed.lock().unwrap(),
+            vec![question],
+            "only the wait of the job was withdrawn; the notification of the app was left alone"
+        );
+        service.clicked(question);
+        assert!(fake.forward.lock().unwrap().is_empty());
+        service.clicked(app);
+        service.clicked(app);
+        assert_eq!(
+            *fake.forward.lock().unwrap(),
+            [Click::App],
+            "an app click is not an unmapped id, and a second click does nothing"
+        );
+    }
+
+    /// The window manager as the click routing sees it: the focus order, the windows that exist,
+    /// and what was brought forward.
+    #[derive(Default)]
+    struct FakeWindows {
+        order: Mutex<Vec<String>>,
+        open: Mutex<Vec<String>>,
+        log: Mutex<Vec<String>>,
+    }
+
+    impl FakeWindows {
+        fn with(order: &[&str], open: &[&str]) -> Self {
+            let owned = |labels: &[&str]| labels.iter().map(|l| (*l).to_owned()).collect();
+            Self {
+                order: Mutex::new(owned(order)),
+                open: Mutex::new(owned(open)),
+                log: Mutex::default(),
+            }
+        }
+        fn log(&self) -> Vec<String> {
+            self.log.lock().unwrap().clone()
+        }
+    }
+
+    impl Windows for FakeWindows {
+        fn focus_order(&self) -> Vec<String> {
+            self.order.lock().unwrap().clone()
+        }
+        fn focus_project(&self, project_id: &str, show: Option<ShowRequest>) -> bool {
+            let label = label_of(project_id);
+            if !self.open.lock().unwrap().contains(&label) {
+                return false;
+            }
+            let mut log = self.log.lock().unwrap();
+            log.push(format!("focus {label}"));
+            if let Some(request) = show {
+                log.push(format!(
+                    "show {label} {:?} {:?}",
+                    request.view, request.job_id
+                ));
+            }
+            true
+        }
+        fn show_welcome(&self) {
+            self.log.lock().unwrap().push("welcome".to_owned());
+        }
+    }
+
+    #[test]
+    fn a_click_on_the_app_notification_with_several_windows_shows_settings_in_the_latest_project_only(
+    ) {
+        let (a, b) = (label_of(ACME), label_of(OTHER));
+        // The welcome window was focused last, then project `b`, then `a`.
+        let windows = FakeWindows::with(&["welcome", &b, &a], &[&a, &b, "welcome"]);
+        route_click(&windows, &Click::App);
+        assert_eq!(
+            windows.log(),
+            [format!("focus {b}"), format!("show {b} Settings None")],
+            "the project window used most recently, never the welcome window nor the other project"
+        );
+    }
+
+    #[test]
+    fn a_click_on_the_app_notification_skips_a_project_window_that_is_gone() {
+        let (a, b) = (label_of(ACME), label_of(OTHER));
+        let windows = FakeWindows::with(&[&b, &a], &[&a]);
+        route_click(&windows, &Click::App);
+        assert_eq!(
+            windows.log(),
+            [format!("focus {a}"), format!("show {a} Settings None")]
+        );
+    }
+
+    #[test]
+    fn a_click_on_the_app_notification_with_no_project_window_brings_the_welcome_window_forward() {
+        let windows = FakeWindows::with(&["welcome"], &["welcome"]);
+        route_click(&windows, &Click::App);
+        assert_eq!(windows.log(), ["welcome"]);
+        let none = FakeWindows::default();
+        route_click(&none, &Click::App);
+        assert_eq!(
+            none.log(),
+            ["welcome"],
+            "it is created when it is not there"
+        );
+    }
+
+    #[test]
+    fn a_click_on_a_project_notification_shows_the_jobs_view_of_that_project_and_nothing_else() {
+        let (a, b) = (label_of(ACME), label_of(OTHER));
+        let windows = FakeWindows::with(&[&b, &a], &[&a, &b]);
+        let click = |destination| Click::Project {
+            project_id: ACME.to_owned(),
+            destination,
+        };
+        route_click(
+            &windows,
+            &click(Destination::Jobs {
+                job_id: Some("j1".to_owned()),
+            }),
+        );
+        route_click(&windows, &click(Destination::WindowOnly));
+        assert_eq!(
+            windows.log(),
+            [
+                format!("focus {a}"),
+                format!("show {a} Jobs Some(\"j1\")"),
+                format!("focus {a}"),
+            ]
+        );
+        let closed = FakeWindows::with(&[&b], &[&b]);
+        route_click(&closed, &click(Destination::WindowOnly));
+        assert!(
+            closed.log().is_empty(),
+            "a project without a window is ignored"
+        );
+    }
+
+    #[test]
+    fn clicking_the_system_certificates_notification_reaches_the_window_routing() {
+        let (service, fake) = service(true);
+        let label = label_of(ACME);
+        *fake.routed.order.lock().unwrap() = vec![label.clone()];
+        *fake.routed.open.lock().unwrap() = vec![label.clone()];
+        service.system_certificates_turned_on();
+        let id = fake.shown()[0].0;
+        service.clicked(id);
+        assert_eq!(
+            fake.routed.log(),
+            [
+                format!("focus {label}"),
+                format!("show {label} Settings None")
+            ],
+            "the click went from the notification to the window of the project used most recently"
+        );
     }
 }

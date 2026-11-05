@@ -20,9 +20,9 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use trama_core::paths;
-use trama_core::project::image::ProjectImage;
-use trama_core::project::layout;
+use weaver_core::paths;
+use weaver_core::project::image::ProjectImage;
+use weaver_core::project::layout;
 
 use crate::blocking;
 use crate::error::{AppError, ErrorCode};
@@ -49,7 +49,7 @@ pub const ALL_SLICES: [&str; 5] = [
 pub enum Rebuild {
     /// Every file (only the ones whose content changed are parsed again).
     All,
-    /// These paths (absolute, inside `.trama/`).
+    /// These paths (absolute, inside `.weaver/`).
     Paths(Vec<PathBuf>),
 }
 
@@ -80,7 +80,7 @@ pub fn project_of_label(label: &str) -> Option<&str> {
     label.strip_prefix(WINDOW_LABEL_PREFIX)
 }
 
-/// The slices a change of the file `rel` (relative to `.trama/`) touches. Local-only folders
+/// The slices a change of the file `rel` (relative to `.weaver/`) touches. Local-only folders
 /// (requests, short numbers, images) touch none.
 fn slices_touched_by(rel: &str) -> &'static [&'static str] {
     match rel.split('/').next().unwrap_or("") {
@@ -280,7 +280,7 @@ mod tests {
     use super::*;
 
     fn write(root: &Path, rel: &str, text: &str) -> PathBuf {
-        let path = root.join(".trama").join(rel);
+        let path = root.join(".weaver").join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, text).unwrap();
         path
@@ -377,7 +377,7 @@ mod tests {
             ["board", "model", "history"]
         );
         assert!(changed_slices(&after, &after).is_empty());
-        std::fs::remove_file(root.join(".trama/tasks/aaaaaaaa-one.md")).unwrap();
+        std::fs::remove_file(root.join(".weaver/tasks/aaaaaaaa-one.md")).unwrap();
         assert_eq!(changed_slices(&after, &ProjectImage::load(root)), ["board"]);
     }
 

@@ -973,7 +973,7 @@ pub fn render_task(draft: &TaskDraft, created: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewTask {
     pub id: String,
-    /// `tasks/<id>-<slug>.md`, relative to `.trama/`.
+    /// `tasks/<id>-<slug>.md`, relative to `.weaver/`.
     pub path: String,
     pub changes: ChangeSet,
 }
@@ -2371,7 +2371,7 @@ mod tests {
         let after = apply(&dir, &image, &plan.changes);
         assert!(
             after.card(CardKind::Task, "aaaaaaaa").is_none(),
-            "the Task leaves `.trama/tasks/`"
+            "the Task leaves `.weaver/tasks/`"
         );
         assert!(after.card(CardKind::Task, "bbbbbbbb").is_none());
         assert!(

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-notes-add-pasted"
+description = "Enables the notes_add_pasted command without any pre-configured scope."
+commands.allow = ["notes_add_pasted"]
+
+[[permission]]
+identifier = "deny-notes-add-pasted"
+description = "Denies the notes_add_pasted command without any pre-configured scope."
+commands.deny = ["notes_add_pasted"]

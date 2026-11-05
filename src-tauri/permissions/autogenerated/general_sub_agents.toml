@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-general-sub-agents"
+description = "Enables the general_sub_agents command without any pre-configured scope."
+commands.allow = ["general_sub_agents"]
+
+[[permission]]
+identifier = "deny-general-sub-agents"
+description = "Denies the general_sub_agents command without any pre-configured scope."
+commands.deny = ["general_sub_agents"]

@@ -1,6 +1,6 @@
 //! The History view in the app: the entries of a project, newest first, with the Tasks they cite.
 //!
-//! What is in the entries and in which order comes from `trama_core::project::history`; the UI
+//! What is in the entries and in which order comes from `weaver_core::project::history`; the UI
 //! groups them by local day and filters them by period (it knows the local time zone), and never
 //! sorts. The UI asks for the snapshot when its window loads and again each time a
 //! `project-changed` event names the slice `history`; the `revision` it carries lets it drop an
@@ -8,10 +8,9 @@
 
 use serde::Serialize;
 use tauri::State;
-use trama_core::project::cards::CardKind;
-use trama_core::project::history::{self, Entry, TaskCopy};
-use trama_core::project::image::ProjectImage;
 use ts_rs::TS;
+use weaver_core::project::history::{self, Entry, TaskCopy};
+use weaver_core::project::image::ProjectImage;
 
 use crate::blocking;
 use crate::error::AppError;
@@ -91,12 +90,7 @@ fn entry_of(image: &ProjectImage, entry: Entry) -> HistoryEntry {
         .iter()
         .map(|id| {
             // A cited Task still a file (its copy could not be made yet) is shown from the file.
-            let copy = entry
-                .cleared
-                .get(id)
-                .cloned()
-                .or_else(|| history::copy_of(image, image.card(CardKind::Task, id)?).ok());
-            task_of(id, copy)
+            task_of(id, history::shown_copy(image, &entry, id))
         })
         .collect();
     HistoryEntry {
@@ -141,7 +135,7 @@ pub async fn history_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use trama_core::project::changes::ChangeSet;
+    use weaver_core::project::changes::ChangeSet;
 
     use super::*;
 

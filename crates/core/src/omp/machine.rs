@@ -29,6 +29,7 @@ use std::time::Duration;
 use serde::Serialize;
 use ts_rs::TS;
 
+use super::failure::installer_failed_text;
 use super::probe::{too_old_text, OmpModel, ProbeResult};
 use super::providers::{provider, ProviderRow, PROVIDERS};
 use super::version::MIN_OMP_VERSION;
@@ -111,20 +112,34 @@ pub struct OmpStatus {
     /// Installing and Logging in: the terminal could not be opened.
     pub terminal_problem: Option<TerminalProblem>,
     pub logout: Option<LogoutNote>,
+    /// Checking at the app's start: the first check waits for the export of System Certificates
+    /// (`Exporting system certificates first…`).
+    pub waiting_for_export: bool,
+    /// Missing after a failed installer: its text, with the exit code, for the setting as it is.
+    pub installer_failure: Option<String>,
 }
 
-/// The input of a check: the omp path it was computed for and its sequence number.
+/// The input of a check: the omp path it was computed for, its sequence number, and the installer
+/// whose marker it reads when it finds no omp (while Installing).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ticket {
     pub omp_path: String,
     pub seq: u64,
+    /// The nonce of the installer in flight; `None` in the other states.
+    pub installer: Option<String>,
 }
 
 /// What happens to the Machine.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
-    /// The app started: look at omp (`omp_path` is the setting, trimmed).
-    Start { omp_path: String },
+    /// The app started: look at omp (`omp_path` is the setting, trimmed; `system_certificates`
+    /// the `systemCertificates.enabled` setting). With `exporting` the check waits for the export
+    /// of System Certificates that runs.
+    Start {
+        omp_path: String,
+        system_certificates: bool,
+        exporting: bool,
+    },
     /// A check ended: `omp.READY`, `omp.MISSING`, `omp.OUTDATED` or `omp.NO_PROVIDER`.
     Probed { ticket: Ticket, result: ProbeResult },
     /// `omp.UPDATE_ENDED`.
@@ -149,14 +164,22 @@ pub enum Event {
     RecheckDue,
     /// `time.UPDATE_CHECK_DUE`.
     UpdateCheckDue,
-    /// `developer.INSTALL_OMP`.
-    InstallOmp,
+    /// `developer.INSTALL_OMP`, with the nonce of this installer's marker.
+    InstallOmp { nonce: String },
     /// `developer.LOG_IN_PROVIDER`, with an id of the fixed list.
     LogInProvider { provider: String },
     /// `developer.LOG_OUT_PROVIDER`.
     LogOutProvider { provider: String },
-    /// `developer.CHANGE_SETTINGS`: the `ompPath` setting is now `omp_path` (trimmed).
-    ChangeSettings { omp_path: String },
+    /// `developer.CHANGE_SETTINGS`: the `ompPath` setting is now `omp_path` (trimmed) and the
+    /// `systemCertificates.enabled` setting is now `system_certificates`.
+    ChangeSettings {
+        omp_path: String,
+        system_certificates: bool,
+    },
+    /// `system-certificates.EXPORT_ENDED`: an export ended, with success or not.
+    ExportEnded,
+    /// The wait for the export at the app's start is over (it ended or 30 s passed).
+    ExportWaitOver,
     /// The system terminal could not be opened.
     TerminalFailed { reason: String, command: String },
     /// `omp auth-broker logout` ended.
@@ -171,13 +194,19 @@ pub enum Event {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     /// Run the lookup, `omp --version` and `omp models --json`; answer with `Event::Probed`.
+    /// With `ticket.installer` set, a check that finds no omp reads the marker of that installer
+    /// and answers `ProbeResult::InstallFailed` for a code other than `0`.
     Probe(Ticket),
+    /// At the app's start, while System Certificates exports its bundle: wait for the end of the
+    /// export (30 s at most), then answer with `Event::ExportWaitOver`.
+    WaitForExport,
     /// Run `omp update`; answer with `UpdateEnded`, or with `UpdateFailed` after a new check.
     RunUpdate { omp_path: String, omp: PathBuf },
     /// Run `omp update --check` in the background; answer with `UpdateCheckDone`.
     CheckForUpdate { omp_path: String, omp: PathBuf },
-    /// Open the system terminal with the official installer.
-    OpenInstaller,
+    /// Open the system terminal with the official installer, which leaves its exit code in the
+    /// marker of `nonce`.
+    OpenInstaller { nonce: String },
     /// Open the system terminal with `omp login <provider>`.
     OpenLogin { omp: PathBuf, provider: String },
     /// Run `omp auth-broker logout <provider>`; answer with `LoggedOut`.
@@ -214,6 +243,12 @@ pub struct Machine {
     /// Updating, with the update of an old path still running.
     update_waiting: bool,
     last_update_check_ms: Option<i64>,
+    /// The `systemCertificates.enabled` setting as the Machine last heard of it.
+    system_certificates: bool,
+    /// The installer started last, by the nonce of its marker.
+    install_nonce: Option<String>,
+    /// The exit code of a failed installer, kept until the next `INSTALL_OMP` or until omp is found.
+    install_exit_code: Option<i32>,
 }
 
 impl Default for Machine {
@@ -240,6 +275,8 @@ impl Machine {
                 login_provider: None,
                 terminal_problem: None,
                 logout: None,
+                waiting_for_export: false,
+                installer_failure: None,
             },
             started: false,
             found: None,
@@ -249,6 +286,9 @@ impl Machine {
             update_running: None,
             update_waiting: false,
             last_update_check_ms: None,
+            system_certificates: false,
+            install_nonce: None,
+            install_exit_code: None,
         };
         machine.refresh_providers();
         machine
@@ -284,6 +324,7 @@ impl Machine {
     pub fn handle(&mut self, event: Event, now_ms: i64) -> Vec<Effect> {
         let before = self.status.clone();
         let effects = self.apply(event, now_ms);
+        self.refresh_installer_failure();
         if self.status != before {
             self.status.revision = before.revision + 1;
         }
@@ -292,28 +333,66 @@ impl Machine {
 
     fn apply(&mut self, event: Event, now_ms: i64) -> Vec<Effect> {
         match event {
-            Event::Start { omp_path } => {
+            Event::Start {
+                omp_path,
+                system_certificates,
+                exporting,
+            } => {
                 if self.started {
                     return Vec::new();
                 }
                 self.started = true;
+                self.system_certificates = system_certificates;
                 self.status.omp_path = omp_path.trim().to_owned();
-                vec![self.start_probe()]
+                if exporting {
+                    // At the app's start: the check waits for the export to end, and says so.
+                    self.status.waiting_for_export = true;
+                    vec![Effect::WaitForExport]
+                } else {
+                    vec![self.start_probe()]
+                }
             }
-            Event::ChangeSettings { omp_path } => {
-                let omp_path = omp_path.trim().to_owned();
-                if !self.started || omp_path == self.status.omp_path {
+            Event::ChangeSettings {
+                omp_path,
+                system_certificates,
+            } => {
+                if !self.started {
                     return Vec::new();
                 }
-                self.reset();
-                self.status.omp_path = omp_path;
-                vec![self.start_probe()]
+                let omp_path = omp_path.trim().to_owned();
+                let turned_off = self.system_certificates && !system_certificates;
+                self.system_certificates = system_certificates;
+                if omp_path != self.status.omp_path {
+                    self.reset();
+                    self.status.omp_path = omp_path;
+                    return vec![self.start_probe()];
+                }
+                // Turned on, it does not look again here: the end of its export does.
+                if turned_off
+                    && matches!(
+                        self.status.state,
+                        Phase::Missing | Phase::NotConnected | Phase::Ready
+                    )
+                {
+                    self.set_state(Phase::Checking);
+                    return vec![self.start_probe()];
+                }
+                Vec::new()
             }
             Event::Probed { ticket, result } => {
                 if self.ticket.as_ref() != Some(&ticket) {
                     return Vec::new();
                 }
                 self.ticket = None;
+                // An exit code is the one of the installer this check was made for, and only that.
+                let result = match result {
+                    ProbeResult::InstallFailed { .. }
+                        if ticket.installer.is_none() || ticket.installer != self.install_nonce =>
+                    {
+                        ProbeResult::Missing { reason: None }
+                    }
+                    other => other,
+                };
                 match self.status.state {
                     Phase::Checking | Phase::Installing | Phase::LoggingIn => {
                         self.apply_probe(result)
@@ -328,11 +407,14 @@ impl Machine {
                     Vec::new()
                 }
             }
-            Event::InstallOmp => match self.status.state {
+            Event::InstallOmp { nonce } => match self.status.state {
                 Phase::Missing | Phase::Installing => {
                     self.set_state(Phase::Installing);
                     self.status.terminal_problem = None;
-                    vec![Effect::OpenInstaller]
+                    // The exit code of an earlier installer is forgotten.
+                    self.install_nonce = Some(nonce.clone());
+                    self.install_exit_code = None;
+                    vec![Effect::OpenInstaller { nonce }]
                 }
                 _ => Vec::new(),
             },
@@ -407,6 +489,28 @@ impl Machine {
                 }
                 Vec::new()
             }
+            Event::ExportWaitOver => {
+                if !self.status.waiting_for_export {
+                    return Vec::new();
+                }
+                self.status.waiting_for_export = false;
+                vec![self.start_probe()]
+            }
+            Event::ExportEnded => {
+                // After every export, whatever the state of omp was: look at it again. The other
+                // states have their own way to look again.
+                if self.started
+                    && matches!(
+                        self.status.state,
+                        Phase::Missing | Phase::NotConnected | Phase::Ready
+                    )
+                {
+                    self.set_state(Phase::Checking);
+                    vec![self.start_probe()]
+                } else {
+                    Vec::new()
+                }
+            }
             Event::UpdateCheckDue => {
                 if self.status.state != Phase::Ready {
                     return Vec::new();
@@ -476,7 +580,9 @@ impl Machine {
                         ProbeResult::Outdated { version, .. } => {
                             self.become_missing(Some(too_old_text(version.as_deref(), &reason)));
                         }
-                        ProbeResult::Missing { .. } | ProbeResult::NoProvider { .. } => {
+                        ProbeResult::Missing { .. }
+                        | ProbeResult::InstallFailed { .. }
+                        | ProbeResult::NoProvider { .. } => {
                             self.become_missing(Some(format!(
                                 "Could not update omp ({}).",
                                 reason.trim_end_matches('.')
@@ -511,7 +617,15 @@ impl Machine {
                 }
                 Vec::new()
             }
+            ProbeResult::InstallFailed { exit_code } => {
+                if state == Phase::Installing {
+                    self.install_exit_code = Some(exit_code);
+                    self.become_missing(None);
+                }
+                Vec::new()
+            }
             ProbeResult::Outdated { omp, version } => {
+                self.omp_found();
                 self.found = Some(omp);
                 self.status.version = version;
                 self.set_state(Phase::Updating);
@@ -532,6 +646,7 @@ impl Machine {
 
     /// omp answered: its place, version and models.
     fn answer(&mut self, omp: PathBuf, version: String, models: Vec<OmpModel>) {
+        self.omp_found();
         self.found = Some(omp);
         self.status.version = Some(version);
         self.status.models = models;
@@ -600,6 +715,7 @@ impl Machine {
         self.status.models.clear();
         self.status.update_failure = None;
         self.status.logout = None;
+        self.status.waiting_for_export = false;
         self.update_waiting = false;
         self.ticket = None;
         self.refresh_providers();
@@ -607,9 +723,16 @@ impl Machine {
 
     fn start_probe(&mut self) -> Effect {
         self.seq += 1;
+        // While Installing, a check that finds no omp reads the marker of the current installer.
+        let installer = if self.status.state == Phase::Installing {
+            self.install_nonce.clone()
+        } else {
+            None
+        };
         let ticket = Ticket {
             omp_path: self.status.omp_path.clone(),
             seq: self.seq,
+            installer,
         };
         self.ticket = Some(ticket.clone());
         Effect::Probe(ticket)
@@ -644,6 +767,20 @@ impl Machine {
         } else {
             Vec::new()
         }
+    }
+
+    /// The text of a failed installer shows only in Missing, written for the setting as it is.
+    fn refresh_installer_failure(&mut self) {
+        self.status.installer_failure = (self.status.state == Phase::Missing)
+            .then_some(self.install_exit_code)
+            .flatten()
+            .map(|code| installer_failed_text(code, self.system_certificates));
+    }
+
+    /// omp was found: what the installer left is forgotten.
+    fn omp_found(&mut self) {
+        self.install_nonce = None;
+        self.install_exit_code = None;
     }
 
     fn refresh_providers(&mut self) {
@@ -722,9 +859,7 @@ mod tests {
                 now: T0,
                 probe: None,
             };
-            let effects = rig.send(Event::Start {
-                omp_path: path.into(),
-            });
+            let effects = rig.send(start_event(path));
             assert_eq!(effects.len(), 1);
             rig
         }
@@ -762,7 +897,7 @@ mod tests {
                 }
                 Phase::Installing => {
                     rig.probed(missing());
-                    rig.send(Event::InstallOmp);
+                    rig.send(install());
                 }
                 Phase::Updating => {
                     rig.probed(outdated());
@@ -786,6 +921,38 @@ mod tests {
         matches!(effects, [Effect::Probe(_)])
     }
 
+    fn start_event(path: &str) -> Event {
+        Event::Start {
+            omp_path: path.into(),
+            system_certificates: false,
+            exporting: false,
+        }
+    }
+
+    /// `developer.CHANGE_SETTINGS` for a new `ompPath` with System Certificates off.
+    fn change_path(path: &str) -> Event {
+        Event::ChangeSettings {
+            omp_path: path.into(),
+            system_certificates: false,
+        }
+    }
+
+    /// `developer.CHANGE_SETTINGS` that only moves System Certificates.
+    fn change_certificates(path: &str, on: bool) -> Event {
+        Event::ChangeSettings {
+            omp_path: path.into(),
+            system_certificates: on,
+        }
+    }
+
+    fn install() -> Event {
+        Event::InstallOmp { nonce: "aa".into() }
+    }
+
+    fn opens_installer() -> Vec<Effect> {
+        vec![Effect::OpenInstaller { nonce: "aa".into() }]
+    }
+
     // ---- Checking ------------------------------------------------------------------------
 
     #[test]
@@ -793,14 +960,8 @@ mod tests {
         let mut machine = Machine::new();
         assert_eq!(machine.phase(), Phase::Checking);
         assert!(machine.handle(Event::RecheckDue, T0).is_empty());
-        assert!(machine
-            .handle(
-                Event::ChangeSettings {
-                    omp_path: "/x".into()
-                },
-                T0
-            )
-            .is_empty());
+        assert!(machine.handle(change_path("/x"), T0).is_empty());
+        assert!(machine.handle(Event::ExportEnded, T0).is_empty());
         assert_eq!(machine.status().revision, 0);
     }
 
@@ -811,15 +972,13 @@ mod tests {
             rig.probe,
             Some(Ticket {
                 omp_path: "/opt/omp".into(),
-                seq: 1
+                seq: 1,
+                installer: None
             })
         );
-        assert!(rig
-            .send(Event::Start {
-                omp_path: "/other".into()
-            })
-            .is_empty());
+        assert!(rig.send(start_event("/other")).is_empty());
         assert_eq!(rig.machine.status().omp_path, "/opt/omp");
+        assert!(!rig.machine.status().waiting_for_export);
     }
 
     #[test]
@@ -912,7 +1071,7 @@ mod tests {
             rig.machine.status().reason.as_deref(),
             Some("omp not found at /gone/omp")
         );
-        assert_eq!(rig.send(Event::InstallOmp), [Effect::OpenInstaller]);
+        assert_eq!(rig.send(install()), opens_installer());
         assert_eq!(rig.state(), Phase::Installing);
         assert_eq!(rig.machine.status().reason, None);
     }
@@ -927,7 +1086,7 @@ mod tests {
             Phase::Ready,
         ] {
             let mut rig = Rig::reach("", state);
-            assert!(rig.send(Event::InstallOmp).is_empty(), "{state:?}");
+            assert!(rig.send(install()).is_empty(), "{state:?}");
             assert_eq!(rig.state(), state);
         }
     }
@@ -980,7 +1139,7 @@ mod tests {
                 .command,
             "curl x | sh"
         );
-        assert_eq!(rig.send(Event::InstallOmp), [Effect::OpenInstaller]);
+        assert_eq!(rig.send(install()), opens_installer());
         assert_eq!(rig.state(), Phase::Installing);
         assert_eq!(rig.machine.status().terminal_problem, None);
     }
@@ -1035,9 +1194,7 @@ mod tests {
         assert!(rig.send(Event::RecheckDue).is_empty());
 
         let mut rig = Rig::reach("", Phase::LoggingIn);
-        rig.send(Event::ChangeSettings {
-            omp_path: "/other".into(),
-        });
+        rig.send(change_path("/other"));
         assert!(!rig.machine.wants_recheck());
         assert!(rig.send(Event::RecheckDue).is_empty());
     }
@@ -1052,7 +1209,8 @@ mod tests {
             .send(Event::Probed {
                 ticket: Ticket {
                     omp_path: "".into(),
-                    seq: 99
+                    seq: 99,
+                    installer: None
                 },
                 result: ready_result(&["anthropic"])
             })
@@ -1107,7 +1265,7 @@ mod tests {
             Some("omp 18.0.0 is older than 18.15.0 and could not be updated (exit code 1).")
         );
         // The installer is offered.
-        assert_eq!(rig.send(Event::InstallOmp), [Effect::OpenInstaller]);
+        assert_eq!(rig.send(install()), opens_installer());
     }
 
     #[test]
@@ -1401,9 +1559,7 @@ mod tests {
             Phase::Ready,
         ] {
             let mut rig = Rig::reach("", state);
-            let effects = rig.send(Event::ChangeSettings {
-                omp_path: " /new/omp ".into(),
-            });
+            let effects = rig.send(change_path(" /new/omp "));
             assert_eq!(rig.state(), Phase::Checking, "{state:?}");
             assert!(is_probe(&effects), "{state:?}");
             assert_eq!(rig.machine.status().omp_path, "/new/omp");
@@ -1420,11 +1576,7 @@ mod tests {
     #[test]
     fn a_change_that_leaves_the_path_as_it_is_does_nothing() {
         let mut rig = Rig::reach("/opt/omp", Phase::Missing);
-        assert!(rig
-            .send(Event::ChangeSettings {
-                omp_path: "  /opt/omp ".into()
-            })
-            .is_empty());
+        assert!(rig.send(change_path("  /opt/omp ")).is_empty());
         assert_eq!(rig.state(), Phase::Missing);
     }
 
@@ -1432,9 +1584,7 @@ mod tests {
     fn a_result_for_the_old_path_is_ignored() {
         let mut rig = Rig::started("/old/omp");
         let old = rig.probe.clone().unwrap();
-        rig.send(Event::ChangeSettings {
-            omp_path: "/new/omp".into(),
-        });
+        rig.send(change_path("/new/omp"));
         // The old check ends after the setting changed.
         assert!(rig
             .send(Event::Probed {
@@ -1452,12 +1602,8 @@ mod tests {
     fn a_result_of_the_same_path_but_an_older_check_is_ignored() {
         let mut rig = Rig::started("/a");
         let first = rig.probe.clone().unwrap();
-        rig.send(Event::ChangeSettings {
-            omp_path: "/b".into(),
-        });
-        rig.send(Event::ChangeSettings {
-            omp_path: "/a".into(),
-        });
+        rig.send(change_path("/b"));
+        rig.send(change_path("/a"));
         assert_eq!(rig.probe.as_ref().unwrap().omp_path, "/a");
         assert!(rig
             .send(Event::Probed {
@@ -1472,9 +1618,7 @@ mod tests {
     fn an_update_that_ended_for_the_old_path_does_not_move_the_new_state() {
         let mut rig = Rig::reach("/old", Phase::Updating);
         // The developer changes the path; the update of the old omp keeps running.
-        rig.send(Event::ChangeSettings {
-            omp_path: "/new".into(),
-        });
+        rig.send(change_path("/new"));
         assert!(rig
             .send(Event::UpdateEnded {
                 omp_path: "/old".into()
@@ -1494,9 +1638,7 @@ mod tests {
     #[test]
     fn one_update_runs_at_a_time_and_the_next_waits_for_the_one_running() {
         let mut rig = Rig::reach("/old", Phase::Updating);
-        rig.send(Event::ChangeSettings {
-            omp_path: "/new".into(),
-        });
+        rig.send(change_path("/new"));
         // The new omp is also outdated: no second `omp update` yet.
         let effects = rig.probed(outdated());
         assert_eq!(rig.state(), Phase::Updating);
@@ -1625,14 +1767,214 @@ mod tests {
         assert_eq!(rig.machine.status().revision, start);
         rig.probed(ready_result(&["anthropic"]));
         assert_eq!(rig.machine.status().revision, start + 1);
-        rig.send(Event::ChangeSettings {
-            omp_path: "/x".into(),
-        });
+        rig.send(change_path("/x"));
         assert_eq!(rig.machine.status().revision, start + 2);
     }
 
     #[test]
     fn the_status_carries_the_minimum_version() {
         assert_eq!(Machine::new().status().min_version, "18.15.0");
+    }
+
+    // ---- System Certificates --------------------------------------------------------------
+
+    fn is_installer_failed(rig: &Rig) -> Option<String> {
+        rig.machine.status().installer_failure.clone()
+    }
+
+    #[test]
+    fn at_the_start_the_first_check_waits_for_the_export_and_says_so() {
+        let mut rig = Rig {
+            machine: Machine::new(),
+            now: T0,
+            probe: None,
+        };
+        let effects = rig.send(Event::Start {
+            omp_path: "/opt/omp".into(),
+            system_certificates: true,
+            exporting: true,
+        });
+        assert_eq!(effects, [Effect::WaitForExport]);
+        assert_eq!(rig.state(), Phase::Checking);
+        assert!(rig.machine.status().waiting_for_export);
+        assert_eq!(rig.probe, None, "no check yet");
+        // The end of the export alone does not look at omp: the wait ending does.
+        assert!(rig.send(Event::ExportEnded).is_empty());
+        let effects = rig.send(Event::ExportWaitOver);
+        assert!(is_probe(&effects));
+        assert!(!rig.machine.status().waiting_for_export);
+        assert!(rig.send(Event::ExportWaitOver).is_empty(), "only once");
+        rig.probed(ready_result(&["anthropic"]));
+        assert_eq!(rig.state(), Phase::Ready);
+    }
+
+    #[test]
+    fn a_new_place_of_omp_ends_the_wait_and_checks_at_once() {
+        let mut rig = Rig {
+            machine: Machine::new(),
+            now: T0,
+            probe: None,
+        };
+        rig.send(Event::Start {
+            omp_path: "/old".into(),
+            system_certificates: true,
+            exporting: true,
+        });
+        let effects = rig.send(change_certificates("/new", true));
+        assert!(is_probe(&effects));
+        assert!(!rig.machine.status().waiting_for_export);
+        assert!(rig.send(Event::ExportWaitOver).is_empty());
+    }
+
+    #[test]
+    fn turning_system_certificates_off_checks_again_from_missing_not_connected_and_ready() {
+        for state in [Phase::Missing, Phase::NotConnected, Phase::Ready] {
+            let mut rig = Rig::reach("/omp", state);
+            // Turning it on looks at nothing here: the end of its export does.
+            assert!(rig.send(change_certificates("/omp", true)).is_empty());
+            assert_eq!(rig.state(), state);
+            let effects = rig.send(change_certificates("/omp", false));
+            assert!(is_probe(&effects), "{state:?}");
+            assert_eq!(rig.state(), Phase::Checking, "{state:?}");
+            // Off again: nothing changed.
+            assert!(rig.send(change_certificates("/omp", false)).is_empty());
+        }
+        for state in [
+            Phase::Checking,
+            Phase::Installing,
+            Phase::Updating,
+            Phase::LoggingIn,
+        ] {
+            let mut rig = Rig::reach("/omp", state);
+            rig.send(change_certificates("/omp", true));
+            assert!(
+                rig.send(change_certificates("/omp", false)).is_empty(),
+                "{state:?}"
+            );
+            assert_eq!(rig.state(), state, "{state:?}");
+        }
+    }
+
+    #[test]
+    fn the_end_of_an_export_checks_again_from_missing_not_connected_and_ready() {
+        for state in [Phase::Missing, Phase::NotConnected, Phase::Ready] {
+            let mut rig = Rig::reach("/omp", state);
+            let effects = rig.send(Event::ExportEnded);
+            assert!(is_probe(&effects), "{state:?}");
+            assert_eq!(rig.state(), Phase::Checking, "{state:?}");
+        }
+        for state in [
+            Phase::Checking,
+            Phase::Installing,
+            Phase::Updating,
+            Phase::LoggingIn,
+        ] {
+            let mut rig = Rig::reach("/omp", state);
+            assert!(rig.send(Event::ExportEnded).is_empty(), "{state:?}");
+            assert_eq!(rig.state(), state, "{state:?}");
+        }
+    }
+
+    // ---- The installer --------------------------------------------------------------------
+
+    #[test]
+    fn a_check_while_installing_carries_the_installer_it_reads_the_marker_of() {
+        let mut rig = Rig::reach("", Phase::Installing);
+        rig.send(Event::RecheckDue);
+        assert_eq!(
+            rig.probe.as_ref().and_then(|t| t.installer.as_deref()),
+            Some("aa")
+        );
+        let mut rig = Rig::reach("", Phase::LoggingIn);
+        rig.send(Event::RecheckDue);
+        assert_eq!(rig.probe.as_ref().and_then(|t| t.installer.clone()), None);
+    }
+
+    #[test]
+    fn a_failed_installer_reports_missing_with_its_exit_code() {
+        let mut rig = Rig::reach("", Phase::Installing);
+        rig.send(Event::RecheckDue);
+        rig.probed(ProbeResult::InstallFailed { exit_code: 22 });
+        assert_eq!(rig.state(), Phase::Missing);
+        assert_eq!(rig.machine.status().reason, None);
+        assert_eq!(
+            is_installer_failed(&rig).as_deref(),
+            Some("The omp installer failed (exit code 22); see the terminal. A corporate proxy that inspects HTTPS traffic is a common cause. Turning on System Certificates in Weaver's settings may fix it.")
+        );
+        // The action stays `Install omp`.
+        assert_eq!(rig.send(install()), opens_installer());
+        assert_eq!(rig.state(), Phase::Installing);
+        assert_eq!(is_installer_failed(&rig), None);
+    }
+
+    #[test]
+    fn with_the_setting_on_the_text_does_not_suggest_turning_it_on_and_follows_the_setting() {
+        let mut rig = Rig::reach("", Phase::Installing);
+        rig.send(change_certificates("", true));
+        rig.send(Event::RecheckDue);
+        rig.probed(ProbeResult::InstallFailed { exit_code: 1 });
+        let text = is_installer_failed(&rig).unwrap();
+        assert!(text.ends_with("is a common cause."), "{text}");
+        // Turned off: the check starts again, and the text, back in Missing, suggests it.
+        let effects = rig.send(change_certificates("", false));
+        assert!(is_probe(&effects));
+        assert_eq!(is_installer_failed(&rig), None, "only shown in Missing");
+        rig.probed(missing());
+        assert!(is_installer_failed(&rig).unwrap().ends_with("may fix it."));
+    }
+
+    #[test]
+    fn the_exit_code_stays_through_the_checks_until_omp_is_found() {
+        let mut rig = Rig::reach("", Phase::Installing);
+        rig.send(Event::RecheckDue);
+        rig.probed(ProbeResult::InstallFailed { exit_code: 56 });
+        assert!(is_installer_failed(&rig).is_some());
+        rig.send(Event::ExportEnded);
+        rig.probed(ProbeResult::Missing {
+            reason: Some("omp not found at /x".into()),
+        });
+        assert_eq!(rig.state(), Phase::Missing);
+        assert!(is_installer_failed(&rig).unwrap().contains("exit code 56"));
+        assert_eq!(
+            rig.machine.status().reason.as_deref(),
+            Some("omp not found at /x")
+        );
+        // omp is found: the code is forgotten, and does not come back.
+        rig.send(Event::ExportEnded);
+        rig.probed(ready_result(&["anthropic"]));
+        assert_eq!(rig.state(), Phase::Ready);
+        rig.send(Event::OmpMissing {
+            omp_path: String::new(),
+            reason: None,
+        });
+        assert_eq!(rig.state(), Phase::Missing);
+        assert_eq!(is_installer_failed(&rig), None);
+    }
+
+    #[test]
+    fn a_new_installer_forgets_the_code_and_a_late_answer_of_the_old_one_is_ignored() {
+        let mut rig = Rig::reach("", Phase::Installing);
+        rig.send(Event::RecheckDue);
+        // The check for the first installer is still running when the second one starts.
+        let effects = rig.send(Event::InstallOmp { nonce: "bb".into() });
+        assert_eq!(effects, [Effect::OpenInstaller { nonce: "bb".into() }]);
+        rig.probed(ProbeResult::InstallFailed { exit_code: 22 });
+        assert_eq!(rig.state(), Phase::Installing);
+        assert_eq!(is_installer_failed(&rig), None);
+        // The next check is for the new one.
+        rig.send(Event::RecheckDue);
+        assert_eq!(
+            rig.probe.as_ref().and_then(|t| t.installer.as_deref()),
+            Some("bb")
+        );
+    }
+
+    #[test]
+    fn an_installer_that_finished_well_or_left_nothing_keeps_installing() {
+        let mut rig = Rig::reach("", Phase::Installing);
+        rig.send(Event::RecheckDue);
+        rig.probed(missing());
+        assert_eq!(rig.state(), Phase::Installing);
+        assert_eq!(is_installer_failed(&rig), None);
     }
 }

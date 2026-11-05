@@ -1,20 +1,20 @@
 [package]
-name = "trama-cli"
-description = "The `trama` command line."
+name = "weaver-cli"
+description = "The `weaver` command line, built as the `weaver-cli` binary."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "trama"
+name = "weaver-cli"
 path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 serde.workspace = true
 serde_json.workspace = true
-trama-core.workspace = true
+weaver-core.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -6,7 +6,7 @@
 //! * Windows: a named pipe `\\.\pipe\weaver-<16 random>`.
 //!
 //! An endpoint is a plain string (a filesystem path or a pipe name), the same text stored in
-//! `runtime.json` and passed as `TRAMA_ENDPOINT`.
+//! `runtime.json` and passed as `WEAVER_ENDPOINT`.
 
 use std::path::{Path, PathBuf};
 
@@ -122,6 +122,8 @@ mod tests {
         );
     }
 
+    // The XDG runtime folder is a Unix notion: `/run/user/7` is not an absolute path on Windows.
+    #[cfg(unix)]
     #[test]
     fn socket_goes_to_xdg_runtime_when_set() {
         let dirs = AppDirs::from_bases(

@@ -26,6 +26,7 @@ function status(patch: Partial<ProjectStatus> = {}): ProjectStatus {
     state: "has-model",
     files: [],
     folderHasFiles: false,
+    solo: { mode: "off" },
     check: { opening: 1, outcome: { kind: "none" } },
     ...patch,
   };
@@ -36,7 +37,7 @@ const unchanged: SkillsReport = { changes: [], areas: [], generated };
 const changed: SkillsReport = {
   changes: [
     { path: ".omp/WATCHDOG.yml", action: "rewritten" },
-    { path: ".agents/skills/trama-req-ui/SKILL.md", action: "created" },
+    { path: ".agents/skills/weaver-req-ui/SKILL.md", action: "created" },
   ],
   areas: ["ui"],
   generated,
@@ -72,7 +73,7 @@ describe("the report of Update skills", () => {
     expect(view.text).toBe("Updated 2 files:");
     expect(view.kind === "changed" && view.files).toEqual([
       { path: ".omp/WATCHDOG.yml", action: "rewritten" },
-      { path: ".agents/skills/trama-req-ui/SKILL.md", action: "created" },
+      { path: ".agents/skills/weaver-req-ui/SKILL.md", action: "created" },
     ]);
     expect(skillsFailure("disk full.")).toBe("Could not update the agent files: disk full.");
   });

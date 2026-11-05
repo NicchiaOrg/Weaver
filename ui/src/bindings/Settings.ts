@@ -2,6 +2,7 @@
 import type { EditorSettings } from "./EditorSettings";
 import type { ModelSettings } from "./ModelSettings";
 import type { Permissions } from "./Permissions";
+import type { SystemCertificatesSettings } from "./SystemCertificatesSettings";
 import type { Theme } from "./Theme";
 
 /**
@@ -19,4 +20,4 @@ maxParallelAgents: number,
 /**
  * The language of the agent's texts, free text, trimmed; empty adds no language sentence.
  */
-language: string, theme: Theme, editor: EditorSettings, permissions: Permissions, };
+language: string, theme: Theme, editor: EditorSettings, permissions: Permissions, systemCertificates: SystemCertificatesSettings, };

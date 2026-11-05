@@ -7,7 +7,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
 /**
- * An invalid Model or Requirements at the top of the Diagram, Requirements and Specs: a red
+ * An invalid Model or Requirements at the top of the Requirements and Specs: a red
  * `Alert` with the count and an expandable list, each error with its message, its file, its line
  * when known and `Open in editor`. Unreadable files are listed the same way.
  */

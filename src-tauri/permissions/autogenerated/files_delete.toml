@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-files-delete"
+description = "Enables the files_delete command without any pre-configured scope."
+commands.allow = ["files_delete"]
+
+[[permission]]
+identifier = "deny-files-delete"
+description = "Denies the files_delete command without any pre-configured scope."
+commands.deny = ["files_delete"]

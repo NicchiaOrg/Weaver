@@ -10,11 +10,18 @@
 //! * the record `general/<project hash>.json` ([`GeneralRecord`], [`GeneralStore`]).
 //!
 //! ```text
-//!            SEND_MESSAGE                 TURN_ENDED · TURN_FAILED · EXITED
-//!   Idle ───────────────────▶ Working ────────────────────────────────────▶ Idle
-//!    ▲  CLEAR_GENERAL            │  PERMISSION_REQUESTED · ANSWER_PERMISSION · START_JOB
-//!    └───────────────────────────┘  STOP_AGENT · window.CLOSED (back to Idle, turn cancelled)
+//!   window.OPENED (a conversation is kept)        SESSION_RESUMED · SESSION_NOT_RESUMED
+//!   Idle ─────────────────────────────────▶ Loading ───────────────────────────────▶ Idle
+//!    │ ▲                                  (Reloading, or Waiting for omp until omp.READY)
+//!    │ │ TURN_ENDED · TURN_FAILED · EXITED ·          └─ with messages waiting ─▶ Working
+//!    │ │ STOP_AGENT · CLEAR_GENERAL · window.CLOSED
+//!    │ └────────────────────────────────────┐
+//!    └─────────────▶ Working ───────────────┘   SEND_MESSAGE (omp starts with the message)
 //! ```
+//!
+//! Loading sends nothing to the agent: a message sent meanwhile waits, and goes out as a prompt
+//! when the conversation has come back. START_FAILED and EXITED, Clear and window.CLOSED leave
+//! Loading for Idle.
 //!
 //! Messages follow the rules of a job's conversation: while the agent works a message goes out at
 //! once as a steer; while a permission waits it is held and goes out as a follow-up when the last
@@ -32,11 +39,15 @@ use crate::atomic;
 use crate::paths::AppDirs;
 use crate::settings::{ModelSettings, Permissions};
 
-/// The two States of the Machine.
+/// The States of the Machine (Loading has the two sub-states Reloading and Waiting for omp, told
+/// apart by [`GeneralMachine::waiting_for_omp`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
     /// No turn is in progress; the conversation may be empty.
     Idle,
+    /// The window just opened and the kept conversation is coming back from omp; nothing is sent
+    /// to the agent meanwhile, and the messages sent wait.
+    Loading,
     /// The agent answers (omp may still be starting).
     Working,
 }
@@ -75,6 +86,11 @@ pub enum Event {
     TurnFailed(String),
     /// `omp.EXITED`, also when omp could not start or open its session.
     Exited(String),
+    /// `window.OPENED` with a conversation kept: whether omp is ready decides between Reloading
+    /// and Waiting for omp.
+    WindowOpened { omp_ready: bool },
+    /// `omp.READY`: omp-setup became Ready while Waiting for omp.
+    OmpReady,
     /// `developer.STOP_AGENT`.
     StopAgent,
     /// `window.CLOSED`.
@@ -126,6 +142,8 @@ pub struct GeneralMachine {
     turn_running: bool,
     /// `session/cancel` was sent and the cancelled turn has not answered yet.
     cancelling: bool,
+    /// Loading and omp is not ready yet (Waiting for omp); otherwise Reloading.
+    waiting_for_omp: bool,
     permissions: BTreeSet<RequestId>,
     /// Messages waiting for the next prompt, or for the end of a permission.
     held: Vec<MessageId>,
@@ -147,6 +165,7 @@ impl GeneralMachine {
             turn_running: false,
             cancelling: false,
             permissions: BTreeSet::new(),
+            waiting_for_omp: false,
             held: Vec::new(),
             in_flight: BTreeSet::new(),
         }
@@ -160,9 +179,14 @@ impl GeneralMachine {
         self.omp
     }
 
-    /// Whether omp is spawned and opening its session: what `Starting omp…` says.
+    /// Whether omp is spawned and opening its session (or waited for): what `Starting omp…` says.
     pub fn starting(&self) -> bool {
         self.omp == Omp::Starting
+    }
+
+    /// Loading, and omp is not ready yet: the Machine's Waiting for omp.
+    pub fn waiting_for_omp(&self) -> bool {
+        self.state == State::Loading && self.waiting_for_omp
     }
 
     pub fn turn_running(&self) -> bool {
@@ -179,6 +203,8 @@ impl GeneralMachine {
         match event {
             Event::SendMessage(id) => self.send(id),
             Event::Clear => self.clear(),
+            Event::WindowOpened { omp_ready } => self.window_opened(omp_ready),
+            Event::OmpReady => self.omp_ready(),
             Event::SessionOpened => self.opened(),
             Event::SteeringReplied(id, outcome) => self.steering_replied(id, outcome),
             Event::PermissionRequested(request) => {
@@ -209,6 +235,11 @@ impl GeneralMachine {
 
     fn send(&mut self, id: MessageId) -> Vec<Effect> {
         match (self.state, self.omp) {
+            (State::Loading, _) => {
+                // The conversation is coming back: the message waits and is sent below it.
+                self.held.push(id);
+                Vec::new()
+            }
             (State::Idle, Omp::Open) if !self.cancelling => {
                 self.held.push(id);
                 self.prompt_held()
@@ -246,11 +277,32 @@ impl GeneralMachine {
         }
     }
 
+    /// `window.OPENED` with a kept conversation: omp starts and reloads it, sending nothing. When
+    /// omp is not ready it is waited for (`Event::OmpReady` ends the wait).
+    fn window_opened(&mut self, omp_ready: bool) -> Vec<Effect> {
+        if self.state != State::Idle || self.omp != Omp::Off || self.cancelling {
+            return Vec::new();
+        }
+        self.state = State::Loading;
+        self.omp = Omp::Starting;
+        self.waiting_for_omp = !omp_ready;
+        vec![Effect::StartOmp]
+    }
+
+    /// `omp.READY`: the wait of Waiting for omp is over, and omp reloads the kept conversation.
+    fn omp_ready(&mut self) -> Vec<Effect> {
+        if self.state == State::Loading {
+            self.waiting_for_omp = false;
+        }
+        Vec::new()
+    }
+
     fn opened(&mut self) -> Vec<Effect> {
         if self.omp != Omp::Starting {
             return Vec::new();
         }
         self.omp = Omp::Open;
+        self.waiting_for_omp = false;
         if self.held.is_empty() {
             self.state = State::Idle;
             return Vec::new();
@@ -337,6 +389,7 @@ impl GeneralMachine {
         let mut effects = self.close_permissions(PermissionEnd::Void);
         effects.extend(self.discard_messages(NOT_DELIVERED_EXITED));
         self.omp = Omp::Off;
+        self.waiting_for_omp = false;
         self.turn_running = false;
         self.cancelling = false;
         self.state = State::Idle;
@@ -345,7 +398,8 @@ impl GeneralMachine {
     }
 
     fn stop(&mut self) -> Vec<Effect> {
-        if self.state == State::Idle {
+        // Loading has no turn to stop: the conversation is coming back, and Clear ends it.
+        if matches!(self.state, State::Idle | State::Loading) {
             return Vec::new();
         }
         let mut effects = self.close_permissions(PermissionEnd::Cancelled);
@@ -397,6 +451,7 @@ impl GeneralMachine {
     fn reset(&mut self) {
         self.state = State::Idle;
         self.omp = Omp::Off;
+        self.waiting_for_omp = false;
         self.turn_running = false;
         self.cancelling = false;
     }
@@ -445,12 +500,12 @@ pub fn args(
     args
 }
 
-/// The variables Weaver adds to the environment of omp: `TRAMA_GENERAL` and `TRAMA_ENDPOINT`, and
-/// never `TRAMA_JOB`, so that `trama` refuses the commands tied to a job.
+/// The variables Weaver adds to the environment of omp: `WEAVER_GENERAL` and `WEAVER_ENDPOINT`, and
+/// never `WEAVER_JOB`, so that `weaver` refuses the commands tied to a job.
 pub fn env(identity: &str, endpoint: &str) -> BTreeMap<String, String> {
     BTreeMap::from([
-        ("TRAMA_GENERAL".to_owned(), identity.to_owned()),
-        ("TRAMA_ENDPOINT".to_owned(), endpoint.to_owned()),
+        ("WEAVER_GENERAL".to_owned(), identity.to_owned()),
+        ("WEAVER_ENDPOINT".to_owned(), endpoint.to_owned()),
     ])
 }
 
@@ -459,14 +514,19 @@ pub fn instruction_file(dirs: &AppDirs) -> PathBuf {
     dirs.local_data_dir().join("general.md")
 }
 
+/// The language the developer set, trimmed; none when it is empty or holds a control character
+/// (so that the sentence it ends can never grow a line break).
+pub fn clean_language(language: Option<&str>) -> Option<&str> {
+    language
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.chars().any(char::is_control))
+}
+
 /// The instruction of General's agent, appended to omp's system prompt. Fixed text, and the
 /// language sentence only when a language is set. It never names the first person.
 pub fn instruction(language: Option<&str>) -> String {
     let mut text = String::from(INSTRUCTION);
-    if let Some(language) = language
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.chars().any(char::is_control))
-    {
+    if let Some(language) = clean_language(language) {
         text.push_str(&format!(
             "\nWrite the texts for the developer in {language}.\n"
         ));
@@ -477,16 +537,16 @@ pub fn instruction(language: Option<&str>) -> String {
 const INSTRUCTION: &str = "\
 # Weaver General
 
-This is General, the free conversation of a developer with the agent in a project that Weaver manages. The project keeps its Model, Requirements, Proposals, Tasks and Drifts in `.trama/`.
+This is General, the free conversation of a developer with the agent in a project that Weaver manages. The project keeps its Model, Requirements, Proposals, Tasks and Drifts in `.weaver/`.
 
 - Do what the developer asks, directly in this conversation. No skill and no written request is attached to it.
-- Ask the developer in the reply, in plain text, and wait for the answer. A form or a question tool is declined here, and `trama question new` does not work here.
-- General is not a job. The commands that belong to a job (`trama task move`, `trama announcement new`, `trama job edit`, `trama question new`) are refused here.
-- Start a job of Weaver with `trama job new` only when the developer explicitly asks for that job in this conversation:
-  - `trama job new --input '{\"kind\":\"scan\"}'` scans the whole System;
-  - `trama job new --input '{\"kind\":\"run\",\"task\":\"<task>\"}'` runs one Task, and without `task` runs every runnable Task;
-  - `trama job new --input '{\"kind\":\"resolve\",\"drift\":\"<drift>\"}'` resolves one Drift;
-  - `trama job new --input '{\"kind\":\"design\",\"request\":\"<request>\"}'` sends a design request the developer already wrote and did not send.
+- Ask the developer in the reply, in plain text, and wait for the answer. A form or a question tool is declined here, and `weaver question new` does not work here.
+- General is not a job. The commands that belong to a job (`weaver task move`, `weaver announcement new`, `weaver job edit`, `weaver question new`) are refused here.
+- Start a job of Weaver with `weaver job new` only when the developer explicitly asks for that job in this conversation:
+  - `weaver job new --input '{\"kind\":\"scan\"}'` scans the whole System;
+  - `weaver job new --input '{\"kind\":\"run\",\"task\":\"<task>\"}'` runs one Task, and without `task` runs every runnable Task;
+  - `weaver job new --input '{\"kind\":\"resolve\",\"drift\":\"<drift>\"}'` resolves one Drift;
+  - `weaver job new --input '{\"kind\":\"design\",\"request\":\"<request>\"}'` sends a design request the developer already wrote and did not send.
 - Weaver applies its own refusals to the start of a job. When one is refused, tell the developer the reason from the output of the command. Do not start the job in another way.
 - A job started this way works on its own, with its own conversation in the Jobs view. Tell the developer which job was started, and do not wait for it to end.
 ";
@@ -859,6 +919,162 @@ mod tests {
         assert_eq!(machine.handle(Event::SendMessage(4)), [StartOmp]);
     }
 
+    /// A machine that is loading a kept conversation, omp ready.
+    fn reloading() -> GeneralMachine {
+        let mut machine = GeneralMachine::new();
+        assert_eq!(
+            machine.handle(Event::WindowOpened { omp_ready: true }),
+            [StartOmp]
+        );
+        machine
+    }
+
+    #[test]
+    fn opening_the_window_with_a_kept_conversation_starts_omp_and_reloads_it_sending_nothing() {
+        let mut machine = reloading();
+        assert_eq!(
+            (machine.state(), machine.omp(), machine.starting()),
+            (State::Loading, Omp::Starting, true)
+        );
+        assert!(!machine.waiting_for_omp() && !machine.turn_running());
+        // The conversation came back and no message waits: Idle, omp stays for the next message.
+        assert!(machine.handle(Event::SessionOpened).is_empty());
+        assert_eq!((machine.state(), machine.omp()), (State::Idle, Omp::Open));
+        assert_eq!(
+            machine.handle(Event::SendMessage(1)),
+            [Prompt(vec![1]), Delivered(1)]
+        );
+    }
+
+    #[test]
+    fn opening_the_window_while_omp_is_not_ready_waits_for_omp_and_reloads_when_it_is_ready() {
+        let mut machine = GeneralMachine::new();
+        assert_eq!(
+            machine.handle(Event::WindowOpened { omp_ready: false }),
+            [StartOmp]
+        );
+        assert_eq!(machine.state(), State::Loading);
+        assert!(machine.waiting_for_omp());
+        assert!(machine.handle(Event::OmpReady).is_empty());
+        assert_eq!(machine.state(), State::Loading);
+        assert!(
+            !machine.waiting_for_omp(),
+            "Reloading, with no message needed"
+        );
+        assert!(machine.handle(Event::SessionOpened).is_empty());
+        assert_eq!(machine.state(), State::Idle);
+        // omp becoming ready outside of the wait changes nothing.
+        assert!(machine.handle(Event::OmpReady).is_empty());
+        assert_eq!((machine.state(), machine.omp()), (State::Idle, Omp::Open));
+    }
+
+    #[test]
+    fn the_window_opening_again_while_omp_runs_or_a_turn_works_starts_nothing() {
+        let mut machine = idle_open();
+        assert!(machine
+            .handle(Event::WindowOpened { omp_ready: true })
+            .is_empty());
+        assert_eq!((machine.state(), machine.omp()), (State::Idle, Omp::Open));
+        let mut machine = working();
+        assert!(machine
+            .handle(Event::WindowOpened { omp_ready: true })
+            .is_empty());
+        assert_eq!(machine.state(), State::Working);
+    }
+
+    #[test]
+    fn messages_sent_while_loading_wait_in_order_and_go_out_when_the_conversation_is_back() {
+        let mut machine = reloading();
+        assert!(machine.handle(Event::SendMessage(1)).is_empty());
+        assert!(machine.handle(Event::SendMessage(2)).is_empty());
+        assert_eq!(
+            (machine.state(), machine.omp(), machine.starting()),
+            (State::Loading, Omp::Starting, true),
+            "the Machine stays in Loading, never Working"
+        );
+        assert_eq!(
+            machine.handle(Event::SessionOpened),
+            [Prompt(vec![1, 2]), Delivered(1), Delivered(2)]
+        );
+        assert_eq!(machine.state(), State::Working);
+        assert!(machine.turn_running());
+        assert!(machine.handle(Event::TurnEnded).is_empty());
+        assert_eq!(machine.state(), State::Idle);
+    }
+
+    #[test]
+    fn messages_wait_the_same_while_omp_is_waited_for_and_an_empty_session_starts_them_too() {
+        // SESSION_NOT_RESUMED reaches the Machine as the same event: the session that opened is
+        // an empty one, and the waiting messages go out.
+        let mut machine = GeneralMachine::new();
+        machine.handle(Event::WindowOpened { omp_ready: false });
+        assert!(machine.handle(Event::SendMessage(1)).is_empty());
+        machine.handle(Event::OmpReady);
+        assert_eq!(
+            machine.handle(Event::SessionOpened),
+            [Prompt(vec![1]), Delivered(1)]
+        );
+        assert_eq!(machine.state(), State::Working);
+    }
+
+    #[test]
+    fn a_failed_start_or_an_exit_while_loading_goes_idle_and_the_next_message_starts_omp_again() {
+        for reason in ["could not start omp", "omp exited with code 1"] {
+            let mut machine = reloading();
+            machine.handle(Event::SendMessage(1));
+            assert_eq!(
+                machine.handle(Event::Exited(reason.into())),
+                [
+                    NotDelivered(1, NOT_DELIVERED_EXITED.into()),
+                    Stopped(reason.into())
+                ]
+            );
+            assert_eq!((machine.state(), machine.omp()), (State::Idle, Omp::Off));
+            assert!(!machine.waiting_for_omp());
+            assert_eq!(machine.handle(Event::SendMessage(2)), [StartOmp]);
+        }
+    }
+
+    #[test]
+    fn clear_while_loading_ends_that_omp_drops_the_waiting_messages_and_starts_empty() {
+        let mut machine = reloading();
+        machine.handle(Event::SendMessage(1));
+        assert_eq!(
+            machine.handle(Event::Clear),
+            [
+                NotDelivered(1, NOT_DELIVERED_CLEARED.into()),
+                Clear {
+                    turn_running: false
+                }
+            ]
+        );
+        assert_eq!((machine.state(), machine.omp()), (State::Idle, Omp::Off));
+        assert_eq!(machine.handle(Event::SendMessage(2)), [StartOmp]);
+    }
+
+    #[test]
+    fn closing_the_window_while_loading_ends_omp_and_a_stop_there_does_nothing() {
+        let mut machine = reloading();
+        machine.handle(Event::SendMessage(1));
+        assert!(machine.handle(Event::StopAgent).is_empty());
+        assert_eq!(machine.state(), State::Loading);
+        assert_eq!(
+            machine.handle(Event::WindowClosed),
+            [
+                NotDelivered(1, NOT_DELIVERED_CLOSED.into()),
+                ShutDown {
+                    turn_running: false
+                }
+            ]
+        );
+        assert_eq!((machine.state(), machine.omp()), (State::Idle, Omp::Off));
+        // The window opens again: the kept conversation loads again.
+        assert_eq!(
+            machine.handle(Event::WindowOpened { omp_ready: true }),
+            [StartOmp]
+        );
+    }
+
     #[test]
     fn omp_runs_with_the_analysis_model_the_approval_mode_and_the_instruction_file_and_nothing_else(
     ) {
@@ -896,15 +1112,15 @@ mod tests {
         let env = env("gggggggg", "/run/weaver.sock");
         assert_eq!(
             env.keys().map(String::as_str).collect::<Vec<_>>(),
-            ["TRAMA_ENDPOINT", "TRAMA_GENERAL"]
+            ["WEAVER_ENDPOINT", "WEAVER_GENERAL"]
         );
-        assert_eq!(env["TRAMA_GENERAL"], "gggggggg");
+        assert_eq!(env["WEAVER_GENERAL"], "gggggggg");
     }
 
     #[test]
     fn the_instruction_is_fixed_text_with_the_language_only_when_one_is_set() {
         let plain = instruction(None);
-        assert!(plain.contains("trama job new") && plain.contains("explicitly asks"));
+        assert!(plain.contains("weaver job new") && plain.contains("explicitly asks"));
         assert!(!plain.contains("Write the texts"));
         assert_eq!(instruction(Some("  ")), plain);
         assert!(instruction(Some("Italian"))

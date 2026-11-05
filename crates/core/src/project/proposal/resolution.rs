@@ -288,6 +288,21 @@ pub fn problems(
     found
 }
 
+/// Whether a Drift is still open.
+pub fn is_open(drift: &Card) -> bool {
+    drift.str_key("status") == Some("open")
+}
+
+/// Whether none of the Drifts a resolution lists is still open (a listed Drift that does not
+/// exist is not open either, and a resolution listing nothing has none).
+pub fn none_open(current: &ProjectImage, resolution: &Card) -> bool {
+    !resolution_rows(resolution).iter().any(|row| {
+        current
+            .card(CardKind::Drift, &row.drift)
+            .is_some_and(is_open)
+    })
+}
+
 fn drift_text(drift: &Card, edit: impl FnOnce(&mut Mapping)) -> String {
     let mut front = drift.front.clone();
     edit(&mut front);

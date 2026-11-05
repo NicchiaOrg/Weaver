@@ -29,7 +29,7 @@ fn sample(root: &Path) {
 }
 
 fn read(root: &Path, rel: &str) -> Option<String> {
-    std::fs::read_to_string(root.join(".trama").join(rel)).ok()
+    std::fs::read_to_string(root.join(".weaver").join(rel)).ok()
 }
 
 struct Built {
@@ -59,230 +59,8 @@ fn build_for(root: &Path, shown: Option<&ProjectImage>, extra: &[String]) -> Bui
     }
 }
 
-fn level<'a>(data: &'a ViewData, key: &str) -> &'a Level {
-    data.model
-        .levels
-        .iter()
-        .find(|l| l.key == key)
-        .unwrap_or_else(|| panic!("no level {key}"))
-}
-
-fn node<'a>(level: &'a Level, id: &str) -> &'a DiagramNode {
-    level
-        .nodes
-        .iter()
-        .find(|n| n.id == id)
-        .unwrap_or_else(|| panic!("no node {id} in {}", level.key))
-}
-
 #[test]
-fn the_root_lists_whole_system_the_actors_and_the_features_no_actor_reaches() {
-    let dir = tempfile::tempdir().unwrap();
-    sample(dir.path());
-    put(dir.path(), "model/lonely/feature.md", "# Lonely\n");
-    let data = build_for(dir.path(), None, &[]).data;
-    let root = level(&data, "");
-    assert!(root.grid && root.edges.is_empty());
-    let ids: Vec<&str> = root.nodes.iter().map(|n| n.id.as_str()).collect();
-    // The shop is reached by the user (user.CANCEL), the lonely Feature by nobody.
-    assert_eq!(ids, ["whole", "actor:user", "feature:lonely"]);
-    assert_eq!(
-        node(root, "actor:user").subtitle.as_deref(),
-        Some("1 feature")
-    );
-    assert_eq!(
-        node(root, "feature:lonely").subtitle.as_deref(),
-        Some("0 machines")
-    );
-    assert_eq!(
-        node(root, "actor:user").opens.as_deref(),
-        Some("actor:user")
-    );
-}
-
-#[test]
-fn an_actor_nobody_listens_to_cannot_be_opened() {
-    let dir = tempfile::tempdir().unwrap();
-    sample(dir.path());
-    put(
-        dir.path(),
-        "model/actors/clock.md",
-        "# Clock\n\nTime.\n\n## Events\n\n### TICK\nEvery second.\n",
-    );
-    let data = build_for(dir.path(), None, &[]).data;
-    let clock = node(level(&data, ""), "actor:clock");
-    assert_eq!(clock.subtitle.as_deref(), Some("No events received"));
-    assert!(clock.opens.is_none() && clock.dashed && clock.muted);
-    assert!(data.model.levels.iter().all(|l| l.key != "actor:clock"));
-}
-
-#[test]
-fn whole_system_edges_count_events_and_an_actor_level_names_them() {
-    let dir = tempfile::tempdir().unwrap();
-    sample(dir.path());
-    let data = build_for(dir.path(), None, &[]).data;
-    let system = level(&data, "system");
-    let edge = system
-        .edges
-        .iter()
-        .find(|e| e.source == "actor:user" && e.target == "feature:shop")
-        .expect("edge");
-    assert_eq!(edge.label, "1");
-    let actor = level(&data, "actor:user");
-    assert_eq!(actor.edges[0].label, "CANCEL");
-    assert_eq!(
-        actor
-            .nodes
-            .iter()
-            .map(|n| n.id.as_str())
-            .collect::<Vec<_>>(),
-        ["actor:user", "feature:shop"]
-    );
-}
-
-#[test]
-fn a_machine_level_has_states_with_markers_and_labelled_transitions() {
-    let dir = tempfile::tempdir().unwrap();
-    sample(dir.path());
-    let data = build_for(dir.path(), None, &[]).data;
-    let machine = level(&data, "machine:order");
-    assert!(node(machine, "state:order/Draft").initial);
-    assert!(node(machine, "state:order/Shipped").terminal);
-    assert_eq!(
-        node(machine, "state:order/Preparing").parent.as_deref(),
-        Some("state:order/Paid")
-    );
-    let cancel = machine
-        .edges
-        .iter()
-        .find(|e| e.label == "user.CANCEL" && e.target == "state:order/Cancelled")
-        .expect("cancel edge");
-    assert_eq!(cancel.source, "state:order/Paid");
-    assert_eq!(
-        cancel.detail.description,
-        "only if nothing has been prepared yet; refunds the customer."
-    );
-    // The Transition's line is found in the file.
-    let line = cancel.detail.line.expect("line");
-    let text = ORDER_MACHINE.lines().nth(line as usize - 1).unwrap();
-    assert!(
-        text.contains("user.CANCEL") && text.contains("Cancelled"),
-        "{text}"
-    );
-    assert_eq!(
-        cancel.detail.file.as_deref(),
-        Some(".trama/model/shop/order.md")
-    );
-}
-
-#[test]
-fn a_state_level_shows_entering_and_leaving_transitions_and_their_other_ends() {
-    let dir = tempfile::tempdir().unwrap();
-    sample(dir.path());
-    let data = build_for(dir.path(), None, &[]).data;
-    let state = level(&data, "state:order/Awaiting payment");
-    let ids: Vec<&str> = state.nodes.iter().map(|n| n.id.as_str()).collect();
-    assert_eq!(
-        ids,
-        [
-            "state:order/Awaiting payment",
-            "ext-state:order/Cancelled",
-            "ext-state:order/Draft",
-            "ext-state:order/Paid"
-        ]
-    );
-    assert!(
-        state.nodes[1].compact
-            && state.nodes[1].dashed
-            && state.nodes[1].kind == NodeKind::ExternalState
-    );
-    assert_eq!(state.edges.len(), 3);
-    assert_eq!(state.parent.as_deref(), Some("machine:order"));
-}
-
-#[test]
-fn a_feature_level_holds_its_machines_with_states_inside_and_outside_senders_as_compact_nodes() {
-    let dir = tempfile::tempdir().unwrap();
-    sample(dir.path());
-    let data = build_for(dir.path(), None, &[]).data;
-    let feature = level(&data, "feature:shop");
-    let order = node(feature, "machine:order");
-    assert!(order.expandable);
-    assert_eq!(
-        node(feature, "state:order/Draft").parent.as_deref(),
-        Some("machine:order")
-    );
-    let outside = node(feature, "ext-actor:user");
-    assert!(outside.compact && outside.dashed);
-    let inside = feature
-        .edges
-        .iter()
-        .filter(|e| e.inside.as_deref() == Some("machine:order"))
-        .count();
-    assert!(inside > 5);
-    assert!(feature.edges.iter().any(|e| e.source == "ext-actor:user"
-        && e.target == "machine:order"
-        && e.label == "CANCEL"));
-}
-
-#[test]
-fn levels_come_in_model_order() {
-    let dir = tempfile::tempdir().unwrap();
-    sample(dir.path());
-    let data = build_for(dir.path(), None, &[]).data;
-    let keys: Vec<&str> = data
-        .model
-        .levels
-        .iter()
-        .map(|l| l.key.as_str())
-        .take(6)
-        .collect();
-    assert_eq!(
-        keys,
-        [
-            "",
-            "system",
-            "actor:user",
-            "feature:shop",
-            "machine:order",
-            "state:order/Draft"
-        ]
-    );
-}
-
-#[test]
-fn open_drifts_and_tasks_that_concern_an_element_are_listed_and_counted() {
-    let dir = tempfile::tempdir().unwrap();
-    sample(dir.path());
-    let data = build_for(dir.path(), None, &[]).data;
-    let paid = &data.model.details["order/Paid"];
-    assert_eq!(
-        paid.drifts
-            .iter()
-            .map(|d| d.short_number.as_deref())
-            .collect::<Vec<_>>(),
-        [Some("D1")]
-    );
-    // The Task names the Machine, which contains the State.
-    assert_eq!(
-        paid.tasks
-            .iter()
-            .map(|t| t.short_number.as_deref())
-            .collect::<Vec<_>>(),
-        [Some("T1")]
-    );
-    let machine = level(&data, "machine:order");
-    assert_eq!(node(machine, "state:order/Paid").drifts, 1);
-    assert_eq!(node(machine, "state:order/Draft").drifts, 0);
-    // The Machine holds the State, so its badge counts the Drift too.
-    assert_eq!(
-        node(level(&data, "feature:shop"), "machine:order").drifts,
-        1
-    );
-}
-
-#[test]
-fn references_are_found_on_the_level_that_holds_them() {
+fn references_are_found_in_the_requirements_and_the_specs() {
     let dir = tempfile::tempdir().unwrap();
     sample(dir.path());
     let refs = [
@@ -303,8 +81,7 @@ fn references_are_found_on_the_level_that_holds_them() {
     let data = build_for(dir.path(), None, &refs).data;
     let t = &data.targets;
 
-    assert_eq!(t["order/Paid"].diagram[0].level, "machine:order");
-    assert_eq!(t["order/Paid"].diagram[0].nodes, ["state:order/Paid"]);
+    assert_eq!(t["order/Paid"].relevant, [TargetView::Requirements]);
     assert_eq!(
         t["order/Paid"].requirements,
         [SectionAnchor {
@@ -312,17 +89,9 @@ fn references_are_found_on_the_level_that_holds_them() {
             section: Some("order/Paid".into())
         }]
     );
-
-    let transitions = &t["order/Paid/user.CANCEL"].diagram[0];
-    assert_eq!(transitions.edges.len(), 2);
-    assert_eq!(t["user.CANCEL"].diagram[0].level, "actor:user");
-    assert_eq!(t["user.CANCEL"].diagram[0].edges.len(), 1);
-    assert_eq!(t["order"].diagram[0].level, "feature:shop");
-    assert_eq!(t["shop"].diagram[0].level, "system");
-    assert_eq!(t["user"].diagram[0].level, "");
-
+    // A reference no section is titled with is relevant to the Requirements and found nowhere.
     assert!(
-        t["nothing"].diagram.is_empty() && t["nothing"].relevant.contains(&TargetView::Diagram)
+        t["nothing"].requirements.is_empty() && t["nothing"].relevant == [TargetView::Requirements]
     );
     assert_eq!(t["requirements/ui"].relevant, [TargetView::Requirements]);
     assert_eq!(
@@ -339,8 +108,11 @@ fn references_are_found_on_the_level_that_holds_them() {
         Some("General")
     );
     assert_eq!(
-        t["requirements/ui#order/Paid"].diagram[0].nodes,
-        ["state:order/Paid"]
+        t["requirements/ui#order/Paid"].requirements,
+        [SectionAnchor {
+            area: "ui".into(),
+            section: Some("order/Paid".into())
+        }]
     );
     assert_eq!(t["specs#languages"].specs, ["languages"]);
     assert_eq!(t["specs"].specs, ["languages", "notes"]);
@@ -380,7 +152,10 @@ fn requirements_have_areas_fragments_and_general_first() {
     assert_eq!(paid.body, "Paid text. More.");
     // The heading's line, past the front matter.
     assert_eq!(paid.line, Some(10));
-    assert_eq!(paid.file.as_deref(), Some(".trama/requirements/ui/main.md"));
+    assert_eq!(
+        paid.file.as_deref(),
+        Some(".weaver/requirements/ui/main.md")
+    );
     assert!(paid.change.is_none() && area.fragments.iter().all(|f| f.change.is_none()));
 }
 
@@ -448,55 +223,6 @@ fn overlay(root: &Path) -> ProjectImage {
             ),
     );
     current.with_changes(&changes)
-}
-
-#[test]
-fn an_overlay_marks_added_changed_and_removed_and_keeps_removed_elements_drawn() {
-    let dir = tempfile::tempdir().unwrap();
-    sample(dir.path());
-    let shown = overlay(dir.path());
-    let data = build_for(dir.path(), Some(&shown), &[]).data;
-
-    let machine = level(&data, "machine:order");
-    assert_eq!(
-        node(machine, "state:order/Returned").change,
-        Some(Change::Added)
-    );
-    assert_eq!(
-        node(machine, "state:order/Refunding").change,
-        Some(Change::Removed)
-    );
-    assert_eq!(
-        node(machine, "state:order/Draft").change,
-        Some(Change::Changed)
-    );
-    assert_eq!(node(machine, "state:order/Paid").change, None);
-    let changed = machine
-        .edges
-        .iter()
-        .find(|e| e.label == "user.CANCEL" && e.target == "state:order/Cancelled")
-        .unwrap();
-    assert_eq!(changed.change, Some(Change::Changed));
-    let removed = machine
-        .edges
-        .iter()
-        .find(|e| e.target == "state:order/Refunding" && e.label == "user.CANCEL")
-        .unwrap();
-    assert_eq!(removed.change, Some(Change::Removed));
-    assert_eq!(removed.detail.title, "user.CANCEL");
-
-    // The details of a removed element still name its file and line (in the file on disk).
-    let refunding = &data.model.details["order/Refunding"];
-    assert_eq!(refunding.change, Some(Change::Removed));
-    assert_eq!(
-        refunding.file.as_deref(),
-        Some(".trama/model/shop/order.md")
-    );
-    let text = ORDER_MACHINE
-        .lines()
-        .nth(refunding.line.unwrap() as usize - 1)
-        .unwrap();
-    assert_eq!(text, "### Refunding");
 }
 
 #[test]
@@ -584,23 +310,6 @@ fn an_overlay_labels_specs_entries() {
 }
 
 #[test]
-fn a_removed_element_is_still_found_by_its_reference() {
-    let dir = tempfile::tempdir().unwrap();
-    sample(dir.path());
-    let shown = overlay(dir.path());
-    let refs = vec!["order/Refunding".to_owned(), "order/Returned".to_owned()];
-    let data = build_for(dir.path(), Some(&shown), &refs).data;
-    assert_eq!(
-        data.targets["order/Refunding"].diagram[0].nodes,
-        ["state:order/Refunding"]
-    );
-    assert_eq!(
-        data.targets["order/Returned"].diagram[0].nodes,
-        ["state:order/Returned"]
-    );
-}
-
-#[test]
 fn only_open_proposals_not_attached_to_a_drift_can_be_drawn() {
     let dir = tempfile::tempdir().unwrap();
     let proposal = |status: &str, n: u32| {
@@ -658,7 +367,7 @@ fn errors_name_the_file_and_the_line_when_the_message_names_a_heading() {
     assert!(
         data.errors
             .iter()
-            .any(|e| e.file == ".trama/model/shop/broken.md"),
+            .any(|e| e.file == ".weaver/model/shop/broken.md"),
         "{:?}",
         data.errors
     );
@@ -667,7 +376,7 @@ fn errors_name_the_file_and_the_line_when_the_message_names_a_heading() {
     let order = data
         .errors
         .iter()
-        .find(|e| e.file == ".trama/model/shop/order.md")
+        .find(|e| e.file == ".weaver/model/shop/order.md")
         .expect("order error");
     let line = order.line.expect("a line");
     assert!(ORDER_MACHINE
@@ -681,9 +390,8 @@ fn errors_name_the_file_and_the_line_when_the_message_names_a_heading() {
 #[test]
 fn an_empty_project_builds_empty_views() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".trama")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".weaver")).unwrap();
     let data = build_for(dir.path(), None, &[]).data;
-    assert_eq!(data.model.levels.len(), 2);
     assert!(data.requirements.is_empty() && data.specs.is_none() && data.errors.is_empty());
 }
 

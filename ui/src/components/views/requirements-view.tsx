@@ -2,32 +2,16 @@ import { useEffect, useRef, useState } from "react";
 
 import type { AreaView } from "@/bindings/AreaView";
 import type { SectionView } from "@/bindings/SectionView";
+import { AskRequirementsButton } from "@/components/ask/ask-button";
 import { Markdown } from "@/components/markdown";
 import { OpenInEditor } from "@/components/open-in-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ChangeBadge, focusClass } from "@/components/views/change-badge";
-import { sectionKey, stepCount } from "@/components/views/focus-model";
+import { sectionKey } from "@/components/views/focus-model";
 import { ViewFrame } from "@/components/views/view-frame";
 import { useViews } from "@/components/views/views-state";
 import { cn } from "@/lib/utils";
-
-/** The chip of a section's reference: it opens the element on the Diagram when the Diagram draws it. */
-function ReferenceChip({ reference }: { reference: string }) {
-  const { snapshot, focusOn } = useViews();
-  const chip = "rounded-md border bg-background px-2 py-0.5 font-mono text-sm font-normal";
-  if (reference === "General" || !snapshot || stepCount("diagram", [reference], snapshot.data, false) < 1) return <span className={chip}>{reference}</span>;
-  return (
-    <button
-      type="button"
-      className={cn(chip, "cursor-pointer hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring")}
-      aria-label={`View on diagram: ${reference}`}
-      onClick={() => focusOn("diagram", [reference], { kind: "ref", ref: reference })}
-    >
-      {reference}
-    </button>
-  );
-}
 
 function SectionBlock({ area, section, focused }: { area: AreaView; section: SectionView; focused: boolean }) {
   const [before, setBefore] = useState(false);
@@ -40,9 +24,7 @@ function SectionBlock({ area, section, focused }: { area: AreaView; section: Sec
       className={cn("space-y-2 rounded-md py-2 pl-4 pr-3", focusClass(focused, section.change) || "border-l-4 border-transparent")}
     >
       <div className="flex flex-wrap items-center gap-2">
-        <h4 className="flex items-center gap-2 text-sm font-semibold">
-          <ReferenceChip reference={section.title} />
-        </h4>
+        <h4 className="font-mono text-sm font-semibold">{section.title}</h4>
         {section.change ? <ChangeBadge change={section.change} /> : null}
         {section.movedFrom ? <Badge variant="muted">moved from {section.movedFrom}</Badge> : null}
         {section.change === "changed" && section.before !== null ? (
@@ -138,11 +120,12 @@ function RequirementsPage() {
 
 /**
  * The Requirements: Areas in folder order, fragments in file order, sections with `General` first,
- * each section with its reference chip and `Open in editor`, and the labels of an overlay.
+ * each section with its title and `Open in editor`, and the labels of an overlay. The only
+ * `Ask more` is the one in the header, about the Requirements as a whole.
  */
 export function RequirementsView() {
   return (
-    <ViewFrame view="requirements">
+    <ViewFrame view="requirements" toolbar={<AskRequirementsButton />}>
       <RequirementsPage />
     </ViewFrame>
   );

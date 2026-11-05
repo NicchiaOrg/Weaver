@@ -1,10 +1,14 @@
-//! General chat (task "Chat General"): the free conversation with omp of a project, always in its
-//! window.
+//! General chat (task "Chat General") and Ask more conversations: the free conversations with omp.
 //!
 //! General is not a job: it holds no Task, announces no card, asks no question round, notifies
 //! nothing and shows nothing on the Board. It has no instruction, skill or written request; the
 //! developer writes what he wants, and on his explicit request the agent starts a job of Weaver
-//! with `trama job new`, which is a normal job with a conversation of its own.
+//! with `weaver job new`, which is a normal job with a conversation of its own.
+//!
+//! An Ask more conversation (`requirements/tech#ask-conversation`) is the same kind of
+//! conversation about one thing the developer is reading. It runs on the service and the actor of
+//! General, generalised to several conversations, and is not a job either: it lives in memory and
+//! ends with its window. [`crate::ask`] reads the chosen thing and opens it.
 //!
 //! | Module | Responsibility |
 //! |--------|----------------|
@@ -14,16 +18,17 @@
 //! | [`wire`] | The state and the conversation as the UI gets them, and where the events go |
 //!
 //! The pure part (the Machine, the command line of omp, the instruction, the record) is
-//! `trama_core::jobs::general`. The process, the JSON-RPC, the ACP calls and the conversation are
+//! `weaver_core::jobs::general`. The process, the JSON-RPC, the ACP calls and the conversation are
 //! the jobs' own ([`crate::jobs`]).
 //!
 //! # Where it plugs in
 //!
 //! * [`install`] (called by [`crate::jobs::install`]): the state `Arc<General>`, and
-//!   [`crate::jobs::Jobs::set_general`], which lets `trama job new` work from the General that is
+//!   [`crate::jobs::Jobs::set_general`], which lets `weaver job new` work from the General that is
 //!   working and from no other caller.
 //! * [`with_windows`] (called by [`crate::jobs::install_windows`]): the window of a project
-//!   opening reads its record; the window closing cancels the turn and ends omp.
+//!   opening reads its record and, when a session is kept, starts omp to reload it (sending no
+//!   prompt); the window closing cancels the turn and ends omp.
 
 pub mod actor;
 pub mod commands;
@@ -44,7 +49,7 @@ use crate::log_info;
 use crate::windows::jobs::{BoxFuture, CloseReason, WindowJobs, WindowOpened};
 
 pub use service::General;
-use wire::{GeneralEntries, GeneralEvents, GeneralState};
+use wire::{AskClosed, AskEntries, AskRow, GeneralEntries, GeneralEvents, GeneralState};
 
 /// The events of General, to every window (the UI keeps what concerns its project).
 struct TauriEvents {
@@ -58,6 +63,18 @@ impl GeneralEvents for TauriEvents {
 
     fn entries(&self, entries: &GeneralEntries) {
         let _ = self.app.emit(EventName::GeneralEntries.as_str(), entries);
+    }
+
+    fn ask_changed(&self, row: &AskRow) {
+        let _ = self.app.emit(EventName::AskChanged.as_str(), row);
+    }
+
+    fn ask_entries(&self, entries: &AskEntries) {
+        let _ = self.app.emit(EventName::AskEntries.as_str(), entries);
+    }
+
+    fn ask_closed(&self, closed: &AskClosed) {
+        let _ = self.app.emit(EventName::AskClosed.as_str(), closed);
     }
 }
 

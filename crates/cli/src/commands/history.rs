@@ -1,23 +1,23 @@
-//! `trama history new | edit | show | list`. The rules (checks, copies of the Tasks recorded,
-//! dates) live in `trama_core::project::history`; this file only reads the input and prints.
+//! `weaver history new | edit | show | list`. The rules (checks, copies of the Tasks recorded,
+//! dates) live in `weaver_core::project::history`; this file only reads the input and prints.
 
 use std::convert::Infallible;
 
 use serde_json::{json, Value};
-use trama_core::command::CommandReply;
-use trama_core::project::cards::CardKind;
-use trama_core::project::changes::{self, MutationError};
-use trama_core::project::clock::SystemClock;
-use trama_core::project::history::{self, Entry, Planned, Problem, TaskCopy};
-use trama_core::project::random::OsRandom;
-use trama_core::project::shortnum::{self, ShortNumbers};
+use weaver_core::command::CommandReply;
+use weaver_core::project::cards::CardKind;
+use weaver_core::project::changes::{self, MutationError};
+use weaver_core::project::clock::SystemClock;
+use weaver_core::project::history::{self, Entry, Planned, Problem, TaskCopy};
+use weaver_core::project::random::OsRandom;
+use weaver_core::project::shortnum::{self, ShortNumbers};
 
 use super::{card_with, local, reply, written};
 use crate::spec::*;
 
 fn entry_fields() -> Vec<Field> {
     card_with(vec![
-        req("file", line(), "The file, relative to `.trama/`."),
+        req("file", line(), "The file, relative to `.weaver/`."),
         req("recorded", list(line()), "The Tasks now recorded in History: their copy is in the entry and their file is gone."),
         opt("kept", list(line()), "The cited Tasks that stay because their copy cannot be made (the reason is on stderr)."),
     ])
@@ -51,7 +51,7 @@ pub fn commands() -> Vec<Command> {
             ])
             .output(entry_fields())
             .place(written)
-            .example("trama history new --input -"),
+            .example("weaver history new --input -"),
         Command::new("history", "edit", "Changes a History entry: replaces fields and adds Tasks.", edit)
             .notes(&["Replaces the fields given and adds the Tasks given; it never removes a Task. The date of the entry becomes the moment of the edit."])
             .arg(Arg::Card(CardKind::History))
@@ -63,7 +63,7 @@ pub fn commands() -> Vec<Command> {
             ])
             .output(entry_fields())
             .place(written)
-            .example("trama history edit <id> --input -"),
+            .example("weaver history edit <id> --input -"),
         Command::new("history", "show", "Prints a History entry with the Tasks it cites.", show)
             .arg(Arg::Card(CardKind::History))
             .output(card_with(vec![
@@ -73,7 +73,7 @@ pub fn commands() -> Vec<Command> {
                 req("updated", line(), "When the entry was last written or updated."),
                 req("tasks", list(object(task_fields())), "The Tasks it cites, in the order cited."),
             ]))
-            .example("trama history show <id>"),
+            .example("weaver history show <id>"),
         Command::new("history", "list", "Lists the History entries, newest first.", list_entries)
             .output(vec![req(
                 "entries",
@@ -85,7 +85,7 @@ pub fn commands() -> Vec<Command> {
                 "The entries, newest first.",
             )])
             .place(local)
-            .example("trama history list"),
+            .example("weaver history list"),
     ]
 }
 
@@ -194,10 +194,7 @@ fn edit(call: &Call) -> Result<CommandReply, Failure> {
 /// The Task of an entry as shown: from the copy the entry keeps, else from the Task file that is
 /// still there, else only its identity.
 fn task_json(call: &Call, numbers: &ShortNumbers, entry: &Entry, id: &str) -> (Value, String) {
-    let copy: Option<TaskCopy> = entry.cleared.get(id).cloned().or_else(|| {
-        let task = call.image.card(CardKind::Task, id)?;
-        history::copy_of(call.image, task).ok()
-    });
+    let copy: Option<TaskCopy> = history::shown_copy(call.image, entry, id);
     let number = numbers.number_of(CardKind::Task, id);
     match copy {
         Some(copy) => {
@@ -291,8 +288,8 @@ mod tests {
     use std::path::Path;
 
     use serde_json::Map;
-    use trama_core::command::code;
-    use trama_core::project::image::ProjectImage;
+    use weaver_core::command::code;
+    use weaver_core::project::image::ProjectImage;
 
     use super::*;
     use crate::spec::Caller;
@@ -319,7 +316,7 @@ mod tests {
     }
 
     fn put(root: &Path, rel: &str, text: &str) {
-        let path = root.join(".trama").join(rel);
+        let path = root.join(".weaver").join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
     }
@@ -354,7 +351,7 @@ mod tests {
     #[test]
     fn new_refuses_tasks_that_are_not_done_or_were_closed_without_changes_listing_every_problem() {
         let dir = project();
-        let before = fs::read_dir(dir.path().join(".trama")).unwrap().count();
+        let before = fs::read_dir(dir.path().join(".weaver")).unwrap().count();
         let error = run(
             "new",
             dir.path(),
@@ -380,14 +377,14 @@ mod tests {
         }
         assert!(!error.message.contains("tasks[4]"));
         assert!(
-            !dir.path().join(".trama/history").exists(),
+            !dir.path().join(".weaver/history").exists(),
             "a refusal writes nothing"
         );
         assert_eq!(
-            fs::read_dir(dir.path().join(".trama")).unwrap().count(),
+            fs::read_dir(dir.path().join(".weaver")).unwrap().count(),
             before
         );
-        assert!(dir.path().join(".trama/tasks/aaaaaaaa-job.md").is_file());
+        assert!(dir.path().join(".weaver/tasks/aaaaaaaa-job.md").is_file());
     }
 
     #[test]
@@ -400,9 +397,9 @@ mod tests {
         assert!(reply.json["number"].is_null());
         let file = reply.json["file"].as_str().unwrap();
         assert!(file.starts_with("history/") && file.ends_with("-work-done.md"));
-        assert!(dir.path().join(".trama").join(file).is_file());
-        assert!(!dir.path().join(".trama/tasks/aaaaaaaa-job.md").exists());
-        assert!(!dir.path().join(".trama/task-images/aaaaaaaa").exists());
+        assert!(dir.path().join(".weaver").join(file).is_file());
+        assert!(!dir.path().join(".weaver/tasks/aaaaaaaa-job.md").exists());
+        assert!(!dir.path().join(".weaver/task-images/aaaaaaaa").exists());
         assert!(reply.markdown.contains("Recorded in History"));
 
         let id = reply.json["id"].as_str().unwrap();
@@ -480,7 +477,7 @@ mod tests {
             .note
             .as_deref()
             .is_some_and(|n| n.contains("ffffffff") && n.contains("finished")));
-        assert!(dir.path().join(".trama/tasks/ffffffff-job.md").is_file());
+        assert!(dir.path().join(".weaver/tasks/ffffffff-job.md").is_file());
     }
 
     #[test]

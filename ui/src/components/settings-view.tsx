@@ -1,19 +1,24 @@
-import { TriangleAlert } from "lucide-react";
+import { CircleCheck, Loader, RefreshCw, TriangleAlert } from "lucide-react";
 import { useId, useRef, useState, type ReactNode } from "react";
 
 import type { SettingField } from "@/bindings/SettingField";
 import type { SettingKey } from "@/bindings/SettingKey";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { GuardedButton } from "@/components/guarded-button";
+import { ViewHeader } from "@/components/view-header";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { isAppError } from "@/lib/backend";
+import { EXPORTING_TEXT, systemCertificatesLine, type SystemCertificatesLineKind } from "@/lib/system-certificates";
 import { cn } from "@/lib/utils";
 import { settingText, useSettings } from "@/hooks/use-settings";
+import { useSystemCertificates } from "@/hooks/use-system-certificates";
 
 /** A model omp lists, in omp's order. */
 export interface ModelEntry {
@@ -141,11 +146,23 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
   const id = useId();
   return (
     <section aria-labelledby={id} className="flex flex-col gap-5">
-      <h2 id={id} className="border-b pb-2 text-base font-semibold">
+      <h2 id={id} className="border-b pb-2 text-sm font-semibold">
         {title}
       </h2>
       {children}
     </section>
+  );
+}
+
+/** The Settings view: its header across the whole view, then the centred column that scrolls under it. */
+function SettingsPage({ className, children }: { className: string; children: ReactNode }) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <ViewHeader view="settings" />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className={cn("mx-auto flex w-full max-w-[720px] flex-col px-6 py-8", className)}>{children}</div>
+      </div>
+    </div>
   );
 }
 
@@ -387,6 +404,80 @@ function RadioSetting({ settingKey }: { settingKey: SettingKey }) {
   );
 }
 
+const LINE_ICON = {
+  exporting: <Loader aria-hidden className="size-4 animate-spin motion-reduce:animate-none" />,
+  ready: <CircleCheck aria-hidden className="size-4 text-green-600 dark:text-green-400" />,
+  failed: <TriangleAlert aria-hidden className="size-4 text-amber-600 dark:text-amber-400" />,
+} satisfies Record<SystemCertificatesLineKind, ReactNode>;
+
+/**
+ * `System Certificates` (`requirements/ui#system-certificates`): a Switch saved at once and, only
+ * while it is on, the status line of the export with `Refresh`. The line is the description of the
+ * switch for assistive technology and a polite live region. One component in every place; the value
+ * comes from the settings and the status from the backend, so all places always agree.
+ */
+export function SystemCertificatesSetting() {
+  const controlId = useId();
+  const state = useField("systemCertificates.enabled");
+  const { status, refresh } = useSystemCertificates();
+  if (!state.field) return null;
+
+  const enabled = state.stored === "true";
+  const line = enabled && status ? systemCertificatesLine(status, Date.now()) : null;
+  const statusId = `${controlId}-status`;
+  const describedIds = [`${controlId}-description`, line ? statusId : null, state.error ? `${controlId}-error` : null].filter(Boolean).join(" ");
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between gap-3">
+        <Label htmlFor={controlId}>{state.field.title}</Label>
+        <Switch
+          id={controlId}
+          checked={enabled}
+          aria-describedby={describedIds}
+          aria-invalid={state.error ? true : undefined}
+          onCheckedChange={(next) => state.choose(String(next))}
+        />
+      </div>
+      <p id={`${controlId}-description`} className="text-sm text-muted-foreground">
+        {state.field.description}
+      </p>
+      <div id={statusId} aria-live="polite" className="empty:hidden">
+        {line ? (
+          <div className="flex flex-wrap items-start gap-x-2 gap-y-2 text-sm text-muted-foreground">
+            <p className="flex min-w-0 flex-1 basis-[12.5rem] items-start gap-1.5">
+              <span className="mt-0.5 shrink-0">{LINE_ICON[line.kind]}</span>
+              <span className="min-w-0">{line.text}</span>
+            </p>
+            <GuardedButton
+              variant="outline"
+              size="sm"
+              aria-label="Refresh system certificates"
+              reasons={[line.kind === "exporting" && EXPORTING_TEXT]}
+              onClick={refresh}
+            >
+              <RefreshCw aria-hidden />
+              Refresh
+            </GuardedButton>
+          </div>
+        ) : null}
+      </div>
+      {state.error ? (
+        <p id={`${controlId}-error`} role="alert" className="flex items-start gap-1.5 text-sm text-red-600 dark:text-red-400">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+          {state.error}
+        </p>
+      ) : null}
+      {state.issue ? (
+        <p className="flex items-start gap-1.5 text-sm text-amber-600 dark:text-amber-400">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+          {`The value in the settings file was ignored and the default is in force: ${state.issue.reason}`}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------------------------
 // The view.
 // ---------------------------------------------------------------------------------------------
@@ -402,7 +493,7 @@ export function SettingsView({ ompSlot, projectSlot, modelCatalog }: SettingsVie
 
   if (!snapshot) {
     return (
-      <div className="mx-auto flex w-full max-w-[720px] flex-col gap-4 p-6">
+      <SettingsPage className="gap-4">
         {loadError ? (
           <Alert variant="error">
             <TriangleAlert aria-hidden />
@@ -416,14 +507,14 @@ export function SettingsView({ ompSlot, projectSlot, modelCatalog }: SettingsVie
             Loading the settings…
           </p>
         )}
-      </div>
+      </SettingsPage>
     );
   }
 
   const preset = snapshot.settings.editor.preset;
 
   return (
-    <div className="mx-auto flex w-full max-w-[720px] flex-col gap-8 p-6">
+    <SettingsPage className="gap-8">
       {snapshot.fileError ? (
         <Alert variant="warning">
           <TriangleAlert aria-hidden />
@@ -437,6 +528,7 @@ export function SettingsView({ ompSlot, projectSlot, modelCatalog }: SettingsVie
         {ompSlot}
         <TextSetting settingKey="ompPath" mono />
         <RadioSetting settingKey="permissions" />
+        <SystemCertificatesSetting />
       </Group>
 
       <Group title="Models">
@@ -463,6 +555,6 @@ export function SettingsView({ ompSlot, projectSlot, modelCatalog }: SettingsVie
       </Group>
 
       {projectSlot ? <Group title="Project">{projectSlot}</Group> : null}
-    </div>
+    </SettingsPage>
   );
 }

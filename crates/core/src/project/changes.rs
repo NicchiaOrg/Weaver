@@ -28,7 +28,7 @@ pub enum Change {
     Delete,
 }
 
-/// The changes of one operation, by path relative to `.trama/`; written in path order.
+/// The changes of one operation, by path relative to `.weaver/`; written in path order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChangeSet {
     changes: BTreeMap<String, Change>,
@@ -259,7 +259,7 @@ mod tests {
 
     fn project() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        let tasks = layout::trama_dir(dir.path()).join("tasks");
+        let tasks = layout::weaver_dir(dir.path()).join("tasks");
         fs::create_dir_all(&tasks).unwrap();
         fs::write(tasks.join("vxdhoylk-first.md"), TASK).unwrap();
         dir

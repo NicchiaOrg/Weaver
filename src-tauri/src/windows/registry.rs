@@ -60,8 +60,10 @@ pub enum ExitDecision {
 }
 
 /// `RunEvent::ExitRequested` carries no code when the developer quits (`Cmd+Q`, File › Quit) and
-/// when the last window closed; `windows_left` tells them apart. Closing the last project window
-/// opens the welcome window first, so no window is left only after the welcome window closed.
+/// when the last window closed; `windows_left` tells them apart. It counts every window that still
+/// exists, those in the background included (they are hidden, not closed), so closing the welcome
+/// window never ends Weaver while a project window is in the background. Closing the last project
+/// window opens the welcome window first, so no window is left only after the welcome window closed.
 pub fn decide_exit(
     quit: QuitState,
     code: Option<i32>,
@@ -89,6 +91,8 @@ pub struct Registry {
     open: Vec<OpenProject>,
     opening: HashSet<String>,
     closing: HashSet<String>,
+    /// The project hashes whose window is in the background: open, but not on the screen.
+    background: HashSet<String>,
     /// Labels, the most recently focused last.
     focus: Vec<String>,
     quit: QuitState,
@@ -145,14 +149,46 @@ impl Registry {
     /// The window is gone.
     pub fn remove(&mut self, id: &str) -> Option<OpenProject> {
         self.closing.remove(id);
+        self.background.remove(id);
         self.focus.retain(|label| *label != label_of(id));
         let at = self.open.iter().position(|project| project.id == id)?;
         Some(self.open.remove(at))
     }
 
-    /// Whether `id` is the only open project window.
+    /// Whether `id` is the only open project window. A window in the background is open: it counts.
     pub fn is_last_project(&self, id: &str) -> bool {
         self.open.len() == 1 && self.project(id).is_some()
+    }
+
+    /// `developer.CLOSE_WINDOW` → In background: the window of `id` is now in the background.
+    /// `false` when the project is not open or its window already is in the background.
+    pub fn send_to_background(&mut self, id: &str) -> bool {
+        self.project(id).is_some() && self.background.insert(id.to_owned())
+    }
+
+    /// The window of `id` is back on the screen.
+    pub fn shown(&mut self, id: &str) {
+        self.background.remove(id);
+    }
+
+    pub fn is_background(&self, id: &str) -> bool {
+        self.background.contains(id)
+    }
+
+    /// Whether any project window is in the background.
+    pub fn has_background(&self) -> bool {
+        !self.background.is_empty()
+    }
+
+    /// The projects whose window is in the background, the least recently used first (the order in
+    /// which `developer.REOPEN_APP` shows them, so that the one used most recently ends on top).
+    pub fn background_projects(&self) -> Vec<String> {
+        self.focus
+            .iter()
+            .filter_map(|label| crate::pictures::project_of_label(label))
+            .filter(|id| self.background.contains(*id))
+            .map(str::to_owned)
+            .collect()
     }
 
     /// A window got the focus.
@@ -288,6 +324,65 @@ mod tests {
             registry.focus_order().collect::<Vec<_>>(),
             ["welcome", "p-b"]
         );
+    }
+
+    fn open_three() -> Registry {
+        let mut registry = Registry::new();
+        for id in ["a", "b", "c"] {
+            registry.begin_open(id);
+            registry.finish_open(project(id));
+        }
+        registry
+    }
+
+    #[test]
+    fn a_window_in_the_background_stays_open_and_counts_for_the_last_window_rule() {
+        let mut registry = open_three();
+        assert!(registry.send_to_background("a"));
+        assert!(registry.is_background("a"));
+        assert!(registry.has_background());
+        // Open, and kept in the session.
+        assert_eq!(registry.projects().len(), 3);
+        // Closing the two others never makes "c" the last project window.
+        registry.remove("b");
+        assert!(!registry.is_last_project("c"));
+        registry.remove("c");
+        assert!(registry.is_last_project("a"));
+    }
+
+    #[test]
+    fn only_an_open_window_that_is_not_in_the_background_can_be_sent_there() {
+        let mut registry = open_three();
+        assert!(!registry.send_to_background("missing"));
+        assert!(registry.send_to_background("a"));
+        assert!(!registry.send_to_background("a"));
+        registry.shown("a");
+        assert!(!registry.is_background("a"));
+        assert!(!registry.has_background());
+        assert!(registry.send_to_background("a"));
+    }
+
+    #[test]
+    fn the_background_windows_come_least_recently_used_first() {
+        let mut registry = open_three();
+        registry.focused("p-b");
+        registry.focused("p-a");
+        registry.send_to_background("a");
+        registry.send_to_background("c");
+        registry.send_to_background("b");
+        // Focus order, most recent first: a, b, c.
+        assert_eq!(registry.background_projects(), ["c", "b", "a"]);
+        registry.shown("b");
+        assert_eq!(registry.background_projects(), ["c", "a"]);
+    }
+
+    #[test]
+    fn a_window_that_closes_leaves_the_background() {
+        let mut registry = open_three();
+        registry.send_to_background("a");
+        registry.remove("a");
+        assert!(!registry.has_background());
+        assert!(registry.background_projects().is_empty());
     }
 
     #[test]

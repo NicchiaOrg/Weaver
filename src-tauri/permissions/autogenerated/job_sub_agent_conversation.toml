@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-job-sub-agent-conversation"
+description = "Enables the job_sub_agent_conversation command without any pre-configured scope."
+commands.allow = ["job_sub_agent_conversation"]
+
+[[permission]]
+identifier = "deny-job-sub-agent-conversation"
+description = "Denies the job_sub_agent_conversation command without any pre-configured scope."
+commands.deny = ["job_sub_agent_conversation"]

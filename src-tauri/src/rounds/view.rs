@@ -1,9 +1,9 @@
 //! What a question round tells the UI and what the UI does to it. The state itself, drafts
-//! included, lives in [`trama_core::question`]; these are its shapes on the wire.
+//! included, lives in [`weaver_core::question`]; these are its shapes on the wire.
 
 use serde::{Deserialize, Serialize};
-use trama_core::question::{Action, Draft, Origin, Position, Round, Status};
 use ts_rs::TS;
+use weaver_core::question::{Action, Draft, Origin, Position, Round, Status};
 
 /// Who asks.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -194,7 +194,7 @@ pub fn view_of(
         Origin::Agent { job } => OriginView::Agent {
             job_name: job_name.unwrap_or_else(|| job.clone()),
         },
-        Origin::Drift { drift, title } => OriginView::Drift {
+        Origin::Drift { drift, title, .. } => OriginView::Drift {
             drift: drift.clone(),
             title: title.clone(),
         },

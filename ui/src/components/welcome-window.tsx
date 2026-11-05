@@ -5,6 +5,7 @@ import type { RecentEntry } from "@/bindings/RecentEntry";
 import type { WelcomeState } from "@/bindings/WelcomeState";
 import { OmpSetup } from "@/components/omp-status";
 import { StartupBanner } from "@/components/startup-banner";
+import { SystemCertificatesBanners } from "@/components/system-certificates-banners";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { UpdateBanner } from "@/components/update-banner";
@@ -98,6 +99,7 @@ export function WelcomeWindow() {
     <div className="flex h-full flex-col">
       <StartupBanner allProjects />
       <UpdateBanner />
+      <SystemCertificatesBanners />
       <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-6">
         <header className="flex items-center gap-3">
           <Blocks className="size-9 shrink-0 text-primary" aria-hidden />

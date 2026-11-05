@@ -5,6 +5,7 @@ import type { RequestStatus } from "@/bindings/RequestStatus";
 import { ProjectContext } from "@/components/project-context";
 import { RequestEditor } from "@/components/requests/request-editor";
 import { RequestsProvider } from "@/components/requests/use-requests";
+import { ViewShownContext } from "@/components/view-shown";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { call, on, onFilesDropped } from "@/lib/backend";
 
@@ -15,10 +16,16 @@ vi.mock("@/lib/backend", () => ({
   isAppError: (value: unknown) => typeof value === "object" && value !== null && "code" in value && "message" in value,
 }));
 
-const toasts = vi.hoisted(() => ({ notice: vi.fn(), error: vi.fn() }));
-vi.mock("sonner", () => ({ toast: Object.assign(toasts.notice, { error: toasts.error }) }));
+const toasts = vi.hoisted(() => ({ notice: vi.fn(), warning: vi.fn(), error: vi.fn() }));
+vi.mock("sonner", () => ({ toast: Object.assign(toasts.notice, { warning: toasts.warning, error: toasts.error }) }));
 
 const PROJECT = "0123456789abcdef";
+
+const ASSETS = vi.hoisted(() => [
+  { name: "logo.png", size: 1 },
+  { name: "spec.pdf", size: 1 },
+]);
+vi.mock("@/components/assets/use-assets", () => ({ useAssets: () => ({ assets: ASSETS, loaded: true, apply: () => {} }) }));
 const ID = "2026-11-02T09-30-00";
 
 interface Fake {
@@ -109,7 +116,7 @@ async function mount(patch: Partial<Fake> = {}) {
 }
 
 const saves = () => vi.mocked(call).mock.calls.filter(([name]) => name === "request_save");
-const area = () => screen.getByRole("textbox", { name: "Request text" });
+const area = () => screen.getByRole("combobox", { name: "Request text" });
 
 async function type(text: string) {
   fireEvent.change(area(), { target: { value: text } });
@@ -126,6 +133,7 @@ describe("the request editor", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     toasts.notice.mockClear();
+    toasts.warning.mockClear();
     toasts.error.mockClear();
     openJob.mockClear();
   });
@@ -208,7 +216,7 @@ describe("the request editor", () => {
     expect(names.indexOf("request_save")).toBeGreaterThan(-1);
     expect(names.indexOf("request_save")).toBeLessThan(names.indexOf("request_send"));
     expect(screen.getByText("Sent to the agent · Design Add a cart")).toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: "Request text" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Request text" })).toBeNull();
   });
 
   it("sends with Ctrl+Enter and with Cmd+Enter", async () => {
@@ -217,7 +225,7 @@ describe("the request editor", () => {
     await settle();
     expect(vi.mocked(call).mock.calls.filter(([name]) => name === "request_send")).toHaveLength(1);
     await mount({ text: "Add a cart" });
-    fireEvent.keyDown(screen.getAllByRole("textbox", { name: "Request text" }).at(-1) as HTMLElement, { key: "Enter", metaKey: true });
+    fireEvent.keyDown(screen.getAllByRole("combobox", { name: "Request text" }).at(-1) as HTMLElement, { key: "Enter", metaKey: true });
     await settle();
     expect(vi.mocked(call).mock.calls.filter(([name]) => name === "request_send")).toHaveLength(2);
   });
@@ -271,7 +279,7 @@ describe("the request editor", () => {
     fake.text = "Theirs";
     await act(async () => handlers.get("requests-changed")?.({ projectId: PROJECT }));
     await settle();
-    expect(toasts.notice).toHaveBeenCalledWith("The request changed on disk; Weaver kept your version.");
+    expect(toasts.warning).toHaveBeenCalledWith("The request changed on disk; Weaver kept your version.");
     expect(area()).toHaveValue("Mine, edited");
     expect(fake.text).toBe("Mine, edited");
   });
@@ -282,7 +290,7 @@ describe("the request editor", () => {
     await act(async () => handlers.get("requests-changed")?.({ projectId: PROJECT }));
     await settle();
     expect(area()).toHaveValue("Changed outside");
-    expect(toasts.notice).not.toHaveBeenCalled();
+    expect(toasts.warning).not.toHaveBeenCalled();
   });
 
   it("does not take its own write for an outside change", async () => {
@@ -293,7 +301,7 @@ describe("the request editor", () => {
     await act(async () => handlers.get("requests-changed")?.({ projectId: PROJECT }));
     await settle();
     expect(area()).toHaveValue("Mine\n");
-    expect(toasts.notice).not.toHaveBeenCalled();
+    expect(toasts.warning).not.toHaveBeenCalled();
   });
 
   it("tells when the request was deleted outside Weaver", async () => {
@@ -301,13 +309,13 @@ describe("the request editor", () => {
     fake.gone = true;
     await act(async () => handlers.get("requests-changed")?.({ projectId: PROJECT }));
     await settle();
-    expect(toasts.notice).toHaveBeenCalledWith("The request was deleted outside Weaver.");
+    expect(toasts.warning).toHaveBeenCalledWith("The request was deleted outside Weaver.");
   });
 
   it("shows a sent request read-only, with its job, and opens the conversation", async () => {
     await mount({ text: "# Cart\nA cart.", status: "sent", jobId: "jjjjjjjj", jobName: "Design Cart" });
     expect(screen.getByText("Sent to the agent · Design Cart")).toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: "Request text" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Request text" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(screen.getByText("Sent")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open conversation" }));
@@ -326,7 +334,7 @@ describe("the request editor", () => {
     await wait(150);
     const preview = screen.getByLabelText("Preview");
     expect(within(preview).getByText("Cart")).toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: "Request text" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Request text" })).toBeNull();
   });
 
   it("saves what is pending and answers when the window is closing", async () => {
@@ -338,5 +346,50 @@ describe("the request editor", () => {
     const names = vi.mocked(call).mock.calls.map(([name]) => name);
     expect(names.indexOf("request_save")).toBeLessThan(names.indexOf("requests_flushed"));
     expect(vi.mocked(call).mock.calls.some(([name]) => name === "request_send")).toBe(false);
+  });
+});
+
+describe("the @ tags in the request editor", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    openJob.mockClear();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("opens the list of assets under the text, inserts the chosen one with Enter, and colours the recognised tags", async () => {
+    await mount();
+    area().focus();
+    await type("Use @lo");
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["logo.png"]);
+    fireEvent.keyDown(area(), { key: "Enter" });
+    await settle();
+    expect(area()).toHaveValue("Use @logo.png ");
+    expect(document.querySelector("[data-tag='logo.png']")?.textContent).toBe("@logo.png");
+    await type("Use @logo.png and @nothing");
+    expect(document.querySelectorAll("[data-tag]")).toHaveLength(1);
+  });
+});
+
+describe("files dropped on the window", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("reach the request editor only while its view is the one shown", async () => {
+    Object.assign(fake, { text: "", status: "writing", jobId: null, jobName: null, returned: false, failSave: null, modelEmpty: false, gone: false });
+    install();
+    vi.mocked(onFilesDropped).mockClear();
+    render(
+      <TooltipProvider>
+        <ViewShownContext.Provider value={false}>
+          <ProjectContext.Provider value={{ projectId: PROJECT, showView: vi.fn(), openJob, openedJob: null }}>
+            <RequestsProvider projectId={PROJECT}>
+              <RequestEditor projectId={PROJECT} />
+            </RequestsProvider>
+          </ProjectContext.Provider>
+        </ViewShownContext.Provider>
+      </TooltipProvider>,
+    );
+    await settle();
+    expect(onFilesDropped).not.toHaveBeenCalled();
   });
 });

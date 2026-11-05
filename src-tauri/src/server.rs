@@ -2,7 +2,7 @@
 //!
 //! [`Server::start`] creates the endpoint and a fresh secret, atomically writes `runtime.json`
 //! (mode `0600`) and accepts connections. Each connection is served on Tokio's blocking pool by
-//! `trama_core::ipc::serve_connection_watched`: a wrong or missing secret, a message over 1 MiB or
+//! `weaver_core::ipc::serve_connection_watched`: a wrong or missing secret, a message over 1 MiB or
 //! of another protocol version closes the connection with no response. The handler gets a [`Peer`]
 //! that tells when the client closes the connection (a request that waits with no time limit, like
 //! a round of questions, is withdrawn that way). The handler is [`crate::cli_handler::handler`];
@@ -13,11 +13,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use trama_core::endpoint::{new_endpoint, new_secret};
-use trama_core::ipc::{self, Listener, Peer, Served};
-use trama_core::paths::AppDirs;
-use trama_core::protocol::{Request, Response};
-use trama_core::runtime::{self, RuntimeInfo};
+use weaver_core::endpoint::{new_endpoint, new_secret};
+use weaver_core::ipc::{self, Listener, Peer, Served};
+use weaver_core::paths::AppDirs;
+use weaver_core::protocol::{Request, Response};
+use weaver_core::runtime::{self, RuntimeInfo};
 
 /// Answers one authenticated request. It runs on the blocking pool, so it may block.
 pub type Handler = Arc<dyn Fn(Request, Peer) -> Response + Send + Sync>;
@@ -68,11 +68,15 @@ impl Server {
     /// Stops accepting and removes the socket. Connections being served finish on their own.
     pub fn shutdown(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
-        // Wake the blocking accept; the loop sees the flag and drops the listener.
-        let _ = ipc::connect(&self.endpoint);
+        // Wake the blocking accept; the loop sees the flag and drops the listener. The wake
+        // connection stays open until the loop has ended: on Windows a client that connects and
+        // closes before the accept starts is a dead connection that the listener discards, and the
+        // accept would go on waiting for another client for ever.
+        let wake = ipc::connect(&self.endpoint);
         if let Some(handle) = self.accept_loop.take() {
             let _ = handle.join();
         }
+        drop(wake);
     }
 }
 
@@ -106,7 +110,7 @@ fn accept_loop(listener: Listener, secret: &str, handler: &Handler, stop: &Atomi
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use trama_core::ipc::{send, SendError};
+    use weaver_core::ipc::{send, SendError};
 
     use super::*;
 
@@ -207,7 +211,7 @@ mod tests {
         let mut client = ipc::connect(server.endpoint()).unwrap();
         std::io::Write::write_all(
             &mut client,
-            &trama_core::protocol::encode(&Request::new(&info.secret, "wait", json!(null)))
+            &weaver_core::protocol::encode(&Request::new(&info.secret, "wait", json!(null)))
                 .unwrap(),
         )
         .unwrap();

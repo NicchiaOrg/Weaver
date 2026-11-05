@@ -177,13 +177,27 @@ pub fn resolution_rows(card: &Card) -> Vec<ResolutionRow> {
         .collect()
 }
 
-/// Whether Drifts are being resolved: a resolve works, or a resolution is still a Draft.
+/// Whether Drifts are being resolved: a resolve works, or a resolution is being written (a Draft
+/// no refinement left half-way) or refined.
 pub fn drifts_resolving(image: &ProjectImage, facts: &AgentFacts) -> bool {
     facts.resolve_working
         || image
             .cards_of(CardKind::Proposal)
-            .any(|p| is_resolution(p) && p.str_key("status") == Some("draft"))
+            .any(|p| is_resolution(p) && is_being_written(p))
 }
+
+/// A Proposal an agent is writing: a Draft that no refinement left half-way, or one being refined.
+pub fn is_being_written(card: &Card) -> bool {
+    match card.str_key("status") {
+        Some("refining") => true,
+        Some("draft") => card.bool_key("refining") != Some(true),
+        _ => false,
+    }
+}
+
+/// What the developer reads when the Proposal attached to a Drift, or the one a control acts on,
+/// is being refined (shared by the Drift and the Proposal controls).
+pub const REASON_BEING_REFINED: &str = "Being refined";
 
 /// Computes the Board of `image`.
 pub fn compute(image: &ProjectImage, facts: &AgentFacts) -> Board {
@@ -393,8 +407,8 @@ fn label_of(numbers: &ShortNumbers, kind: CardKind, id: &str) -> String {
     numbers.label_of(kind, id).unwrap_or_else(|| id.to_owned())
 }
 
-/// Files under `task-images/<id>/`, relative to `.trama/`, in order.
-pub(crate) fn task_image_files(project_root: &Path, id: &str) -> Vec<String> {
+/// Files under `task-images/<id>/`, relative to `.weaver/`, in order.
+pub fn task_image_files(project_root: &Path, id: &str) -> Vec<String> {
     fn walk(folder: &Path, rel: &str, out: &mut Vec<String>) {
         let Ok(entries) = fs::read_dir(folder) else {
             return;

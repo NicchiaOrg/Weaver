@@ -1,4 +1,4 @@
-//! The Model: System, Actors, Features and Machines, parsed exactly as the `trama-design`
+//! The Model: System, Actors, Features and Machines, parsed exactly as the `weaver-design`
 //! skill's `FORMAT.md` describes them.
 //!
 //! The per-file parsers ([`parse_actor`], [`parse_machine`], [`parse_titled`]) check every
@@ -635,7 +635,7 @@ fn description_after_h1(body: &str, outline: &Outline, h1_index: usize) -> Strin
 // Assembly and cross-file rules
 // ---------------------------------------------------------------------------------------
 
-/// The parsed Model files, by the `.trama/model/` path they came from.
+/// The parsed Model files, by the `.weaver/model/` path they came from.
 #[derive(Debug, Default)]
 pub struct ModelFiles<'a> {
     pub system: Option<(&'a str, &'a Titled)>,

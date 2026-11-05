@@ -1,4 +1,4 @@
-//! The flow of one `trama` invocation: arguments, help, root, input, access, where the command
+//! The flow of one `weaver` invocation: arguments, help, root, input, access, where the command
 //! runs, and what is printed.
 //!
 //! [`run_with`] takes everything from its parameters (arguments, environment, folders, streams)
@@ -8,9 +8,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
-use trama_core::command::{code, CommandReply, CommandRequest, KIND};
-use trama_core::lock::{self, LockError};
-use trama_core::paths::{self, AppDirs};
+use weaver_core::command::{code, CommandReply, CommandRequest, KIND};
+use weaver_core::lock::{self, LockError};
+use weaver_core::paths::{self, AppDirs};
 
 use crate::client::{self, CallError};
 use crate::exec::{self, access_failure, NoJobs};
@@ -20,11 +20,12 @@ use crate::registry;
 use crate::round;
 use crate::spec::*;
 
-/// The `TRAMA_*` variables the command line reads.
+/// The `WEAVER_*` variables the command line reads.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Environment {
     pub job: Option<String>,
     pub general: Option<String>,
+    pub ask: Option<String>,
     pub endpoint: Option<String>,
     pub run: Option<String>,
     pub task: Option<String>,
@@ -35,11 +36,12 @@ impl Environment {
     pub fn from_process() -> Self {
         let get = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
         Self {
-            job: get("TRAMA_JOB"),
-            general: get("TRAMA_GENERAL"),
-            endpoint: get("TRAMA_ENDPOINT"),
-            run: get("TRAMA_RUN"),
-            task: get("TRAMA_TASK"),
+            job: get("WEAVER_JOB"),
+            general: get("WEAVER_GENERAL"),
+            ask: get("WEAVER_ASK"),
+            endpoint: get("WEAVER_ENDPOINT"),
+            run: get("WEAVER_RUN"),
+            task: get("WEAVER_TASK"),
         }
     }
 
@@ -47,7 +49,7 @@ impl Environment {
     /// known and the record can be read (`job show` reads nothing else).
     fn caller(&self, dirs: Option<&AppDirs>) -> Caller {
         let job_record = self.job.as_deref().zip(dirs).and_then(|(job, dirs)| {
-            trama_core::jobs::JobStore::new(dirs)
+            weaver_core::jobs::JobStore::new(dirs)
                 .read(job)
                 .ok()
                 .flatten()
@@ -55,6 +57,7 @@ impl Environment {
         Caller {
             job: self.job.clone(),
             general: self.general.clone(),
+            ask: self.ask.clone(),
             run: self.run.clone(),
             task: self.task.clone(),
             job_record,
@@ -83,7 +86,7 @@ struct Arguments {
 
 fn parse_arguments(args: &[String]) -> Result<Arguments, String> {
     use clap::{Arg, ArgAction};
-    let parser = clap::Command::new("trama")
+    let parser = clap::Command::new("weaver")
         .disable_help_flag(true)
         .disable_version_flag(true)
         .disable_help_subcommand(true)
@@ -98,7 +101,7 @@ fn parse_arguments(args: &[String]) -> Result<Arguments, String> {
         .arg(Arg::new("root").long("root").num_args(1))
         .arg(Arg::new("words").num_args(0..));
     let matches = parser
-        .try_get_matches_from(std::iter::once("trama".to_owned()).chain(args.iter().cloned()))
+        .try_get_matches_from(std::iter::once("weaver".to_owned()).chain(args.iter().cloned()))
         .map_err(|e| {
             let text = e.to_string();
             let first = text.lines().next().unwrap_or("wrong usage");
@@ -192,7 +195,7 @@ fn unknown_object(object: &str) -> String {
         .map(|(name, _)| name)
         .collect();
     format!(
-        "`{object}` is not an object of `trama`: {}",
+        "`{object}` is not an object of `weaver`: {}",
         objects.join(", ")
     )
 }
@@ -206,7 +209,7 @@ fn unknown_verb(object: &str, verb: &str) -> String {
         Some((_, commands)) => {
             let verbs: Vec<&str> = commands.iter().map(|c| c.verb).collect();
             format!(
-                "`{verb}` is not a verb of `trama {object}`: {}",
+                "`{verb}` is not a verb of `weaver {object}`: {}",
                 verbs.join(", ")
             )
         }
@@ -316,7 +319,7 @@ fn app_not_running(command: &Command) -> Failure {
     Failure::new(
         code::APP_NOT_RUNNING,
         format!(
-            "`trama {}` needs Weaver, and Weaver is not running.",
+            "`weaver {}` needs Weaver, and Weaver is not running.",
             command.name()
         ),
     )
@@ -338,7 +341,7 @@ fn run_locked(
         Ok(result) => result,
         Err(LockError::Busy) => Err(Failure::new(
             code::PROJECT_BUSY,
-            "the project is busy: another Weaver or trama command holds it",
+            "the project is busy: another Weaver or weaver command holds it",
         )),
         Err(LockError::Io(e)) => Err(Failure::failed(format!(
             "cannot take the project lock: {e}"
@@ -346,7 +349,7 @@ fn run_locked(
     }
 }
 
-/// Runs one `trama` invocation and returns its exit code.
+/// Runs one `weaver` invocation and returns its exit code.
 pub fn run_with(
     args: &[String],
     env: &Environment,
@@ -361,7 +364,7 @@ pub fn run_with(
             return fail(
                 io,
                 json,
-                &usage_failure(format!("{message}. Run `trama --help` for the usage.")),
+                &usage_failure(format!("{message}. Run `weaver --help` for the usage.")),
             );
         }
     };
@@ -381,7 +384,7 @@ pub fn run_with(
         {
             Some((_, commands)) => {
                 let verbs: Vec<&str> = commands.iter().map(|c| c.verb).collect();
-                format!("`trama {object}` needs a verb: {}", verbs.join(", "))
+                format!("`weaver {object}` needs a verb: {}", verbs.join(", "))
             }
             None => unknown_object(object),
         };
@@ -405,7 +408,7 @@ pub fn run_with(
             io,
             json,
             &usage_failure(format!(
-                "`trama {}` got {extra} more argument{} than it takes: {}",
+                "`weaver {}` got {extra} more argument{} than it takes: {}",
                 command.name(),
                 if extra == 1 { "" } else { "s" },
                 command.usage()
@@ -458,7 +461,7 @@ pub fn run_with(
 }
 
 fn code_usage() -> u8 {
-    trama_core::command::exit_code(code::USAGE)
+    weaver_core::command::exit_code(code::USAGE)
 }
 
 /// The card and the state among the words after the verb.
@@ -487,7 +490,8 @@ fn dispatch(
 ) -> Result<CommandReply, Failure> {
     let needs_job =
         matches!(command.access, Access::Job | Access::JobOrUnavailable) && env.job.is_none();
-    let needs_general = command.access == Access::General && env.general.is_none();
+    let needs_general =
+        command.access == Access::General && env.general.is_none() && env.ask.is_none();
     if needs_job || needs_general {
         return Err(access_failure(command));
     }
@@ -504,6 +508,7 @@ fn dispatch(
         state: state.clone(),
         input,
         general: env.general.clone(),
+        ask: env.ask.clone(),
     };
     match place {
         Place::Local => exec::execute(&request, caller, &NoJobs),
@@ -523,10 +528,10 @@ mod tests {
     use std::fs;
     use std::thread;
 
-    use trama_core::endpoint::{new_endpoint, new_secret};
-    use trama_core::ipc::{serve_connection, Listener};
-    use trama_core::protocol::Response;
-    use trama_core::runtime::{self, RuntimeInfo};
+    use weaver_core::endpoint::{new_endpoint, new_secret};
+    use weaver_core::ipc::{serve_connection, Listener};
+    use weaver_core::protocol::Response;
+    use weaver_core::runtime::{self, RuntimeInfo};
 
     use super::*;
     use crate::interrupts::NoInterrupts;
@@ -540,7 +545,7 @@ mod tests {
     fn sandbox() -> Sandbox {
         let base = tempfile::tempdir().unwrap();
         let root = base.path().join("project");
-        fs::create_dir_all(root.join(".trama")).unwrap();
+        fs::create_dir_all(root.join(".weaver")).unwrap();
         let dirs = AppDirs::from_bases(
             &base.path().join("config"),
             &base.path().join("data"),
@@ -588,7 +593,7 @@ mod tests {
     fn app(
         sandbox: &Sandbox,
         reply: Result<CommandReply, (&'static str, &'static str)>,
-    ) -> thread::JoinHandle<trama_core::protocol::Request> {
+    ) -> thread::JoinHandle<weaver_core::protocol::Request> {
         let endpoint = new_endpoint(&sandbox.dirs).unwrap();
         let secret = new_secret();
         runtime::write(
@@ -674,11 +679,11 @@ mod tests {
     #[test]
     fn a_write_runs_in_the_cli_under_the_lock_when_no_app_answers() {
         let sandbox = sandbox();
-        fs::remove_dir_all(sandbox.root.join(".trama")).unwrap();
+        fs::remove_dir_all(sandbox.root.join(".weaver")).unwrap();
         let (exit, out, _) = invoke(&["project", "new"], &Environment::default(), &sandbox, "");
         assert_eq!(exit, 0);
         assert!(out.starts_with("# Project initialised"));
-        assert!(sandbox.root.join(".trama/model/system.md").is_file());
+        assert!(sandbox.root.join(".weaver/model/system.md").is_file());
         assert!(
             sandbox.dirs.locks_dir().is_dir(),
             "the project lock was taken"
@@ -710,6 +715,27 @@ mod tests {
             (exit, out.as_str(), err.as_str()),
             (1, "report\n", "2 errors\n")
         );
+    }
+
+    #[test]
+    fn job_new_goes_to_the_app_with_the_ask_identity_and_needs_a_caller() {
+        let sandbox = sandbox();
+        let server = app(&sandbox, Ok(done("Started.")));
+        let env = Environment {
+            ask: Some("askaskas".into()),
+            ..Environment::default()
+        };
+        let args = ["job", "new", "--input", "{\"kind\":\"scan\"}"];
+        let (exit, out, err) = invoke(&args, &env, &sandbox, "");
+        assert_eq!((exit, out.as_str(), err.as_str()), (0, "Started.\n", ""));
+        let request = server.join().unwrap();
+        let sent: CommandRequest = serde_json::from_value(request.payload).unwrap();
+        assert_eq!(sent.ask.as_deref(), Some("askaskas"));
+        assert_eq!(sent.general, None);
+
+        let (exit, out, err) = invoke(&args, &Environment::default(), &sandbox, "");
+        assert_eq!((exit, out.as_str()), (1, ""));
+        assert!(err.contains("Ask more conversation"), "{err}");
     }
 
     #[test]

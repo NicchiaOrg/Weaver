@@ -58,7 +58,7 @@ pub struct NewDrift {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Filed {
     pub id: String,
-    /// `drifts/<id>-<slug>.md`, relative to `.trama/`.
+    /// `drifts/<id>-<slug>.md`, relative to `.weaver/`.
     pub path: String,
     pub changes: ChangeSet,
     /// The earlier Drift it repeats, explicit or taken from the origin.
@@ -250,7 +250,7 @@ pub fn plan_new(
 /// A prepared question as `drift edit` is given it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedInput {
-    /// One question of `trama question new`.
+    /// One question of `weaver question new`.
     pub question: serde_json::Value,
     pub decisions: Vec<PreparedDecision>,
 }

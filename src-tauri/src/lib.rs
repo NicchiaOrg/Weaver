@@ -10,7 +10,7 @@
 //! | [`state`]     | App-wide state managed by Tauri |
 //! | [`mutations`] | One serial mutation queue per project, holding the OS project lock |
 //! | [`server`]    | The CLI↔app socket server and `runtime.json` |
-//! | [`sidecar`]   | Copy of the bundled `trama` into `<app local data>/bin/` |
+//! | [`sidecar`]   | Copy of the bundled `weaver-cli` as `weaver` into `<app local data>/bin/` |
 //! | [`blocking`]  | `spawn_blocking` helper: disk work never runs on the main or IPC thread |
 //! | [`error`]     | The typed error of commands |
 //! | [`logging`]   | The log file: daily, rotated at 10 MB, 7 kept, no contents |
@@ -20,7 +20,7 @@
 //! | [`pictures`]  | The in-memory picture of each open project, with its revision; opened and closed with its window (`Pictures::open(root)` when the window is created) |
 //! | [`decisions`] | Applies a decision of the developer in the project's queue, checked again when applied |
 //! | [`board`]     | The Board snapshot and the Delete decision |
-//! | [`project_view`]| The Diagram, Requirements and Specs snapshot, with a Proposal drawn over the Model |
+//! | [`project_view`]| The Requirements and Specs snapshot, with a Proposal drawn over the Model |
 //! | [`project_setup`]| Get Started, the files installed for the agent kept up to date, Update skills, Import from Code |
 //! | [`proposal_view`]| What the card and the details of a Proposal show, worked out in the core |
 //! | [`proposals`] | The decisions on a Proposal (Approve, Reject, Rework, Discard, model) and what they start |
@@ -28,16 +28,24 @@
 //! | [`agent_work`]| Ghosts and facts about the agent's work, installed by the jobs |
 //! | [`history`]   | The History view: the entries of a project, newest first, with the Tasks they cite |
 //! | [`jobs`]      | The jobs of the agent: omp over ACP, the registry, the Jobs view, Run, Run all, Scan |
-//! | [`general`]   | General: the free conversation with omp of each project, its kept session, and `trama job new` from it |
-//! | [`cli_handler`]| The app side of the `trama` commands that write: runs them in the project's queue |
+//! | [`general`]   | General: the free conversation with omp of each project, its kept session, and `weaver job new` from it |
+//! | [`cli_handler`]| The app side of the `weaver` commands that write: runs them in the project's queue |
 //! | [`omp`]       | The Machine `omp-setup`: where omp is, whether it is ready, installing, updating and logging in |
 //! | [`rounds`]    | Question rounds: the queue of each project, the agents waiting for the developer, the prepared question of a Drift |
+//! | [`file_view`] | The File view's tree: each window's listings and watches, the commands that create, rename, move and delete, released 10 s after the view is left |
 //! | [`windows`]   | The Machine `window`: one window per project, the welcome window, restore at start, close and quit confirmations, `Open in editor` |
+//! | [`system_certificates`] | The Machine `system-certificates`: the export of the certificates the system trusts, the status the windows show, the variables of omp processes |
+//! | [`file_tabs`] | The Machine `file-tab`: the files open in the tabs of the File view, what each read, its watch, its saving; the events of the tabs and of the agent lock |
+//! | [`file_lock`] | The Machine `file-lock`: which files open in a tab an agent of the project is changing, from the live updates of its conversations |
+//! | [`assets`]    | The Assets view: the name and size of each open project's assets, the commands that copy in, rename, delete and drag them out |
+//! | [`notes`]     | The Notes view: the project's Markdown sheet and its images, the commands that read, write, copy in and trash them, the flush before a window closes, the watcher's events |
 //!
-//! Folders, protocol, locks and process spawning come from `trama-core`, so the app and the
-//! `trama` command line agree on them.
+//! Folders, protocol, locks and process spawning come from `weaver-core`, so the app and the
+//! `weaver` command line agree on them.
 
 pub mod agent_work;
+pub mod ask;
+pub mod assets;
 pub mod bindings;
 pub mod blocking;
 pub mod board;
@@ -48,11 +56,15 @@ pub mod drift_view;
 pub mod drifts;
 pub mod error;
 pub mod events;
+pub mod file_lock;
+pub mod file_tabs;
+pub mod file_view;
 pub mod general;
 pub mod history;
 pub mod jobs;
 pub mod logging;
 pub mod mutations;
+pub mod notes;
 pub mod notifications;
 pub mod omp;
 pub mod pictures;
@@ -68,7 +80,10 @@ pub mod shell;
 pub mod sidecar;
 pub mod startup;
 pub mod state;
+pub mod subagents;
+pub mod system_certificates;
 pub mod updates;
+pub mod usage;
 pub mod windows;
 
 use std::sync::Arc;
@@ -76,7 +91,7 @@ use std::sync::Arc;
 use crate::startup::{StartupReport, Step};
 use crate::state::AppState;
 use tauri::{AppHandle, Manager, RunEvent};
-use trama_core::paths::AppDirs;
+use weaver_core::paths::AppDirs;
 
 /// Starts the app. Returns when the last window closed and the app exited.
 pub fn run() {
@@ -103,6 +118,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::new(dirs.clone()))
         .manage(omp::OmpSetup::new())
+        .manage(system_certificates::SystemCertificates::new())
         .menu(windows::menu::build)
         .on_menu_event(|app, event| windows::menu::on_event(app, event.id().as_ref()))
         .manage(StartupReport::default())
@@ -125,18 +141,27 @@ pub fn run() {
             drifts::resolve_drift,
             drifts::fix_drift_code,
             drifts::accept_drift_proposal,
+            drifts::refine_drift_proposal,
+            drifts::discard_drift_proposal,
             drifts::dismiss_drift,
             history::history_snapshot,
             project_view::view_snapshot,
             project_setup::project_status,
             project_setup::initialise_project,
             project_setup::update_skills,
+            project_setup::set_solo_mode,
+            project_setup::solo_tracked_files,
             project_setup::project_folder,
             project_setup::import_code,
             omp::omp_status,
             omp::omp_install,
             omp::omp_log_in,
             omp::omp_log_out,
+            omp::omp_usage,
+            system_certificates::system_certificates_status,
+            system_certificates::system_certificates_refresh,
+            system_certificates::system_certificates_dismiss_notice,
+            system_certificates::system_certificates_dismiss_failure,
             windows::commands::welcome_state,
             windows::commands::open_project,
             windows::commands::open_folder,
@@ -148,6 +173,9 @@ pub fn run() {
             jobs::commands::job_stop,
             jobs::commands::job_answer_permission,
             jobs::commands::job_remove,
+            jobs::commands::job_sub_agents,
+            jobs::commands::job_sub_agent_conversation,
+            jobs::commands::job_sub_agents_view,
             jobs::commands::run_task,
             jobs::commands::run_all,
             jobs::commands::scan_system,
@@ -156,6 +184,19 @@ pub fn run() {
             general::commands::general_stop,
             general::commands::general_answer_permission,
             general::commands::general_clear,
+            general::commands::general_sub_agents,
+            general::commands::general_sub_agent_conversation,
+            general::commands::general_sub_agents_view,
+            ask::commands::ask_open,
+            ask::commands::ask_list,
+            ask::commands::ask_snapshot,
+            ask::commands::ask_send_message,
+            ask::commands::ask_stop,
+            ask::commands::ask_answer_permission,
+            ask::commands::ask_close,
+            ask::commands::ask_sub_agents,
+            ask::commands::ask_sub_agent_conversation,
+            ask::commands::ask_sub_agents_view,
             requests::requests_list,
             requests::request_read,
             requests::request_new,
@@ -166,6 +207,35 @@ pub fn run() {
             requests::request_image_import,
             requests::request_image,
             requests::requests_flushed,
+            windows::unsaved::files_unsaved,
+            windows::unsaved::files_flushed,
+            file_tabs::commands::file_open,
+            file_tabs::commands::file_reload,
+            file_tabs::commands::file_save,
+            file_tabs::commands::file_close,
+            assets::commands::assets_list,
+            assets::commands::assets_copy_in,
+            assets::commands::assets_rename,
+            assets::commands::assets_delete,
+            assets::commands::assets_drag_out,
+            notes::commands::notes_read,
+            notes::commands::notes_write,
+            notes::commands::notes_image,
+            notes::commands::notes_add_pasted,
+            notes::commands::notes_add_dropped,
+            notes::commands::notes_trash,
+            notes::commands::notes_flushed,
+            file_view::commands::files_open_view,
+            file_view::commands::files_expand,
+            file_view::commands::files_collapse,
+            file_view::commands::files_folders,
+            file_view::commands::files_leave,
+            file_view::commands::files_create,
+            file_view::commands::files_rename,
+            file_view::commands::files_move,
+            file_view::commands::files_copy_in,
+            file_view::commands::files_delete,
+            windows::unsaved::files_close_key,
             rounds::commands::question_round_get,
             rounds::commands::question_round_act
         ])
@@ -192,6 +262,27 @@ pub fn run() {
                 }),
             );
 
+            // The events of the File view's tabs and of the agent lock have somewhere to go before
+            // the first conversation of an agent can take a lock.
+            handle
+                .state::<AppState>()
+                .file_events
+                .attach(Arc::new(file_tabs::events::AppSink(handle.clone())));
+            // The tree of the File view tells its window when a listed folder changes.
+            handle
+                .state::<AppState>()
+                .file_view
+                .attach(file_view::emitter(handle.clone()));
+            // The assets of a project tell its window when their list changes.
+            handle
+                .state::<AppState>()
+                .assets
+                .attach(assets::emitter(handle.clone()));
+            // The notes of a project tell its window when they change on disk (not by Weaver).
+            handle
+                .state::<AppState>()
+                .notes_changes
+                .attach(notes::changes::emitter(handle.clone()));
             // The jobs of the agent: before the windows and the CLI socket, which use them.
             let jobs = jobs::install(&handle);
             requests::install(&handle, &jobs);
@@ -208,6 +299,18 @@ pub fn run() {
                 }),
             );
 
+            // System Certificates: the bundle on disk and the setting; an export, when due, runs
+            // on the blocking pool and never holds up the start. It is spawned before `omp`: the
+            // age of the bundle and the Zscaler turn-on are decided before omp's first check,
+            // which waits for an export that started then (`SystemCertificates::startup_export`).
+            let certificates_handle = handle.clone();
+            startup::spawn(
+                &handle,
+                Step::app("system certificates", move || {
+                    system_certificates::start(&certificates_handle)
+                }),
+            );
+
             // omp: finds it, asks its version and models, and follows the `ompPath` setting.
             let omp_handle = handle.clone();
             startup::spawn(&handle, Step::app("omp", move || omp::start(&omp_handle)));
@@ -219,14 +322,14 @@ pub fn run() {
             let sidecar_dirs = dirs.clone();
             startup::spawn(
                 &handle,
-                Step::app("trama command line", move || {
+                Step::app("weaver command line", move || {
                     match sidecar::install(&sidecar_dirs) {
-                        Ok(sidecar::SyncOutcome::SourceMissing) => {
-                            Err("the bundled `trama` is missing or empty; it was not copied"
-                                .to_owned())
-                        }
+                        Ok(sidecar::SyncOutcome::SourceMissing) => Err(
+                            "the bundled `weaver-cli` is missing or empty; it was not copied"
+                                .to_owned(),
+                        ),
                         Ok(_) => Ok(()),
-                        Err(error) => Err(format!("cannot install `trama`: {error}")),
+                        Err(error) => Err(format!("cannot install `weaver`: {error}")),
                     }
                 }),
             );
@@ -297,6 +400,16 @@ fn on_exit_or_destroyed(app: &AppHandle, event: RunEvent) {
         } => {
             if let Some(project_id) = pictures::project_of_label(&label) {
                 app.state::<AppState>().pictures.close(project_id);
+                // `window.CLOSED`: the File view's listings and watches go at once.
+                app.state::<AppState>().file_view.close_project(project_id);
+                // The list of the assets goes with the window; a copy still running goes on to its end.
+                app.state::<AppState>().assets.close_project(project_id);
+                // Nothing of the notes events is kept for the project.
+                app.state::<AppState>()
+                    .notes_changes
+                    .close_project(project_id);
+                // The notes' remembered hash goes with the window; a write still running goes on to its end.
+                app.state::<AppState>().notes.close_project(project_id);
             }
         }
         _ => {}

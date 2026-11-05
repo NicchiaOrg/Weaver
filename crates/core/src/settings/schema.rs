@@ -20,6 +20,8 @@ pub enum FieldKind {
     Integer,
     /// One of the `choices`, saved on choice.
     Choice,
+    /// A boolean, shown as a switch and saved at once; its value is `true` or `false`.
+    Boolean,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -123,6 +125,12 @@ pub fn field(key: SettingKey) -> SettingField {
             None,
             FieldKind::Choice,
         ),
+        SettingKey::SystemCertificatesEnabled => (
+            "System Certificates",
+            "omp trusts the certificates your system trusts, for proxies that inspect HTTPS. Replaces NODE_EXTRA_CA_CERTS, SSL_CERT_FILE and similar variables.",
+            None,
+            FieldKind::Boolean,
+        ),
     };
     let choices = match key {
         SettingKey::Theme => choices(&Theme::ALL, Theme::as_str, Theme::label),
@@ -209,6 +217,14 @@ mod tests {
                 "Sublime Text",
                 "Custom command"
             ]
+        );
+        assert_eq!(
+            by_key(SettingKey::SystemCertificatesEnabled).default_value,
+            "false"
+        );
+        assert_eq!(
+            by_key(SettingKey::SystemCertificatesEnabled).kind,
+            FieldKind::Boolean
         );
         assert!(by_key(SettingKey::Language).choices.is_empty());
     }

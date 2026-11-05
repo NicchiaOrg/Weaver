@@ -13,7 +13,7 @@ pub fn all() -> &'static [Command] {
     &REGISTRY
 }
 
-/// The command `trama <object> <verb>`.
+/// The command `weaver <object> <verb>`.
 pub fn find(object: &str, verb: &str) -> Option<&'static Command> {
     REGISTRY
         .iter()
@@ -32,7 +32,7 @@ pub fn objects() -> Vec<(&'static str, Vec<&'static Command>)> {
     grouped
 }
 
-/// The Markdown command reference installed with the `trama-design` skill (`COMMANDS.md`).
+/// The Markdown command reference installed with the `weaver-design` skill (`COMMANDS.md`).
 pub fn command_reference() -> String {
     crate::help::command_reference()
 }
@@ -43,7 +43,7 @@ pub fn command_reference_source() -> std::path::PathBuf {
         .join("..")
         .join("core")
         .join("assets")
-        .join(trama_core::agent_files::COMMAND_REFERENCE_ASSET)
+        .join(weaver_core::agent_files::COMMAND_REFERENCE_ASSET)
 }
 
 #[cfg(test)]
@@ -82,7 +82,7 @@ mod tests {
             assert!(
                 command
                     .example
-                    .starts_with(&format!("trama {} {}", command.object, command.verb)),
+                    .starts_with(&format!("weaver {} {}", command.object, command.verb)),
                 "{name}: example"
             );
             assert!(!command.output.is_empty(), "{name}: output fields");
@@ -113,15 +113,15 @@ mod tests {
     }
 
     /// The reference in the skills is the registry's: edit the commands, then regenerate with
-    /// `cargo run -p trama-cli --example write_command_reference` and build again.
+    /// `cargo run -p weaver-cli --example write_command_reference` and build again.
     #[test]
     fn the_command_reference_of_the_skills_is_the_one_the_registry_renders() {
         let rendered = command_reference();
         assert!(rendered.ends_with('\n') && !rendered.contains('\r'));
         assert_eq!(
             rendered,
-            trama_core::agent_files::command_reference(),
-            "COMMANDS.md differs from the registry: run `cargo run -p trama-cli --example write_command_reference`, then build again"
+            weaver_core::agent_files::command_reference(),
+            "COMMANDS.md differs from the registry: run `cargo run -p weaver-cli --example write_command_reference`, then build again"
         );
     }
 

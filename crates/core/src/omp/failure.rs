@@ -1,76 +1,232 @@
 //! Why an omp command failed, in words for the developer (`requirements/tech#omp`, "Failure
 //! reasons"): the last non-empty line of stderr, else `exit code N`, `could not start omp` or
-//! `timed out`. A certificate or proxy marker in stderr adds a plain hint.
+//! `timed out`. [`classify`] and [`explanation`] tell whether a failure text is a certificate or
+//! an HTTP error that a proxy inspecting HTTPS traffic may cause, and say it in plain words.
 
-use std::time::Duration;
+use crate::process::timed::Failure;
 
-/// A command that did not complete normally.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Failure {
-    /// The program could not be started.
-    NotStarted,
-    /// The limit passed; the process was killed.
-    TimedOut { limit: Duration },
-    /// The process ended with a failure status (`code` is `None` when a signal ended it).
-    Exit { code: Option<i32>, stderr: String },
-}
-
-/// Markers of an HTTPS-inspecting proxy or security tool.
-const CERTIFICATE_MARKERS: [&str; 6] = [
+/// Codes of a certificate error, matched with their capitals. A longer code comes before the one
+/// it starts with, so that the code reported is the exact one.
+pub const CERTIFICATE_CODES: [&str; 8] = [
     "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+    "UNABLE_TO_GET_ISSUER_CERT",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
     "SELF_SIGNED_CERT_IN_CHAIN",
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
     "CERT_HAS_EXPIRED",
-    "certificate verify failed",
-    "SSL certificate problem",
-    "curl: (60)",
+    "CERT_UNTRUSTED",
+    "ERR_TLS_CERT_ALTNAME_INVALID",
 ];
 
-pub const CERTIFICATE_HINT: &str =
-    "A proxy or security tool is likely inspecting HTTPS, and omp must trust its certificate.";
-pub const PROXY_HINT: &str =
-    "A proxy or the provider refused the request: check the proxy settings or try again later.";
+/// Phrases of a certificate error, in lower case, matched ignoring case.
+pub const CERTIFICATE_PHRASES: [&str; 6] = [
+    "unable to get local issuer certificate",
+    "self signed certificate in certificate chain",
+    "self-signed certificate in certificate chain",
+    "certificate verify failed",
+    "ssl certificate problem",
+    "curl: (60)",
+];
 
 /// The last non-empty line of `stderr`, trimmed.
 pub fn last_line(stderr: &str) -> Option<&str> {
     stderr.lines().map(str::trim).rfind(|line| !line.is_empty())
 }
 
-/// The hint that goes with `stderr`, when it carries a certificate marker, else an HTTP `403`,
-/// `407` or `5xx` (`HTTP <code>`, `status <code>`, `<code> <phrase>`).
-pub fn hint(stderr: &str) -> Option<&'static str> {
-    if CERTIFICATE_MARKERS
-        .iter()
-        .any(|marker| stderr.contains(marker))
-    {
-        return Some(CERTIFICATE_HINT);
+/// What a failure text says about a proxy that inspects HTTPS traffic
+/// (`requirements/rules#system-certificates`, "Certificate error" and "HTTP error").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyProblem {
+    /// An error about a server's certificate; `marker` is the code or phrase that matched (a code
+    /// with its capitals, a phrase in lower case).
+    Certificate { marker: &'static str },
+    /// An HTTP refusal: `403`, `407` or a code from `500` to `599`.
+    Http { code: u16 },
+}
+
+/// Which kind of proxy problem `text` describes, if any. `text` is the whole stderr of a failed
+/// omp command, an ACP error message, or the stderr tail of a job or General, never only the
+/// line kept as the reason. A certificate error wins over an HTTP code.
+pub fn classify(text: &str) -> Option<ProxyProblem> {
+    if let Some(marker) = certificate_marker(text) {
+        return Some(ProxyProblem::Certificate { marker });
     }
-    has_refusing_status(stderr).then_some(PROXY_HINT)
+    http_code(text).map(|code| ProxyProblem::Http { code })
 }
 
-fn refusing(code: &str) -> bool {
-    matches!(code.parse::<u16>(), Ok(403 | 407 | 500..=599)) && code.len() == 3
-}
-
-fn has_refusing_status(stderr: &str) -> bool {
-    let tokens: Vec<&str> = stderr
-        .split(|c: char| {
-            c.is_whitespace() || matches!(c, ',' | ';' | ':' | '(' | ')' | '[' | ']' | '"' | '\'')
-        })
-        .filter(|t| !t.is_empty())
-        .collect();
-    tokens.iter().enumerate().any(|(i, token)| {
-        if !refusing(token) {
-            return false;
+/// The explanation of `problem` in plain words, with no final full stop so that each place can
+/// embed it (`requirements/ui#system-certificates`, "Proxy explanations"). With
+/// `system_certificates_on` the text does not suggest turning System Certificates on.
+pub fn explanation(problem: ProxyProblem, system_certificates_on: bool) -> String {
+    match (problem, system_certificates_on) {
+        (ProxyProblem::Certificate { .. }, false) => CERTIFICATE_OFF.to_owned(),
+        (ProxyProblem::Certificate { .. }, true) => CERTIFICATE_ON.to_owned(),
+        (ProxyProblem::Http { code }, false) => {
+            format!("omp received an HTTP {code} error; {HTTP_BLOCKING}, {TURN_ON}")
         }
-        let before = i.checked_sub(1).map(|j| tokens[j].to_ascii_lowercase());
-        let after_is_phrase = tokens
-            .get(i + 1)
-            .is_some_and(|next| next.chars().next().is_some_and(char::is_uppercase));
-        let named = before
-            .as_deref()
-            .is_some_and(|b| b == "http" || b == "status" || b.starts_with("http/"));
-        named || after_is_phrase
+        (ProxyProblem::Http { code }, true) => {
+            format!("omp received an HTTP {code} error; {HTTP_BLOCKING}")
+        }
+    }
+}
+
+/// [`classify`] then [`explanation`]: the explanation that replaces the reason of a failure whose
+/// `text` is a certificate or HTTP error, else `None`.
+pub fn explain(text: &str, system_certificates_on: bool) -> Option<String> {
+    classify(text).map(|problem| explanation(problem, system_certificates_on))
+}
+
+/// The text of `Missing` after a failed installer (`requirements/ui#system-certificates`, "Failed
+/// installer"), with the final full stop. With the setting off it also says that turning System
+/// Certificates on may fix it.
+pub fn installer_failed_text(exit_code: i32, system_certificates_on: bool) -> String {
+    let mut text = format!(
+        "The omp installer failed (exit code {exit_code}); see the terminal. A corporate proxy that inspects HTTPS traffic is a common cause."
+    );
+    if !system_certificates_on {
+        text.push_str(" Turning on System Certificates in Weaver's settings may fix it.");
+    }
+    text
+}
+
+const CERTIFICATE_OFF: &str = "omp could not verify a server's certificate; a corporate proxy that inspects HTTPS traffic is the usual cause, and turning on System Certificates in Weaver's settings may fix it";
+const CERTIFICATE_ON: &str = "omp could not verify a server's certificate, even with System Certificates on; a corporate proxy that inspects HTTPS traffic is the usual cause";
+const HTTP_BLOCKING: &str =
+    "a corporate proxy that inspects HTTPS traffic may be blocking the request";
+const TURN_ON: &str = "and turning on System Certificates in Weaver's settings may fix it";
+
+fn certificate_marker(text: &str) -> Option<&'static str> {
+    if let Some(code) = CERTIFICATE_CODES
+        .iter()
+        .copied()
+        .find(|code| text.contains(code))
+    {
+        return Some(code);
+    }
+    let lower = text.to_lowercase();
+    CERTIFICATE_PHRASES
+        .iter()
+        .copied()
+        .find(|phrase| lower.contains(phrase))
+}
+
+/// Whether `code` is one the rules call an HTTP error.
+fn is_refusing(code: u16) -> bool {
+    matches!(code, 403 | 407 | 500..=599)
+}
+
+/// The standard reason phrase of `code`, in lower case, when the rules list one.
+fn standard_phrase(code: u16) -> Option<&'static str> {
+    Some(match code {
+        403 => "forbidden",
+        407 => "proxy authentication required",
+        500 => "internal server error",
+        501 => "not implemented",
+        502 => "bad gateway",
+        503 => "service unavailable",
+        504 => "gateway timeout",
+        505 => "http version not supported",
+        506 => "variant also negotiates",
+        507 => "insufficient storage",
+        508 => "loop detected",
+        510 => "not extended",
+        511 => "network authentication required",
+        _ => return None,
     })
+}
+
+/// The forms that put the word before the code: `HTTP <code>`, `status <code>`, `status: <code>`,
+/// `status code <code>`, `statusCode: <code>` and `returned error: <code>`, in lower case.
+/// `HTTP/<version> <code>` is checked apart.
+const CODE_PREFIXES: [&str; 6] = [
+    "http",
+    "status",
+    "status:",
+    "status code",
+    "statuscode:",
+    "returned error:",
+];
+
+/// The first code of the text, by position, that is written in one of the forms of the rules.
+fn http_code(text: &str) -> Option<u16> {
+    let lower = text.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        if !bytes[at].is_ascii_digit() {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while at < bytes.len() && bytes[at].is_ascii_digit() {
+            at += 1;
+        }
+        // Only a whole number of three digits, not part of a longer or decimal number.
+        if at - start != 3 || is_inside_decimal(bytes, start, at) {
+            continue;
+        }
+        let Ok(code) = lower[start..at].parse::<u16>() else {
+            continue;
+        };
+        if is_refusing(code)
+            && (written_after_word(&lower[..start]) || has_phrase(code, &lower[at..]))
+        {
+            return Some(code);
+        }
+    }
+    None
+}
+
+/// A digit run joined to other digits by a point (`1.503`, `503.2`).
+fn is_inside_decimal(bytes: &[u8], start: usize, end: usize) -> bool {
+    let joined_before = start >= 2 && bytes[start - 1] == b'.' && bytes[start - 2].is_ascii_digit();
+    let joined_after =
+        bytes.get(end) == Some(&b'.') && bytes.get(end + 1).is_some_and(u8::is_ascii_digit);
+    joined_before || joined_after
+}
+
+/// Whether a character that does not continue a word (or nothing) ends `before`.
+fn ends_a_word(before: &str) -> bool {
+    before
+        .chars()
+        .next_back()
+        .is_none_or(|c| !c.is_ascii_alphanumeric())
+}
+
+/// Whether `before` (the lower-cased text up to a code) ends with one of the words that name a
+/// code, then at least one blank.
+fn written_after_word(before: &str) -> bool {
+    let word_end = before.trim_end_matches([' ', '\t']);
+    if word_end.len() == before.len() {
+        return false;
+    }
+    if CODE_PREFIXES
+        .iter()
+        .any(|prefix| word_end.strip_suffix(prefix).is_some_and(ends_a_word))
+    {
+        return true;
+    }
+    // `HTTP/<version> <code>`.
+    let without_version = word_end.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    without_version.len() < word_end.len()
+        && without_version
+            .strip_suffix("http/")
+            .is_some_and(ends_a_word)
+}
+
+/// Whether `after` (the lower-cased text after a code) is a blank and the standard phrase of
+/// `code`, as whole words.
+fn has_phrase(code: u16, after: &str) -> bool {
+    let Some(phrase) = standard_phrase(code) else {
+        return false;
+    };
+    let phrase_start = after.trim_start_matches([' ', '\t']);
+    phrase_start.len() < after.len()
+        && phrase_start.strip_prefix(phrase).is_some_and(|rest| {
+            rest.chars()
+                .next()
+                .is_none_or(|c| !c.is_ascii_alphanumeric())
+        })
 }
 
 impl Failure {
@@ -88,20 +244,21 @@ impl Failure {
         }
     }
 
-    /// [`Failure::reason`] followed by the hint for a certificate or proxy problem.
-    pub fn reason_with_hint(&self) -> String {
-        let reason = self.reason();
-        match self.hint() {
-            Some(hint) => format!("{} {hint}", reason.trim_end_matches('.').to_owned() + "."),
-            None => reason,
+    /// The explanation of a certificate or HTTP error in the whole stderr
+    /// (`requirements/rules#system-certificates`), chosen with the setting as it is now
+    /// (`system_certificates_on`). Other failures have none.
+    pub fn explained(&self, system_certificates_on: bool) -> Option<String> {
+        match self {
+            Failure::Exit { stderr, .. } => explain(stderr, system_certificates_on),
+            _ => None,
         }
     }
 
-    fn hint(&self) -> Option<&'static str> {
-        match self {
-            Failure::Exit { stderr, .. } => hint(stderr),
-            _ => None,
-        }
+    /// The reason of the failure: its explanation when it is a certificate or HTTP error, else
+    /// [`Failure::reason`]. Decide it when the failure happens and never write it again.
+    pub fn reason_for(&self, system_certificates_on: bool) -> String {
+        self.explained(system_certificates_on)
+            .unwrap_or_else(|| self.reason())
     }
 
     /// The reason in the words of the status box of `Missing`: `omp did not answer within 15 s`,
@@ -115,14 +272,21 @@ impl Failure {
                 Some(code) => format!("omp exited with code {code}"),
                 None => "omp was stopped".to_owned(),
             },
-            other => other.reason_with_hint(),
+            other => other.reason(),
         }
+    }
+
+    /// [`Failure::status_text`], or the explanation of a certificate or HTTP error.
+    pub fn status_text_for(&self, system_certificates_on: bool) -> String {
+        self.explained(system_certificates_on)
+            .unwrap_or_else(|| self.status_text())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn exit(code: i32, stderr: &str) -> Failure {
         Failure::Exit {
@@ -167,45 +331,322 @@ mod tests {
     }
 
     #[test]
-    fn a_certificate_marker_adds_the_proxy_hint() {
-        for marker in CERTIFICATE_MARKERS {
+    fn a_certificate_or_http_error_in_the_whole_stderr_replaces_the_reason() {
+        let failure = exit(
+            1,
+            "error: self signed\nSELF_SIGNED_CERT_IN_CHAIN\nat host\n",
+        );
+        assert_eq!(failure.reason(), "at host");
+        assert_eq!(
+            failure.reason_for(false),
+            explanation(
+                ProxyProblem::Certificate {
+                    marker: "SELF_SIGNED_CERT_IN_CHAIN"
+                },
+                false
+            )
+        );
+        assert!(failure
+            .reason_for(false)
+            .contains("turning on System Certificates"));
+        assert!(!failure
+            .reason_for(true)
+            .contains("turning on System Certificates"));
+        assert!(failure
+            .reason_for(true)
+            .contains("even with System Certificates on"));
+        assert_eq!(
+            exit(22, "request failed: HTTP 407\nretrying").reason_for(true),
+            "omp received an HTTP 407 error; a corporate proxy that inspects HTTPS traffic may be blocking the request"
+        );
+    }
+
+    #[test]
+    fn the_status_text_of_missing_is_replaced_the_same_way() {
+        let failure = exit(1, "curl: (60) SSL certificate problem\nclosing");
+        assert_eq!(failure.status_text(), "closing");
+        assert_eq!(
+            failure.status_text_for(false),
+            explain("curl: (60) SSL certificate problem", false).unwrap()
+        );
+    }
+
+    #[test]
+    fn other_failures_keep_their_reason() {
+        assert_eq!(exit(2, "bad flag").reason_for(false), "bad flag");
+        assert_eq!(exit(2, "HTTP 404").reason_for(false), "HTTP 404");
+        assert_eq!(exit(2, "").reason_for(true), "exit code 2");
+        assert_eq!(Failure::NotStarted.reason_for(false), "could not start omp");
+        assert_eq!(
+            Failure::TimedOut {
+                limit: Duration::from_secs(15)
+            }
+            .status_text_for(false),
+            "omp did not answer within 15 s"
+        );
+    }
+
+    fn http(text: &str) -> Option<u16> {
+        match classify(text) {
+            Some(ProxyProblem::Http { code }) => Some(code),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn every_certificate_code_and_phrase_is_a_certificate_error() {
+        for code in CERTIFICATE_CODES {
             assert_eq!(
-                hint(&format!("fetch failed: {marker}")),
-                Some(CERTIFICATE_HINT),
-                "{marker}"
+                classify(&format!("fetch failed: {code} at host")),
+                Some(ProxyProblem::Certificate { marker: code }),
+                "{code}"
             );
         }
-        let text = exit(1, "error: self signed\nSELF_SIGNED_CERT_IN_CHAIN").reason_with_hint();
+        for phrase in CERTIFICATE_PHRASES {
+            for text in [
+                phrase.to_owned(),
+                phrase.to_uppercase(),
+                format!("Error: {phrase}."),
+            ] {
+                assert_eq!(
+                    classify(&text),
+                    Some(ProxyProblem::Certificate { marker: phrase }),
+                    "{text}"
+                );
+            }
+        }
         assert_eq!(
-            text,
-            format!("SELF_SIGNED_CERT_IN_CHAIN. {CERTIFICATE_HINT}")
+            classify("Error: Self-Signed Certificate in certificate chain"),
+            Some(ProxyProblem::Certificate {
+                marker: "self-signed certificate in certificate chain"
+            })
         );
     }
 
     #[test]
-    fn an_http_refusal_adds_the_proxy_or_provider_hint() {
-        assert_eq!(hint("request failed: HTTP 403"), Some(PROXY_HINT));
-        assert_eq!(hint("got status 407"), Some(PROXY_HINT));
-        assert_eq!(hint("502 Bad Gateway"), Some(PROXY_HINT));
-        assert_eq!(hint("HTTP/1.1 503 Service Unavailable"), Some(PROXY_HINT));
-        assert_eq!(hint("status: 500"), Some(PROXY_HINT));
+    fn certificate_codes_match_their_capitals_only() {
+        assert_eq!(classify("unable_to_get_issuer_cert_locally"), None);
+        assert_eq!(classify("Cert_Has_Expired"), None);
+        assert_eq!(classify("CERT_HAS_EXPIRE"), None);
     }
 
     #[test]
-    fn other_numbers_and_codes_add_no_hint() {
-        assert_eq!(hint("HTTP 404"), None);
-        assert_eq!(hint("exit code 403"), None);
-        assert_eq!(hint("read 5000 bytes"), None);
-        assert_eq!(hint("status 200"), None);
-        assert_eq!(hint("4030 files"), None);
-        assert_eq!(hint(""), None);
-    }
-
-    #[test]
-    fn a_certificate_marker_wins_over_an_http_code() {
+    fn the_longer_code_is_the_one_reported() {
         assert_eq!(
-            hint("HTTP 502 curl: (60) SSL certificate problem"),
-            Some(CERTIFICATE_HINT)
+            classify("UNABLE_TO_GET_ISSUER_CERT_LOCALLY"),
+            Some(ProxyProblem::Certificate {
+                marker: "UNABLE_TO_GET_ISSUER_CERT_LOCALLY"
+            })
         );
+        assert_eq!(
+            classify("UNABLE_TO_GET_ISSUER_CERT"),
+            Some(ProxyProblem::Certificate {
+                marker: "UNABLE_TO_GET_ISSUER_CERT"
+            })
+        );
+    }
+
+    #[test]
+    fn every_http_form_and_code_is_an_http_error() {
+        let codes = [
+            403, 407, 500, 501, 502, 503, 504, 505, 506, 507, 508, 509, 510, 511, 599,
+        ];
+        for code in codes {
+            for form in [
+                format!("HTTP {code}"),
+                format!("http {code}"),
+                format!("HTTP/1.1 {code}"),
+                format!("HTTP/2 {code}"),
+                format!("status {code}"),
+                format!("Status: {code}"),
+                format!("status code {code}"),
+                format!("statusCode: {code}"),
+                format!("returned error: {code}"),
+                format!("Request failed, got HTTP {code}."),
+                format!("({code} again)\nHTTP {code}"),
+            ] {
+                assert_eq!(http(&form), Some(code), "{form}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_standard_phrase_gives_its_code() {
+        for (code, phrase) in [
+            (403, "Forbidden"),
+            (407, "Proxy Authentication Required"),
+            (500, "Internal Server Error"),
+            (501, "Not Implemented"),
+            (502, "Bad Gateway"),
+            (503, "Service Unavailable"),
+            (504, "Gateway Timeout"),
+            (505, "HTTP Version Not Supported"),
+            (506, "Variant Also Negotiates"),
+            (507, "Insufficient Storage"),
+            (508, "Loop Detected"),
+            (510, "Not Extended"),
+            (511, "Network Authentication Required"),
+        ] {
+            for text in [
+                format!("{code} {phrase}"),
+                format!("got {code} {} from the proxy", phrase.to_lowercase()),
+                format!("<h1>{code} {phrase}</h1>"),
+                format!("{code} {phrase}."),
+            ] {
+                assert_eq!(http(&text), Some(code), "{text}");
+            }
+        }
+        // A phrase of another code, or words that are not the phrase.
+        assert_eq!(http("403 Bad Gateway"), None);
+        assert_eq!(http("502 something went wrong"), None);
+        assert_eq!(http("503 Service Unavailables"), None);
+        assert_eq!(http("502Bad Gateway"), None);
+    }
+
+    #[test]
+    fn the_first_match_in_the_text_gives_the_code() {
+        assert_eq!(http("HTTP 503 after 502 Bad Gateway"), Some(503));
+        assert_eq!(http("502 Bad Gateway, then HTTP 403"), Some(502));
+        assert_eq!(http("HTTP 404 then status 407"), Some(407));
+        assert_eq!(http("code 503 and HTTP 504"), Some(504));
+    }
+
+    #[test]
+    fn other_codes_and_bare_numbers_are_not_http_errors() {
+        for text in [
+            "HTTP 401",
+            "HTTP 404",
+            "status: 429",
+            "HTTP 200",
+            "HTTP 600",
+            "HTTP 499",
+            "HTTP 402",
+            "503",
+            "exit code 403",
+            "error 500 happened",
+            "403 files, 407 lines",
+            "HTTP 4030",
+            "HTTP 5030",
+            "HTTP 1503",
+            "status 5003",
+            "read 5000 bytes",
+            "v1.503",
+            "HTTP 503.2",
+            "xstatus 503",
+            "https 503",
+            "HTTP:503",
+            "",
+        ] {
+            assert_eq!(classify(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn the_certificate_wins_over_the_http_code_wherever_it_stands() {
+        assert_eq!(
+            classify("HTTP 502 then CERT_HAS_EXPIRED"),
+            Some(ProxyProblem::Certificate {
+                marker: "CERT_HAS_EXPIRED"
+            })
+        );
+        assert_eq!(
+            classify("curl: (60) first\nHTTP 403"),
+            Some(ProxyProblem::Certificate {
+                marker: "curl: (60)"
+            })
+        );
+    }
+
+    #[test]
+    fn the_whole_text_is_tested_not_only_its_last_line() {
+        let stderr =
+            "fetch failed\n  at node:internal\n  code: 'SELF_SIGNED_CERT_IN_CHAIN'\nretrying later";
+        assert!(matches!(
+            classify(stderr),
+            Some(ProxyProblem::Certificate { .. })
+        ));
+        assert_eq!(http("HTTP 502\nsome other line\nlast line"), Some(502));
+    }
+
+    #[test]
+    fn the_explanations_are_the_exact_texts() {
+        let certificate = ProxyProblem::Certificate {
+            marker: "CERT_HAS_EXPIRED",
+        };
+        assert_eq!(
+            explanation(certificate, false),
+            "omp could not verify a server's certificate; a corporate proxy that inspects HTTPS traffic is the usual cause, and turning on System Certificates in Weaver's settings may fix it"
+        );
+        assert_eq!(
+            explanation(certificate, true),
+            "omp could not verify a server's certificate, even with System Certificates on; a corporate proxy that inspects HTTPS traffic is the usual cause"
+        );
+        let refusal = ProxyProblem::Http { code: 407 };
+        assert_eq!(
+            explanation(refusal, false),
+            "omp received an HTTP 407 error; a corporate proxy that inspects HTTPS traffic may be blocking the request, and turning on System Certificates in Weaver's settings may fix it"
+        );
+        assert_eq!(
+            explanation(refusal, true),
+            "omp received an HTTP 407 error; a corporate proxy that inspects HTTPS traffic may be blocking the request"
+        );
+    }
+
+    #[test]
+    fn explain_answers_only_for_a_proxy_problem() {
+        assert_eq!(explain("HTTP 404", false), None);
+        assert_eq!(
+            explain("HTTP 503", true).as_deref(),
+            Some("omp received an HTTP 503 error; a corporate proxy that inspects HTTPS traffic may be blocking the request")
+        );
+        assert_eq!(
+            explain("SSL certificate problem", false),
+            Some(explanation(
+                ProxyProblem::Certificate {
+                    marker: "ssl certificate problem"
+                },
+                false
+            ))
+        );
+    }
+
+    #[test]
+    fn the_failed_installer_text_depends_on_the_setting() {
+        assert_eq!(
+            installer_failed_text(22, true),
+            "The omp installer failed (exit code 22); see the terminal. A corporate proxy that inspects HTTPS traffic is a common cause."
+        );
+        assert_eq!(
+            installer_failed_text(1, false),
+            "The omp installer failed (exit code 1); see the terminal. A corporate proxy that inspects HTTPS traffic is a common cause. Turning on System Certificates in Weaver's settings may fix it."
+        );
+    }
+
+    #[test]
+    fn no_explanation_ends_with_a_full_stop_or_names_a_product() {
+        let problems = [
+            ProxyProblem::Certificate { marker: "x" },
+            ProxyProblem::Http { code: 502 },
+        ];
+        for problem in problems {
+            for on in [false, true] {
+                let text = explanation(problem, on);
+                assert!(!text.ends_with('.'), "{text}");
+                let lower = text.to_lowercase();
+                for product in [
+                    "zscaler",
+                    "netskope",
+                    "forcepoint",
+                    "fortinet",
+                    "cisco",
+                    "palo alto",
+                    "cloudflare",
+                    "symantec",
+                    "blue coat",
+                ] {
+                    assert!(!lower.contains(product), "{text}");
+                }
+            }
+        }
     }
 }

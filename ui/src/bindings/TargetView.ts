@@ -3,4 +3,4 @@
 /**
  * The views a reference may be focused in.
  */
-export type TargetView = "diagram" | "requirements" | "specs";
+export type TargetView = "requirements" | "specs";

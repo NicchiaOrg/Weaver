@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-system-certificates-refresh"
+description = "Enables the system_certificates_refresh command without any pre-configured scope."
+commands.allow = ["system_certificates_refresh"]
+
+[[permission]]
+identifier = "deny-system-certificates-refresh"
+description = "Denies the system_certificates_refresh command without any pre-configured scope."
+commands.deny = ["system_certificates_refresh"]

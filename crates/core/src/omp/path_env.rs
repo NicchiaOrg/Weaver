@@ -122,8 +122,8 @@ pub fn child_path(
 mod tests {
     use std::time::Duration;
 
-    use crate::omp::failure::Failure;
-    use crate::omp::run::Output;
+    use crate::process::timed::Failure;
+    use crate::process::timed::Output;
 
     use super::*;
 
@@ -239,11 +239,13 @@ mod tests {
 
     #[test]
     fn the_child_path_orders_weavers_folder_omps_buns_then_the_base() {
+        // The base is built with the list separator of the system (`:` on Unix, `;` on Windows).
+        let base = std::env::join_paths(["/x", "/y"]).unwrap();
         let path = child_path(
             Path::new("/w/bin"),
             Some(Path::new("/o")),
             Some(Path::new("/b")),
-            OsStr::new("/x:/y"),
+            &base,
         );
         let folders: Vec<PathBuf> = std::env::split_paths(&path).collect();
         assert_eq!(

@@ -3,7 +3,7 @@ import type { OverlayOption } from "./OverlayOption";
 import type { ViewData } from "./ViewData";
 
 /**
- * The three views of a project at one revision.
+ * The two views of a project at one revision.
  */
 export type ViewSnapshot = { projectId: string, 
 /**

@@ -1,7 +1,7 @@
 //! The settings in the app: the store behind `<config>/settings.json`, the commands the Settings
 //! view uses and the event that tells every window about a change.
 //!
-//! The values, their validation and the file are in `trama_core::settings`; this module adds the
+//! The values, their validation and the file are in `weaver_core::settings`; this module adds the
 //! lazy load (the first use reads the file, so it must happen on the blocking pool or in the
 //! startup step), the broadcast of changes to the rest of the backend and the Tauri commands.
 //!
@@ -20,9 +20,9 @@ use std::sync::{Arc, OnceLock};
 
 use tauri::{AppHandle, Manager};
 use tokio::sync::broadcast;
-use trama_core::paths::AppDirs;
-use trama_core::project::clock::SystemClock;
-use trama_core::settings::{
+use weaver_core::paths::AppDirs;
+use weaver_core::project::clock::SystemClock;
+use weaver_core::settings::{
     SettingChange, SettingKey, Settings, SettingsError, SettingsSnapshot, SettingsStore, FILE_NAME,
 };
 
@@ -221,7 +221,7 @@ mod tests {
         let service = SettingsService::at(dir.path().join("settings.json"));
         assert_eq!(service.current().max_parallel_agents, 4);
         service.apply(&change(SettingKey::Theme, "dark")).unwrap();
-        assert_eq!(service.current().theme, trama_core::settings::Theme::Dark);
+        assert_eq!(service.current().theme, weaver_core::settings::Theme::Dark);
     }
 
     #[test]

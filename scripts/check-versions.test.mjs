@@ -22,8 +22,8 @@ function repository(version, overrides = {}) {
     "Cargo.toml": `[workspace]\nmembers = []\n\n[workspace.package]\nversion = "${version}"\nedition = "2021"\n`,
     "src-tauri/tauri.conf.json": JSON.stringify({ productName: "Weaver", version }),
     "src-tauri/Cargo.toml": `[package]\nname = "weaver"\nversion.workspace = true\n`,
-    "crates/core/Cargo.toml": `[package]\nname = "trama-core"\nversion.workspace = true\n`,
-    "crates/cli/Cargo.toml": `[package]\nname = "trama-cli"\nversion.workspace = true\n`,
+    "crates/core/Cargo.toml": `[package]\nname = "weaver-core"\nversion.workspace = true\n`,
+    "crates/cli/Cargo.toml": `[package]\nname = "weaver-cli"\nversion.workspace = true\n`,
     "ui/package.json": JSON.stringify({ name: "weaver-ui", version }),
     ...overrides,
   };
@@ -43,15 +43,15 @@ test("aligned versions pass", () => {
 });
 
 test("a crate with its own version is compared too", () => {
-  const root = repository("1.2.3", { "crates/cli/Cargo.toml": `[package]\nname = "trama-cli"\nversion = "1.2.3" # same\n` });
+  const root = repository("1.2.3", { "crates/cli/Cargo.toml": `[package]\nname = "weaver-cli"\nversion = "1.2.3" # same\n` });
   assert.deepEqual(mismatches(collectVersions(root)), []);
 });
 
 test("a version that differs in any of the four followers fails and names the file", () => {
   const cases = {
     "src-tauri/Cargo.toml": `[package]\nname = "weaver"\nversion = "1.2.4"\n`,
-    "crates/core/Cargo.toml": `[package]\nname = "trama-core"\nversion = "0.9.0"\n`,
-    "crates/cli/Cargo.toml": `[package]\nname = "trama-cli"\nversion = "1.2.3-rc.1"\n`,
+    "crates/core/Cargo.toml": `[package]\nname = "weaver-core"\nversion = "0.9.0"\n`,
+    "crates/cli/Cargo.toml": `[package]\nname = "weaver-cli"\nversion = "1.2.3-rc.1"\n`,
     "ui/package.json": JSON.stringify({ name: "weaver-ui", version: "2.0.0" }),
   };
   for (const [file, text] of Object.entries(cases)) {

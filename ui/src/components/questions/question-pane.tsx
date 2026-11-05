@@ -1,14 +1,17 @@
+import { MessageCircleQuestion } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MutableRefObject } from "react";
 
 import type { ActionInput } from "@/bindings/ActionInput";
 import type { QuestionRoundView } from "@/bindings/QuestionRoundView";
 import type { QuestionView } from "@/bindings/QuestionView";
 import { GuardedButton } from "@/components/guarded-button";
+import { useOptionalAsks } from "@/components/ask/use-asks";
 import { Markdown } from "@/components/markdown";
 import { canConfirm, picked } from "@/components/questions/question-model";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DialogBody, DialogFooter } from "@/components/ui/dialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
@@ -161,6 +164,19 @@ function QuestionBody({ round, index, question, act, askSkipAll, handlers }: Pan
   const actNow = useRef(act);
   actNow.current = act;
   selectedNow.current = question.draft.selected;
+  const asks = useOptionalAsks();
+
+  /**
+   * `Ask more` on the question in view: a new conversation opens, and the round is reduced to its
+   * bar with the question in view, the choices and the written text as they were. Nothing changes
+   * when the question can no longer be asked about.
+   */
+  function askMore() {
+    flush();
+    void asks?.askMore({ kind: "question", round: round.id, index }).then((id) => {
+      if (id !== null) act({ kind: "minimize", minimized: true });
+    });
+  }
 
   /** Sends the free text now when the backend does not hold it yet. */
   function flush() {
@@ -225,9 +241,19 @@ function QuestionBody({ round, index, question, act, askSkipAll, handlers }: Pan
     <>
       <DialogBody className="flex flex-col gap-4 pr-1">
         <div ref={title} tabIndex={-1} className="flex flex-col gap-2 rounded-md focus-visible:outline-none">
-          <Markdown className="text-base font-medium" holderHeadingLevel={2}>
-            {question.question}
-          </Markdown>
+          <div className="flex items-start gap-2">
+            <Markdown className="min-w-0 flex-1 text-base font-medium" holderHeadingLevel={2}>
+              {question.question}
+            </Markdown>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="size-7 shrink-0" aria-label="Ask more about this question" onClick={askMore}>
+                  <MessageCircleQuestion aria-hidden />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Ask an agent about this question</TooltipContent>
+            </Tooltip>
+          </div>
           {question.context ? <Markdown className="text-sm text-muted-foreground">{question.context}</Markdown> : null}
         </div>
         <Options key={`${round.id}:${index}`} question={question} selected={question.draft.selected} onPick={pick} />

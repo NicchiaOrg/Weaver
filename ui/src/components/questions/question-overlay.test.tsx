@@ -1,4 +1,4 @@
-import { act as reactAct, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act as reactAct, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -6,6 +6,7 @@ import type { ActionInput } from "@/bindings/ActionInput";
 import type { QuestionRoundChanged } from "@/bindings/QuestionRoundChanged";
 import type { QuestionRoundView } from "@/bindings/QuestionRoundView";
 import type { QuestionView } from "@/bindings/QuestionView";
+import { AsksProvider } from "@/components/ask/use-asks";
 import { QuestionRoundLayer } from "@/components/questions/question-overlay";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { call, on } from "@/lib/backend";
@@ -348,5 +349,79 @@ describe("QuestionOverlay", () => {
     const index = await screen.findByRole("navigation", { name: "Questions" });
     expect(within(index).getByRole("button", { name: "Question 1: Answered" })).toBeInTheDocument();
     expect(within(index).getByRole("button", { name: "Question 2: Missing" })).toBeInTheDocument();
+  });
+});
+
+describe("Ask more on the question in view", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  /** The fake round backend, with `ask_open` answered by `open`. */
+  function withAsks(start: QuestionRoundView, open: () => string | null) {
+    const backend = fakeBackend(start);
+    const base = vi.mocked(call).getMockImplementation()!;
+    vi.mocked(call).mockImplementation((async (name: string, args?: unknown) => {
+      if (name === "ask_list") return { projectId: PROJECT, asks: [] };
+      if (name === "ask_open") {
+        const id = open();
+        if (id === null) throw { code: "refused", message: "gone" };
+        return id;
+      }
+      return base(name as never, args as never);
+    }) as never);
+    return backend;
+  }
+
+  function mountWithAsks() {
+    return render(
+      <TooltipProvider>
+        <AsksProvider projectId={PROJECT}>
+          <QuestionRoundLayer projectId={PROJECT}>
+            <main>The project</main>
+          </QuestionRoundLayer>
+        </AsksProvider>
+      </TooltipProvider>,
+    );
+  }
+
+  it("is an icon-only button on the question in view that sends the round and the position, then reduces the round without touching the drafts", async () => {
+    const backend = withAsks(round({ questions: [question("a", { draft: { selected: [1], text: "my note" }, visited: true }), question("b")] }), () => "askaskas");
+    mountWithAsks();
+    const user = userEvent.setup();
+    const dialog = await screen.findByRole("dialog");
+    const button = within(dialog).getByRole("button", { name: "Ask more about this question" });
+    expect(button).toHaveTextContent("");
+    await user.click(button);
+    expect(call).toHaveBeenCalledWith("ask_open", { projectId: PROJECT, target: { kind: "question", round: 7, index: 0 } });
+    await waitFor(() => expect(backend.received.at(-1)).toEqual({ kind: "minimize", minimized: true }));
+    // The round is the bar at the bottom; the question in view, the choices and the text are as they were.
+    const bar = await screen.findByRole("region", { name: "Questions waiting" });
+    expect(bar).toHaveTextContent("question 1 of 2");
+    await user.click(within(bar).getByRole("button", { name: "Open questions" }));
+    const reopened = await screen.findByRole("dialog");
+    expect(within(reopened).getByRole("radio", { name: /Memory/ })).toHaveAttribute("aria-checked", "true");
+    expect(within(reopened).getByRole("textbox", { name: "Your answer (optional)" })).toHaveValue("my note");
+  });
+
+  it("changes nothing when the question can no longer be asked about", async () => {
+    const backend = withAsks(round(), () => null);
+    mountWithAsks();
+    const user = userEvent.setup();
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Ask more about this question" }));
+    await waitFor(() => expect(call).toHaveBeenCalledWith("ask_open", expect.anything()));
+    expect(backend.kinds()).not.toContain("minimize");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("is not in the summary or in the reduced bar", async () => {
+    withAsks(round({ position: { kind: "summary" } }), () => "askaskas");
+    mountWithAsks();
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByRole("button", { name: /Ask more/ })).toBeNull();
+    cleanup();
+    withAsks(round({ minimized: true }), () => "askaskas");
+    mountWithAsks();
+    const bar = await screen.findByRole("region", { name: "Questions waiting" });
+    expect(within(bar).queryByRole("button", { name: /Ask more/ })).toBeNull();
   });
 });

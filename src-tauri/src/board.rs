@@ -1,6 +1,6 @@
 //! The Board in the app: the snapshot the UI shows and the decisions it can take on it.
 //!
-//! What the Board contains and in which order is worked out in `trama_core::project::board`
+//! What the Board contains and in which order is worked out in `weaver_core::project::board`
 //! (the UI never groups, sorts or blocks anything). This module turns that into the wire types of
 //! the UI, adds the ghosts the jobs announced ([`crate::agent_work`]) and exposes the commands:
 //!
@@ -15,17 +15,17 @@ use std::path::Path;
 
 use serde::Serialize;
 use tauri::{AppHandle, State};
-use trama_core::project::board::{
+use ts_rs::TS;
+use weaver_core::project::board::{
     self, ActiveEntry, AgentFacts, BacklogEntry, DeleteBlocker, ProposalState, ResolutionRow,
 };
-use trama_core::project::cards::{Card, CardKind};
-use trama_core::project::history;
-use trama_core::project::image::ProjectImage;
-use trama_core::project::proposal::files::{self, Folders};
-use trama_core::project::proposal::models::ProposalModels;
-use trama_core::project::shortnum::{self, ShortNumbers};
-use trama_core::project::tasks::{self, Blocking};
-use ts_rs::TS;
+use weaver_core::project::cards::{Card, CardKind};
+use weaver_core::project::history;
+use weaver_core::project::image::ProjectImage;
+use weaver_core::project::proposal::files::{self, Folders};
+use weaver_core::project::proposal::models::ProposalModels;
+use weaver_core::project::shortnum::{self, ShortNumbers};
+use weaver_core::project::tasks::{self, Blocking};
 
 use crate::agent_work::Ghost;
 use crate::blocking;
@@ -195,7 +195,7 @@ fn card_ref(numbers: &ShortNumbers, kind: CardKind, id: &str) -> CardRef {
 }
 
 /// The body without its first H1, which the card shows as its title.
-fn body_after_title(card: &Card) -> String {
+pub(crate) fn body_after_title(card: &Card) -> String {
     match card.body.trim_start().strip_prefix("# ") {
         Some(rest) => rest
             .split_once('\n')
@@ -471,7 +471,7 @@ mod tests {
     const DRIFT: &str = "---\nstatus: open\nrefs: []\norigin: aaaaaaaa\ncreated: 2026-11-02T07:00:03.000Z\n---\n# A drift\n";
 
     fn write(root: &Path, rel: &str, text: &str) {
-        let path = root.join(".trama").join(rel);
+        let path = root.join(".weaver").join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
     }

@@ -19,7 +19,9 @@ use super::changes::{Change, ChangeSet};
 use super::check::{check_duplicate_identities, check_sections};
 use super::diagnostic::{has_errors, Diagnostic};
 use super::ids::draw_identity;
-use super::layout::{self, classify, FileClass, MODEL_DIR, VERSIONED_ENTRIES};
+use super::layout::{
+    self, classify, FileClass, DRIFTS_DIR, MODEL_DIR, PROPOSALS_DIR, TASKS_DIR, VERSIONED_ENTRIES,
+};
 use super::model::{
     parse_actor, parse_machine, parse_titled, Actor, Machine, Model, ModelFiles, Titled,
 };
@@ -113,6 +115,19 @@ impl ProjectImage {
         image
     }
 
+    /// Reads only the cards (Proposals, Tasks and Drifts), never the Model, the Requirements,
+    /// the Specs or the History.
+    pub fn load_cards(project_root: &Path) -> Self {
+        let mut image = Self::empty(project_root);
+        let weaver = layout::weaver_dir(project_root);
+        let mut present = BTreeSet::new();
+        for name in [PROPOSALS_DIR, TASKS_DIR, DRIFTS_DIR] {
+            image.scan(&weaver.join(name), name, 0, &mut present);
+        }
+        image.rebuild();
+        image
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -120,26 +135,28 @@ impl ProjectImage {
     /// Reads every file again, parsing only those whose content changed, and forgets the files
     /// that are gone.
     pub fn refresh_all(&mut self) {
-        let trama = layout::trama_dir(&self.root);
+        let weaver = layout::weaver_dir(&self.root);
         let mut present = BTreeSet::new();
         self.folder_issues.clear();
         for name in VERSIONED_ENTRIES {
-            self.scan(&trama.join(name), name, 0, &mut present);
+            self.scan(&weaver.join(name), name, 0, &mut present);
         }
         self.entries.retain(|rel, _| present.contains(rel));
         self.rebuild();
     }
 
-    /// Re-reads only the given paths (absolute, inside `.trama/`): a file is read again, a
-    /// removed file or folder is forgotten, a folder is scanned again. Paths outside `.trama/`
-    /// and hidden ones are ignored.
+    /// Re-reads only the given paths (absolute, inside `.weaver/`): a file is read again, a
+    /// removed file or folder is forgotten, a folder is scanned again. Paths outside `.weaver/`,
+    /// hidden ones, the assets (`.weaver/assets/`) and the notes (`.weaver/notes/`), which the
+    /// image never reads, are ignored.
     pub fn refresh(&mut self, paths: &[PathBuf]) {
         let mut touched = false;
         for path in paths {
             let Some(rel) = layout::rel_key(&self.root, path) else {
                 continue;
             };
-            if layout::is_hidden(&rel) {
+            if layout::is_hidden(&rel) || layout::is_assets_rel(&rel) || layout::is_notes_rel(&rel)
+            {
                 continue;
             }
             touched = true;
@@ -463,7 +480,7 @@ impl ProjectImage {
 
     /// The identities in use for cards of `kind`, from file and folder names, so that a card
     /// that failed to load still keeps its identity. For Tasks (and Proposal Tasks) this is
-    /// `.trama/tasks/`, the `cleared` copies in `history/` and the `tasks/` folders of every
+    /// `.weaver/tasks/`, the `cleared` copies in `history/` and the `tasks/` folders of every
     /// Proposal.
     pub fn used_ids(&self, kind: CardKind) -> BTreeSet<String> {
         let tasks = matches!(kind, CardKind::Task | CardKind::ProposalTask);
@@ -631,6 +648,44 @@ mod tests {
     }
 
     #[test]
+    fn the_notes_folder_never_reaches_the_image() {
+        let dir = tempfile::tempdir().unwrap();
+        sample(dir.path());
+        // Files that would be cards, Model files or Specs anywhere else.
+        for rel in [
+            "notes/notes.md",
+            "notes/tasks/vxdhoylk-a-task.md",
+            "notes/model/system.md",
+            "notes/specs.yaml",
+        ] {
+            put(dir.path(), rel, "garbage");
+        }
+        let mut image = ProjectImage::load(dir.path());
+        let loaded = image.parse_count();
+        assert!(image.paths().all(|p| !p.starts_with("notes")));
+        assert!(image
+            .diagnostics()
+            .iter()
+            .all(|d| d.path == "model/shop/order.md"));
+
+        // Events under `notes/` change nothing: not a parse, not an entry, not a diagnostic.
+        let diagnostics = image.diagnostics().len();
+        let notes = layout::weaver_dir(dir.path()).join("notes");
+        fs::write(notes.join("notes.md"), "other garbage").unwrap();
+        image.refresh(&[
+            notes.clone(),
+            notes.join("notes.md"),
+            notes.join("tasks/vxdhoylk-a-task.md"),
+            notes.join("gone.png"),
+        ]);
+        assert_eq!(image.parse_count(), loaded);
+        assert!(image.paths().all(|p| !p.starts_with("notes")));
+        assert_eq!(image.diagnostics().len(), diagnostics);
+        image.refresh_all();
+        assert_eq!(image.parse_count(), loaded);
+    }
+
+    #[test]
     fn an_unreadable_file_is_reported_and_the_others_load() {
         let dir = tempfile::tempdir().unwrap();
         sample(dir.path());
@@ -747,7 +802,7 @@ mod tests {
 
         // A file appears: picked up by refreshing its folder.
         put(dir.path(), "tasks/aaaaaaaa-new.md", TASK);
-        image.refresh(&[layout::trama_dir(dir.path()).join("tasks")]);
+        image.refresh(&[layout::weaver_dir(dir.path()).join("tasks")]);
         assert_eq!(image.parse_count(), loaded + 2);
         assert_eq!(image.cards_of(CardKind::Task).count(), 2);
 
@@ -760,7 +815,7 @@ mod tests {
         assert!(image.areas().is_empty());
         assert_eq!(image.parse_count(), loaded + 2);
 
-        // Paths outside `.trama/` and hidden ones are ignored.
+        // Paths outside `.weaver/` and hidden ones are ignored.
         image.refresh(&[
             dir.path().join("elsewhere.md"),
             layout::absolute(dir.path(), "tasks/.gitkeep"),
@@ -947,7 +1002,7 @@ mod tests {
             Some("T2")
         );
         // The cache is local-only and ignored by git; the image never reads it as a card.
-        let ignore = layout::trama_dir(dir.path()).join("short-numbers/.gitignore");
+        let ignore = layout::weaver_dir(dir.path()).join("short-numbers/.gitignore");
         assert_eq!(fs::read(ignore).unwrap(), b"*\n");
     }
 }

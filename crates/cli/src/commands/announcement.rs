@@ -1,4 +1,4 @@
-//! `trama announcement new`. The job registry of the app runs it through
+//! `weaver announcement new`. The job registry of the app runs it through
 //! [`crate::exec::Authority::run`].
 
 use super::{app_only, in_app};
@@ -16,5 +16,5 @@ pub fn commands() -> Vec<Command> {
         ])
         .output(vec![req("id", line(), "The announcement identity.")])
         .place(in_app)
-        .example(r#"trama announcement new --input '{"kind":"task","title":"Cancel an order"}'"#)]
+        .example(r#"weaver announcement new --input '{"kind":"task","title":"Cancel an order"}'"#)]
 }

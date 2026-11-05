@@ -14,9 +14,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tauri::AppHandle;
-use trama_core::project::board::{AgentFacts, Refused};
-use trama_core::project::changes::MutationError;
-use trama_core::project::image::ProjectImage;
+use weaver_core::project::board::{AgentFacts, Refused};
+use weaver_core::project::changes::MutationError;
+use weaver_core::project::image::ProjectImage;
 
 use crate::error::{AppError, ErrorCode};
 use crate::events;
@@ -79,8 +79,8 @@ where
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use trama_core::paths::AppDirs;
-    use trama_core::project::board::delete_task;
+    use weaver_core::paths::AppDirs;
+    use weaver_core::project::board::delete_task;
 
     use super::*;
     use crate::agent_work::{AgentWork, Ghost};
@@ -104,7 +104,7 @@ mod tests {
     }
 
     fn state_with_task(base: &Path, project: &Path) -> AppState {
-        let file = project.join(".trama/tasks/aaaaaaaa-a-task.md");
+        let file = project.join(".weaver/tasks/aaaaaaaa-a-task.md");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(file, TASK).unwrap();
         AppState::new(AppDirs::from_bases(base, base, None))
@@ -136,10 +136,10 @@ mod tests {
         );
         assert!(project
             .path()
-            .join(".trama/tasks/aaaaaaaa-a-task.md")
+            .join(".weaver/tasks/aaaaaaaa-a-task.md")
             .exists());
         assert!(
-            !project.path().join(".trama/short-numbers").exists(),
+            !project.path().join(".weaver/short-numbers").exists(),
             "a refusal leaves not even the cache"
         );
         assert_eq!(
@@ -177,7 +177,7 @@ mod tests {
         );
         assert!(!project
             .path()
-            .join(".trama/tasks/aaaaaaaa-a-task.md")
+            .join(".weaver/tasks/aaaaaaaa-a-task.md")
             .exists());
         assert!(state.pictures.get(&id).unwrap().image.cards().is_empty());
     }

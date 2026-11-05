@@ -52,4 +52,9 @@ resolveReasons: Array<string>,
 /**
  * Why `Dismiss Drift` is disabled, one per line in the fixed order; empty = it works.
  */
-dismissReasons: Array<string>, attached: AttachedProposal | null, };
+dismissReasons: Array<string>, 
+/**
+ * Why `Fix the code` is disabled besides the agent still finishing, one per line in the fixed
+ * order (`Being refined` while the attached Proposal is Refining); empty = it works.
+ */
+fixReasons: Array<string>, attached: AttachedProposal | null, };

@@ -9,7 +9,7 @@
 //! | [`round`]   | One round as the developer answers it: drafts, confirmed answers, skips, send |
 //! | [`queue`]   | The rounds of a project: one presented, the others first in, first out |
 //!
-//! The wire: `trama question new` validates its input, then sends one request of kind [`KIND`] whose
+//! The wire: `weaver question new` validates its input, then sends one request of kind [`KIND`] whose
 //! payload is the input object; the app answers with a reply carrying the result (`answered`) or a
 //! failure whose code is one of [`code`]. The connection stays open, with no time limit, until a
 //! result exists; closing it is `agent.STOP_WAITING`.

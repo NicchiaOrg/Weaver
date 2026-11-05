@@ -43,7 +43,8 @@ jobs:
   build-test:
     name: build-test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    # Every system is required: a failure on any of them fails `ci`, on `dev` as on `main`.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -52,7 +53,7 @@ jobs:
           - { name: windows-x64, os: windows-latest }
           - { name: linux-x64, os: ubuntu-22.04 }
     env:
-      BUILT_TRAMA: ${{ github.workspace }}/target/release/trama${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+      BUILT_WEAVER_CLI: ${{ github.workspace }}/target/release/weaver-cli${{ matrix.os == 'windows-latest' && '.exe' || '' }}
     steps:
       - name: Install the Tauri system packages (Linux)
         if: runner.os == 'Linux'
@@ -119,23 +120,23 @@ jobs:
         run: cargo test -p weaver --lib generated_types_are_up_to_date --locked
 
       - name: Rust tests
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --no-fail-fast
 
       - name: Vitest
         run: pnpm --dir ui test
 
-      # The release build of the app, with `trama` bundled as its sidecar (built by src-tauri/build.rs
+      # The release build of the app, with `weaver-cli` bundled as its sidecar (built by src-tauri/build.rs
       # and copied next to the app binary). The bundles themselves are made by the release workflow.
-      - name: Build the app in release mode, with trama
+      - name: Build the app in release mode, with weaver-cli
         run: pnpm tauri build --no-bundle --ci
 
-      - name: Smoke of trama
-        run: node scripts/smoke-trama.mjs "$BUILT_TRAMA"
+      - name: Smoke of weaver-cli
+        run: node scripts/smoke-weaver-cli.mjs "$BUILT_WEAVER_CLI"
 
       - name: CLI contract tests
         run: node --test tests/cli-contract/
         env:
-          CLI_CONTRACT_BIN: ${{ env.BUILT_TRAMA }}
+          CLI_CONTRACT_BIN: ${{ env.BUILT_WEAVER_CLI }}
 
       # End-to-end tests with tauri-driver run on Linux and Windows only: macOS has no WebDriver for
       # its webview. They drive the release build above, never a dev server.
@@ -147,7 +148,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $edge = (Get-ItemProperty 'HKCU:\Software\Microsoft\Edge\BLBeacon').version
+          # The version of the installed browser is the one of msedge.exe: the BLBeacon key of the
+          # user registry is missing on the hosted runner.
+          $edge = $null
+          foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+            $exe = Join-Path $root 'Microsoft\Edge\Application\msedge.exe'
+            if (Test-Path $exe) { $edge = (Get-Item $exe).VersionInfo.ProductVersion; break }
+          }
           if (-not $edge) { throw 'Microsoft Edge is not installed on the runner' }
           $dir = Join-Path $env:RUNNER_TEMP 'msedgedriver'
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -172,6 +179,21 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum dbus-run-session -- pnpm --dir e2e test
 
+      # The hosted Windows runners run elevated, and from runtime 150 on WebView2 ignores the
+      # variable that msedgedriver uses to open the debug port when its host is elevated
+      # (https://github.com/tauri-apps/wry/issues/1782), so the tests run at medium integrity.
+      - name: Install gsudo (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install gsudo --yes --no-progress
+
       - name: End-to-end tests (Windows)
         if: runner.os == 'Windows'
-        run: pnpm --dir e2e test
+        shell: pwsh
+        run: |
+          $gsudo = 'C:\tools\gsudo\Current\gsudo.exe'
+          if (-not (Test-Path $gsudo)) { throw "gsudo is not at $gsudo" }
+          & $gsudo --version
+          # The log records the integrity level the tests run at: it must be Medium, not High.
+          & $gsudo --integrity Medium whoami /groups | Select-String 'Mandatory Label'
+          & $gsudo --integrity Medium pnpm --dir e2e test

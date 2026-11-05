@@ -183,6 +183,27 @@ describe("ghosts", () => {
     expect(openJob).toHaveBeenCalledWith("job-g1");
   });
 
+  it("shows still known texts and, under them, only placeholders that shimmer, shaped like the real card of its kind", async () => {
+    install(
+      board(1, {
+        ghosts: [ghost("g1", "proposal", "Coming proposal", { note: "Reading the Model" }), ghost("g2", "task", "Coming task"), ghost("g3", "drift", "Coming drift")],
+      }),
+    );
+    await show();
+    const shapes = (name: RegExp) => {
+      const button = screen.getByRole("button", { name });
+      const placeholders = Array.from(button.querySelectorAll("[data-placeholder]"));
+      expect(placeholders.every((element) => element.classList.contains("shimmer") && element.textContent === "")).toBe(true);
+      // Nothing else in the ghost shimmers: the kind, title, phase and note are still.
+      expect(button.querySelectorAll(".shimmer")).toHaveLength(placeholders.length);
+      expect(button).toHaveTextContent("Coming");
+      return placeholders.map((element) => (element.classList.contains("h-8") ? "button" : element.classList.contains("size-2") ? "dot" : "bar"));
+    };
+    expect(shapes(/Proposal being prepared/)).toEqual(["bar", "bar", "bar", "button", "button"]);
+    expect(shapes(/Task being prepared/)).toEqual(["dot", "bar", "button"]);
+    expect(shapes(/Drift being prepared/)).toEqual(["bar", "button", "button"]);
+  });
+
   it("leaves in the same picture in which its card arrives", async () => {
     install(board(1, { ghosts: [ghost("g1", "task", "Coming task")] }));
     await show();
@@ -253,6 +274,34 @@ describe("Scan System", () => {
   it("hides the count at 0", async () => {
     await show();
     expect(screen.queryByText(/done since last scan/)).not.toBeInTheDocument();
+  });
+});
+
+describe("the view header", () => {
+  it("holds the title `Board` on the left and Scan System with the count on the right, in one row", async () => {
+    install(board(1, { doneSinceLastScan: 3 }));
+    await show();
+    const header = screen.getByRole("heading", { level: 1, name: "Board" }).closest("header")!;
+    expect(within(header).getByRole("button", { name: "Scan System" })).toBeInTheDocument();
+    expect(within(header).getByText("· 3 done since last scan")).toBeInTheDocument();
+    expect(document.querySelectorAll("header")).toHaveLength(1);
+  });
+
+  it("shows while the Board loads", async () => {
+    vi.mocked(call).mockImplementation((() => new Promise(() => {})) as unknown as typeof call);
+    render(
+      <TooltipProvider>
+        <ProjectContext.Provider value={{ projectId: PROJECT, showView: vi.fn(), openJob: vi.fn(), openedJob: null }}>
+          <BoardActionsContext.Provider value={{}}>
+            <BoardProvider projectId={PROJECT}>
+              <BoardView />
+            </BoardProvider>
+          </BoardActionsContext.Provider>
+        </ProjectContext.Provider>
+      </TooltipProvider>,
+    );
+    expect(screen.getByRole("heading", { level: 1, name: "Board" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading the Board…");
   });
 });
 
@@ -385,5 +434,22 @@ describe("History warnings", () => {
     install(board(1, { warnings: [text] }));
     await show();
     expect(screen.getByRole("alert")).toHaveTextContent(text);
+  });
+
+  it("closes a warning with its close button, keeps it closed through Board updates, and shows a changed text", async () => {
+    const first = "Could not record abcd1234 in History: it has no `finished` instant. The Task stays until its copy can be made.";
+    const second = "Could not record efgh5678 in History: it has no `finished` instant. The Task stays until its copy can be made.";
+    install(board(1, { warnings: [first, second] }));
+    await show();
+    expect(screen.getAllByRole("alert")).toHaveLength(2);
+    const closeFirst = within(screen.getAllByRole("alert")[0]!).getByRole("button", { name: "Close" });
+    await userEvent.setup().click(closeFirst);
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByRole("alert")).toHaveTextContent(second);
+
+    // The Board changes: the closed warning stays hidden, a warning with another text shows at once.
+    const changed = "Could not record abcd1234 in History: the copy was refused. The Task stays until its copy can be made.";
+    await publish(board(2, { warnings: [first, second, changed] }));
+    expect(screen.getAllByRole("alert").map((alert) => alert.textContent)).toEqual([expect.stringContaining(second), expect.stringContaining(changed)]);
   });
 });

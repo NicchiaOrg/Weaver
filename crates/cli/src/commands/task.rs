@@ -1,23 +1,25 @@
-//! `trama task new | show | list | move | delete`. The rules (blocking, slots, groups, taking,
-//! finishing, forgetting) live in `trama_core::project::tasks`; this file reads the input, applies
+//! `weaver task new | show | list | move | delete`. The rules (blocking, slots, groups, taking,
+//! finishing, forgetting) live in `weaver_core::project::tasks`; this file reads the input, applies
 //! the changes and prints.
 
 use std::collections::BTreeSet;
 use std::convert::Infallible;
 
 use serde_json::{json, Map, Value};
-use trama_core::command::CommandReply;
-use trama_core::project::board;
-use trama_core::project::cards::{Card, CardKind};
-use trama_core::project::changes::{self, ChangeSet, MutationError};
-use trama_core::project::clock::{now_instant, SystemClock};
-use trama_core::project::history;
-use trama_core::project::image::ProjectImage;
-use trama_core::project::model_view;
-use trama_core::project::random::OsRandom;
-use trama_core::project::resolve::resolve_card;
-use trama_core::project::shortnum::{self, ShortNumbers};
-use trama_core::project::tasks::{self, Column, FinishPlan, HeldBack, Outcome, Refusal, TaskDraft};
+use weaver_core::command::CommandReply;
+use weaver_core::project::board;
+use weaver_core::project::cards::{Card, CardKind};
+use weaver_core::project::changes::{self, ChangeSet, MutationError};
+use weaver_core::project::clock::{now_instant, SystemClock};
+use weaver_core::project::history;
+use weaver_core::project::image::ProjectImage;
+use weaver_core::project::model_view;
+use weaver_core::project::random::OsRandom;
+use weaver_core::project::resolve::resolve_card;
+use weaver_core::project::shortnum::{self, ShortNumbers};
+use weaver_core::project::tasks::{
+    self, Column, FinishPlan, HeldBack, Outcome, Refusal, TaskDraft,
+};
 
 use super::{card_with, cards, local, reply, written};
 use crate::spec::*;
@@ -25,7 +27,7 @@ use crate::spec::*;
 pub fn commands() -> Vec<Command> {
     vec![
         Command::new("task", "new", "Files a Task in To do.", new)
-            .notes(&["`technical: true` marks a Task with no Model reference. `announcement` is the identity printed by `trama announcement new`. The job that files it is recorded when `TRAMA_JOB` is set."])
+            .notes(&["`technical: true` marks a Task with no Model reference. `announcement` is the identity printed by `weaver announcement new`. The job that files it is recorded when `WEAVER_JOB` is set."])
             .input(vec![
                 req("title", line(), "The title."),
                 opt("refs", list(line()), "Model elements, Requirement sections and Specs fields it implements."),
@@ -35,7 +37,7 @@ pub fn commands() -> Vec<Command> {
             ])
             .output(card_with(vec![req("column", line(), "The column: `todo`.")]))
             .place(written)
-            .example(r#"trama task new --input '{"title":"Cancel an order","refs":["order/Paid"]}'"#),
+            .example(r#"weaver task new --input '{"title":"Cancel an order","refs":["order/Paid"]}'"#),
         Command::new("task", "show", "Prints a Task with the Model and the Requirements it refers to.", show)
             .arg(Arg::Card(CardKind::Task))
             .output(card_with(vec![
@@ -44,7 +46,7 @@ pub fn commands() -> Vec<Command> {
                 req("refs", list(line()), "What it refers to."),
                 req("blockedBy", list(line()), "The Drifts that block it."),
             ]))
-            .example("trama task show t3"),
+            .example("weaver task show t3"),
         Command::new("task", "list", "Lists Tasks, or picks the runnable ones.", list_tasks)
             .notes(&[
                 "`runnable` gives the next runnable Task, or up to `max` (at least 1) for free places, plus `waiting` (Tasks in To do with blockers) and, with `heldBack`, those left out. `groups` prints the runnable Tasks in groups of Tasks that concern the same thing, for one sub-agent each. `proposals` restricts the Tasks to those of these Proposals and `notProposals` excludes them.",
@@ -67,7 +69,7 @@ pub fn commands() -> Vec<Command> {
             ])
             .check(list_needs_runnable)
             .place(local)
-            .example(r#"trama task list --input '{"runnable":true,"max":3,"groups":true}'"#),
+            .example(r#"weaver task list --input '{"runnable":true,"max":3,"groups":true}'"#),
         Command::new("task", "move", "Takes a Task, releases it or finishes it.", move_task)
             .notes(&[
                 "Bound to a job. `doing` takes the Task (refused naming its blocker), `todo` releases it and `done` finishes it. `unchanged`, a non-blank note, with `done` closes the fix Task of a Drift when the code already does what should happen. Only the job that holds a Task moves it out of `doing`.",
@@ -77,13 +79,13 @@ pub fn commands() -> Vec<Command> {
             .access(Access::Job)
             .input(vec![opt("unchanged", nonblank(), "Closes the fix Task of a Drift without changes; with `done`.")])
             .output(card_with(vec![req("column", line(), "The column after the move.")]))
-            .example("trama task move t3 doing"),
+            .example("weaver task move t3 doing"),
         Command::new("task", "delete", "Deletes a Task in To do.", delete)
             .notes(&["A decision of the developer: the agent runs it only when the developer explicitly asked for that decision in the conversation."])
             .arg(Arg::Card(CardKind::Task))
             .output(card_with(vec![]))
             .place(written)
-            .example("trama task delete t3"),
+            .example("weaver task delete t3"),
     ]
 }
 
@@ -479,8 +481,8 @@ fn move_task(call: &Call) -> Result<CommandReply, Failure> {
     let state = call.state.expect("a state is named");
     let job = call.caller.job.as_deref().ok_or_else(|| {
         Failure::new(
-            trama_core::command::code::FORBIDDEN,
-            "Only the agent of a job that Weaver started can run `trama task move`.",
+            weaver_core::command::code::FORBIDDEN,
+            "Only the agent of a job that Weaver started can run `weaver task move`.",
         )
     })?;
     let unchanged = call.input.get("unchanged").and_then(Value::as_str);
@@ -597,15 +599,15 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    use trama_core::command::code;
-    use trama_core::project::image::ProjectImage;
+    use weaver_core::command::code;
+    use weaver_core::project::image::ProjectImage;
 
     use super::*;
 
     const ORDER: &str = "# Order\n\nAn order.\n\n## States\n\n### Draft (initial)\nChoosing.\n- `cart.CONFIRM` → Paid\n\n### Paid\nPaid.\n";
 
     fn put(root: &Path, rel: &str, text: &str) {
-        let path = root.join(".trama").join(rel);
+        let path = root.join(".weaver").join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
     }
@@ -699,7 +701,7 @@ mod tests {
         assert_eq!(card.list_key("refs"), Some(vec!["order/Paid".to_owned()]));
         assert!(dir
             .path()
-            .join(format!(".trama/tasks/{id}-cancel-an-order.md"))
+            .join(format!(".weaver/tasks/{id}-cancel-an-order.md"))
             .is_file());
     }
 
@@ -729,7 +731,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(bad.message.contains("refs[1]"), "{}", bad.message);
-        assert!(!dir.path().join(".trama/tasks").exists());
+        assert!(!dir.path().join(".weaver/tasks").exists());
         assert!(run(
             "new",
             dir.path(),
@@ -955,7 +957,7 @@ mod tests {
         let dir = project();
         task(dir.path(), "aaaaaaaa", 1, "todo", &["order"], "");
         drift(dir.path(), "dddddddd", 2, "open", &["order/Paid"], "");
-        let before = fs::read_to_string(dir.path().join(".trama/tasks/aaaaaaaa-t.md")).unwrap();
+        let before = fs::read_to_string(dir.path().join(".weaver/tasks/aaaaaaaa-t.md")).unwrap();
         let error = run_as(
             "move",
             dir.path(),
@@ -968,7 +970,7 @@ mod tests {
         assert_eq!(error.code, code::REFUSED);
         assert!(error.message.contains("Drift D1"), "{}", error.message);
         assert_eq!(
-            fs::read_to_string(dir.path().join(".trama/tasks/aaaaaaaa-t.md")).unwrap(),
+            fs::read_to_string(dir.path().join(".weaver/tasks/aaaaaaaa-t.md")).unwrap(),
             before
         );
     }
@@ -1103,10 +1105,10 @@ mod tests {
             "{}",
             refused.message
         );
-        assert!(dir.path().join(".trama/tasks/bbbbbbbb-t.md").is_file());
+        assert!(dir.path().join(".weaver/tasks/bbbbbbbb-t.md").is_file());
         let deleted = run("delete", dir.path(), Some("aaaaaaaa"), json!({})).unwrap();
         assert_eq!(deleted.json["id"], "aaaaaaaa");
-        assert!(!dir.path().join(".trama/tasks/aaaaaaaa-t.md").exists());
-        assert!(!dir.path().join(".trama/task-images/aaaaaaaa").exists());
+        assert!(!dir.path().join(".weaver/tasks/aaaaaaaa-t.md").exists());
+        assert!(!dir.path().join(".weaver/task-images/aaaaaaaa").exists());
     }
 }

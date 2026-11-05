@@ -1,15 +1,15 @@
-//! The parser and the `FORMAT.md` reference of the `trama-design` skill are tested together:
-//! every example in the file Weaver installs (the one embedded in `trama-core`) must parse.
+//! The parser and the `FORMAT.md` reference of the `weaver-design` skill are tested together:
+//! every example in the file Weaver installs (the one embedded in `weaver-core`) must parse.
 
 use std::path::PathBuf;
 
-use trama_core::agent_files::installed_file;
-use trama_core::project::frontmatter;
-use trama_core::project::model::{parse_actor, parse_machine, parse_titled};
-use trama_core::project::requirements::{parse_area_doc, parse_fragment};
-use trama_core::project::specs::parse_specs;
+use weaver_core::agent_files::installed_file;
+use weaver_core::project::frontmatter;
+use weaver_core::project::model::{parse_actor, parse_machine, parse_titled};
+use weaver_core::project::requirements::{parse_area_doc, parse_fragment};
+use weaver_core::project::specs::parse_specs;
 
-const FORMAT_MD: &str = ".agents/skills/trama-design/FORMAT.md";
+const FORMAT_MD: &str = ".agents/skills/weaver-design/FORMAT.md";
 
 fn format_md() -> (PathBuf, String) {
     let file = installed_file(FORMAT_MD).expect("FORMAT.md is embedded");

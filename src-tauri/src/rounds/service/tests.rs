@@ -3,11 +3,11 @@ use std::sync::mpsc::Receiver;
 use std::thread::{self, JoinHandle};
 
 use serde_json::{json, Value};
-use trama_core::endpoint::new_endpoint;
-use trama_core::ipc::{connect, serve_connection_watched, Listener};
-use trama_core::paths::AppDirs;
-use trama_core::protocol::{encode, Request};
-use trama_core::question::{Action, ActionError, Answer, Position, KIND};
+use weaver_core::endpoint::new_endpoint;
+use weaver_core::ipc::{connect, serve_connection_watched, Listener};
+use weaver_core::paths::AppDirs;
+use weaver_core::protocol::{encode, Request};
+use weaver_core::question::{Action, ActionError, Answer, Position, KIND};
 
 use super::*;
 use crate::rounds::view::OriginView;
@@ -332,6 +332,7 @@ fn closing_the_window_interrupts_every_round_including_a_prepared_question() {
     let agent = ask(&f, "job1", &["a"]);
     let prepared = f.rounds.present_prepared(
         "p1",
+        "drift0001",
         "dr1ftd1d",
         "A Drift",
         serde_json::from_value(payload(&["q"])).unwrap(),
@@ -351,6 +352,7 @@ fn the_prepared_question_of_a_drift_is_asked_with_no_agent_and_a_skip_carries_no
     let f = fixture();
     let outcome = f.rounds.present_prepared(
         "p1",
+        "drift0001",
         "dr1ftd1d",
         "Choose the storage",
         serde_json::from_value(payload(&["q"])).unwrap(),
@@ -419,4 +421,61 @@ fn the_queue_of_a_project_is_created_when_its_window_opens() {
     assert!(f.rounds.view("p9").is_none());
     f.rounds.window_closed("p9");
     f.rounds.window_closed("never-opened");
+}
+
+#[test]
+fn an_ask_more_conversation_reads_only_the_question_in_view_of_the_presented_round() {
+    let f = fixture();
+    let agent = ask(&f, "job1", &["a", "b"]);
+    let view = presented(&f, "p1");
+
+    let seen = f
+        .rounds
+        .question_in_view("p1", view.id, 0)
+        .expect("the question in view is read");
+    assert_eq!(seen.request.questions.len(), 2);
+    assert_eq!(seen.origin, Origin::Agent { job: "job1".into() });
+    assert_eq!(seen.job, Some(("job1".to_owned(), Some("Scan".to_owned()))));
+
+    // Another position, another round, another project and an index out of range open nothing.
+    assert!(f.rounds.question_in_view("p1", view.id, 1).is_none());
+    assert!(f.rounds.question_in_view("p1", view.id + 1, 0).is_none());
+    assert!(f.rounds.question_in_view("p2", view.id, 0).is_none());
+    f.rounds
+        .act("p1", view.id, Action::Go(Position::Question { index: 1 }))
+        .unwrap();
+    assert!(f.rounds.question_in_view("p1", view.id, 0).is_none());
+    assert!(f.rounds.question_in_view("p1", view.id, 1).is_some());
+    f.rounds
+        .act("p1", view.id, Action::Go(Position::Summary))
+        .unwrap();
+    assert!(f.rounds.question_in_view("p1", view.id, 1).is_none());
+
+    // A round that closed is gone.
+    f.rounds.window_closed("p1");
+    assert!(f.rounds.question_in_view("p1", view.id, 0).is_none());
+    let _ = agent.join();
+}
+
+#[test]
+fn the_round_of_a_prepared_question_keeps_the_permanent_identity_of_its_drift() {
+    let f = fixture();
+    let _outcome = f.rounds.present_prepared(
+        "p1",
+        "drift0001",
+        "D1",
+        "A Drift",
+        serde_json::from_value(payload(&["q"])).unwrap(),
+    );
+    let view = presented(&f, "p1");
+    let seen = f.rounds.question_in_view("p1", view.id, 0).unwrap();
+    assert_eq!(
+        seen.origin,
+        Origin::Drift {
+            id: "drift0001".into(),
+            drift: "D1".into(),
+            title: "A Drift".into()
+        }
+    );
+    assert_eq!(seen.job, None);
 }

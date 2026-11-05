@@ -5,7 +5,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use trama_core::jobs::machine::SteeringOutcome;
+use weaver_core::jobs::machine::SteeringOutcome;
+use weaver_core::omp::failure;
 
 use super::rpc::{Rpc, RpcError};
 
@@ -14,7 +15,7 @@ pub const OPEN_LIMIT: Duration = Duration::from_secs(30);
 
 /// The fixed text an elicitation or an ask of omp is declined with.
 pub const DECLINE_TEXT: &str =
-    "In Weaver jobs, ask the developer only with `trama question new` (bash timeout 0). Do not ask in any other way.";
+    "In Weaver jobs, ask the developer only with `weaver question new` (bash timeout 0). Do not ask in any other way.";
 
 /// Why a session could not be opened.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,6 +124,43 @@ pub fn steering_outcome(reply: Result<Value, RpcError>) -> SteeringOutcome {
     }
 }
 
+/// The reason a failure shows (`requirements/ui#system-certificates`, "Where they replace the
+/// reason"): the proxy explanation when any of `texts` (the whole ACP error message, the stderr
+/// tail, the reason itself) is a certificate or an HTTP error, else `plain`. `system_certificates_on`
+/// is the setting at the moment of the failure. The result is stored as written: a later change of
+/// the setting rewrites nothing.
+pub fn explained(plain: &str, texts: &[&str], system_certificates_on: bool) -> String {
+    failure::explain(&texts.join("\n"), system_certificates_on).unwrap_or_else(|| plain.to_owned())
+}
+
+impl TurnEnd {
+    /// A failed turn with its reason [`explained`] by the error and the stderr tail.
+    pub fn explained(self, stderr: &str, system_certificates_on: bool) -> TurnEnd {
+        match self {
+            TurnEnd::Failed(reason) => {
+                let shown = explained(&reason, &[&reason, stderr], system_certificates_on);
+                TurnEnd::Failed(shown)
+            }
+            other => other,
+        }
+    }
+}
+
+/// A refused message with its reason [`explained`]; the other outcomes stay.
+pub fn explained_outcome(
+    outcome: SteeringOutcome,
+    stderr: &str,
+    system_certificates_on: bool,
+) -> SteeringOutcome {
+    match outcome {
+        SteeringOutcome::Failed(reason) => {
+            let shown = explained(&reason, &[&reason, stderr], system_certificates_on);
+            SteeringOutcome::Failed(shown)
+        }
+        other => other,
+    }
+}
+
 fn text_prompt(text: &str) -> Value {
     json!([{ "type": "text", "text": text }])
 }
@@ -148,14 +186,16 @@ pub async fn new_session(rpc: &Rpc, cwd: &Path) -> Result<String, OpenError> {
         .ok_or_else(|| OpenError::Failed("omp opened a session without an identity".to_owned()))
 }
 
-/// `session/load`: the history is replayed as `session/update` notifications before it answers.
-pub async fn load_session(rpc: &Rpc, session: &str, cwd: &Path) -> Result<(), OpenError> {
-    rpc.request(
+/// `session/load`, sent ordered like `session/prompt`: the history is replayed as `session/update`
+/// notifications before it answers, and the answer comes back as an
+/// [`super::rpc::Incoming::Response`] with the id returned, always after every replayed update
+/// that was read before it. The caller handles the load as finished only at that response, so no
+/// replayed update reaches the live conversation.
+pub fn load_session(rpc: &Rpc, session: &str, cwd: &Path) -> u64 {
+    rpc.send_ordered(
         "session/load",
         json!({ "sessionId": session, "cwd": cwd.to_string_lossy(), "mcpServers": [] }),
     )
-    .await?;
-    Ok(())
 }
 
 /// `session/prompt`: the answer comes back as an [`super::rpc::Incoming::Response`] with the id
@@ -264,7 +304,8 @@ mod tests {
         assert_eq!(
             turn_end(Err(RpcError::Remote {
                 code: -1,
-                message: "quota exceeded".into()
+                message: "quota exceeded".into(),
+                data: None
             })),
             TurnEnd::Failed("quota exceeded".into())
         );
@@ -292,10 +333,60 @@ mod tests {
         assert_eq!(
             steering_outcome(Err(RpcError::Remote {
                 code: -32602,
-                message: "prompt is empty".into()
+                message: "prompt is empty".into(),
+                data: None
             })),
             SteeringOutcome::Failed("prompt is empty".into())
         );
+    }
+
+    fn remote(message: &str, data: Option<&str>) -> RpcError {
+        RpcError::Remote {
+            code: -32603,
+            message: message.into(),
+            data: data.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_proxy_error_carried_only_in_the_data_of_the_acp_error_is_explained() {
+        let cause = r#"{"cause":"fetch failed: UNABLE_TO_GET_ISSUER_CERT_LOCALLY"}"#;
+        for on in [false, true] {
+            let expected = failure::explain(cause, on).unwrap();
+            let turn = turn_end(Err(remote("Internal error", Some(cause)))).explained("", on);
+            assert_eq!(turn, TurnEnd::Failed(expected.clone()), "{on}");
+            let steer = explained_outcome(
+                steering_outcome(Err(remote("Internal error", Some(cause)))),
+                "",
+                on,
+            );
+            assert_eq!(steer, SteeringOutcome::Failed(expected.clone()), "{on}");
+            let open = OpenError::from(remote("Internal error", Some(cause)));
+            assert_eq!(explained(&open.reason(), &[&open.reason()], on), expected);
+        }
+        let http = turn_end(Err(remote("Internal error", Some("HTTP 407")))).explained("", false);
+        assert!(
+            matches!(http, TurnEnd::Failed(text) if text.starts_with("omp received an HTTP 407 error"))
+        );
+        // A certificate error in the data wins over an HTTP one in the message.
+        let both = remote("HTTP 502", Some("SELF_SIGNED_CERT_IN_CHAIN")).text();
+        assert!(failure::explain(&both, false)
+            .unwrap()
+            .contains("verify a server's certificate"));
+    }
+
+    #[test]
+    fn the_data_of_an_error_that_is_not_a_proxy_problem_stays_out_of_its_text() {
+        assert_eq!(
+            remote("quota exceeded", Some(r#"{"code":429}"#)).text(),
+            "quota exceeded"
+        );
+        assert_eq!(
+            remote("quota exceeded", Some("HTTP 429")).text(),
+            "quota exceeded"
+        );
+        assert_eq!(remote("HTTP 503", Some("HTTP 407")).text(), "HTTP 503");
+        assert_eq!(remote("quota exceeded", None).text(), "quota exceeded");
     }
 
     #[test]

@@ -7,39 +7,53 @@
 //!
 //! | Event | Where |
 //! |-------|-------|
-//! | `developer.OPEN_PROJECT` | [`WindowManager::open_project`]: opens the project, or brings its window forward |
+//! | `developer.OPEN_PROJECT` | [`WindowManager::open_project`]: opens the project, or brings its window forward (back from the background when it was there) |
 //! | `desktop.APP_STARTED` | [`WindowManager::restore`]: reopens the projects of the last session |
 //! | `notification.CLICKED` | [`WindowManager::focus_project`]: the window comes forward showing [`ShowRequest`] |
-//! | `developer.CLOSE_WINDOW` | [`WindowManager::close_window`] |
+//! | `developer.REOPEN_APP` | [`WindowManager::reopen_app`]: every window in the background comes back |
+//! | `developer.CLOSE_WINDOW` | [`WindowManager::close_window`]; with `Keep working in background` the window goes to the background ([`WindowManager::send_to_background`]) |
 //! | `developer.QUIT_APP` | [`WindowManager::exit_requested`] and [`WindowManager::quit`] |
 //! | `window.OPENED` / `window.CLOSED` | [`WindowJobs::window_opened`] / [`WindowJobs::window_closed`] |
 //!
-//! Closing a project window or quitting with jobs working asks a native confirmation first
-//! ([`Shell::confirm`], `tauri-plugin-dialog`, which works with a hung webview); cancelling changes
-//! nothing. After the confirmation the jobs are suspended (the future of
-//! [`WindowJobs::window_closed`] completes), then the window closes or the app exits.
+//! Closing a project window or quitting with jobs working, or with unsaved changes in a File view
+//! ([`WindowManager::set_unsaved`], told by the UI), asks a native confirmation first
+//! ([`Shell::confirm`], `tauri-plugin-dialog`, which works with a hung webview); with unsaved
+//! changes it offers `Save all` ([`WindowManager::save_all`]), `Discard all` and `Cancel`, with
+//! working jobs only it asks to confirm or cancel; closing a window with working jobs only also
+//! offers `Keep working in background`, the only way to the background: the window is hidden
+//! ([`WindowManager::send_to_background`]), nothing is suspended and the window does not close;
+//! when it cannot be hidden it stays shown and its UI is told why ([`Shell::emit_hide_failed`]).
+//! Cancelling changes nothing. After the
+//! confirmation and the saving the jobs are suspended (the future of [`WindowJobs::window_closed`]
+//! completes), then the window closes or the app exits.
+//!
+//! A window in the background is open: it stays in the registry, so its jobs count for the quit
+//! confirmation, the restore list written at quit holds it and the last-window rule sees it.
 //!
 //! The picture of a project ([`Pictures`]) is opened with its window and fed by the project's
 //! watcher ([`Watch`]), which calls [`Pictures::rebuild`] once per batch of changes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, Weak};
+use std::time::Duration;
 
 use serde::Serialize;
-use trama_core::paths;
-use trama_core::project::clock::{now_instant, Clock};
 use ts_rs::TS;
+use weaver_core::paths;
+use weaver_core::project::clock::{now_instant, Clock};
 
 use super::jobs::{BoxFuture, CloseReason, NoJobs, OpenReason, WindowJobs, WindowOpened};
 use super::launch;
 use super::local_state::{LocalState, StateStore};
 use super::project::{NoProject, ProjectHooks};
 use super::registry::{decide_exit, label_of, ExitDecision, OpenProject, OpenStart, Registry};
+use super::unsaved::{FilesSaveFailed, SaveFailure, SaveReport, SavedFile, TabText};
 use super::watch::{BatchSink, Watch, WatchGuard};
 use crate::blocking;
 use crate::error::{AppError, ErrorCode};
 use crate::events::ProjectChanged;
+use crate::notes::changes::NotesBatch;
 use crate::pictures::{Pictures, Rebuild};
 use crate::{log_info, log_warn};
 
@@ -60,11 +74,11 @@ pub struct ShowRequest {
 #[serde(rename_all = "lowercase")]
 pub enum ShowView {
     Board,
-    Diagram,
     Requirements,
     Specs,
     History,
     Jobs,
+    Files,
     General,
     Settings,
 }
@@ -74,8 +88,26 @@ pub enum ShowView {
 pub struct ConfirmPrompt {
     pub title: String,
     pub message: String,
-    /// The label of the button that goes on; the other one is `Cancel`.
+    /// The label of the button that goes on; with `discard` or `background` the other buttons are
+    /// that one and `Cancel`, else only `Cancel`.
     pub accept: String,
+    /// The label of the button that goes on without saving, when there is something to save.
+    pub discard: Option<String>,
+    /// The label of the button that keeps the jobs working with the window in the background
+    /// (closing a window with working jobs and nothing to save).
+    pub background: Option<String>,
+}
+
+/// The button pressed in a [`ConfirmPrompt`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Confirmation {
+    /// `accept`: go on (`Save all` when there are unsaved changes).
+    Accept,
+    /// `discard`: go on without saving.
+    Discard,
+    /// `background`: nothing is suspended, the window goes to the background instead of closing.
+    Background,
+    Cancel,
 }
 
 /// The count phrase, the pronoun for the jobs as an object, and the pronoun with its verb.
@@ -87,17 +119,46 @@ fn jobs_phrase(working: usize) -> (String, &'static str, &'static str) {
     }
 }
 
-/// Closing the window of `project` while `working` jobs work.
-pub fn close_prompt(project: &str, working: usize) -> ConfirmPrompt {
-    let (count, them, _) = jobs_phrase(working);
+/// The files with unsaved changes, one per line.
+fn unsaved_lines(unsaved: &[String]) -> String {
+    let mut lines = String::from("Unsaved changes in:");
+    for path in unsaved {
+        lines.push_str("\n• ");
+        lines.push_str(path);
+    }
+    lines
+}
+
+/// Closing the window of `project` while `working` jobs work and `unsaved` files have unsaved
+/// changes. With unsaved changes the buttons are `Save all`, `Discard all` and `Cancel`.
+pub fn close_prompt(project: &str, working: usize, unsaved: &[String]) -> ConfirmPrompt {
+    let jobs = (working > 0).then(|| {
+        let (count, them, _) = jobs_phrase(working);
+        format!("{count} working in {project}. Closing the window suspends {them}.")
+    });
+    if unsaved.is_empty() {
+        return ConfirmPrompt {
+            title: format!("Close {project}?"),
+            message: jobs.unwrap_or_default(),
+            accept: "Suspend and Close".to_owned(),
+            discard: None,
+            background: Some("Keep working in background".to_owned()),
+        };
+    }
+    let files = unsaved_lines(unsaved);
     ConfirmPrompt {
         title: format!("Close {project}?"),
-        message: format!("{count} working in {project}. Closing the window suspends {them}."),
-        accept: "Suspend and Close".to_owned(),
+        message: match jobs {
+            Some(jobs) => format!("{files}\n\n{jobs}"),
+            None => files,
+        },
+        accept: "Save all".to_owned(),
+        discard: Some("Discard all".to_owned()),
+        background: None,
     }
 }
 
-/// Quitting Weaver while `working` jobs work, in any project.
+/// Quitting Weaver while `working` jobs work, in any project, and no File view has unsaved changes.
 pub fn quit_prompt(working: usize) -> ConfirmPrompt {
     let (count, them, they) = jobs_phrase(working);
     ConfirmPrompt {
@@ -106,6 +167,27 @@ pub fn quit_prompt(working: usize) -> ConfirmPrompt {
             "{count} working. Quitting suspends {them}; {they} when Weaver starts again."
         ),
         accept: "Suspend and Quit".to_owned(),
+        discard: None,
+        background: None,
+    }
+}
+
+/// Quitting Weaver, asked of the window of `project` whose File view has `unsaved` files with
+/// unsaved changes; `working` counts the jobs of every project.
+pub fn quit_unsaved_prompt(project: &str, working: usize, unsaved: &[String]) -> ConfirmPrompt {
+    let files = format!("{project}: {}", unsaved_lines(unsaved));
+    let message = if working == 0 {
+        files
+    } else {
+        let (count, them, they) = jobs_phrase(working);
+        format!("{files}\n\n{count} working. Quitting suspends {them}; {they} when Weaver starts again.")
+    };
+    ConfirmPrompt {
+        title: "Quit Weaver?".to_owned(),
+        message,
+        accept: "Save all".to_owned(),
+        discard: Some("Discard all".to_owned()),
+        background: None,
     }
 }
 
@@ -116,26 +198,59 @@ pub trait Shell: Send + Sync + 'static {
     /// Shows the welcome window: creates it, or brings the open one forward.
     fn show_welcome(&self) -> Result<(), String>;
     fn close_welcome(&self);
-    /// Brings a window forward (restored, shown, focused). `false` when it does not exist.
+    /// Brings a window forward (shown, restored, focused). `false` when it does not exist.
     fn focus(&self, label: &str) -> bool;
-    /// Brings any window forward. `false` when no window exists.
-    fn focus_any(&self) -> bool;
+    /// Brings any window forward; its label. `None` when no window exists.
+    fn focus_any(&self) -> Option<String>;
+    /// Takes a window off the screen and, on Windows and Linux, off the taskbar, keeping the
+    /// window and its webview alive (`WebviewWindow::hide`).
+    fn hide(&self, label: &str) -> Result<(), String>;
+    /// Shows a window again and restores it when minimised, without taking the focus
+    /// (`show()`, `unminimize()`). `false` when it does not exist.
+    fn reveal(&self, label: &str) -> bool;
     /// Closes a window for good, with no further event.
     fn destroy(&self, label: &str);
     /// How many windows exist (project windows and the welcome window).
     fn window_count(&self) -> usize;
-    /// A native confirmation; `false` when cancelled or dismissed.
-    fn confirm(&self, prompt: ConfirmPrompt) -> BoxFuture<bool>;
+    /// A native confirmation: the button the developer pressed; `Cancel` also when dismissed.
+    fn confirm(&self, prompt: ConfirmPrompt) -> BoxFuture<Confirmation>;
+    /// Asks the File view of a project window for the texts of its tabs with unsaved changes
+    /// (`files-flush`, answered through [`WindowManager::tabs_flushed`]); `false` when the window
+    /// cannot be reached.
+    fn request_tab_texts(&self, project_id: &str) -> bool;
+    /// Saves the tab of `path` (relative to the project) with `text`, as `developer.SAVE_FILE`;
+    /// the answer is the hash of what was written, or why it was not saved.
+    fn save_tab(
+        &self,
+        project_id: &str,
+        path: &str,
+        text: &str,
+    ) -> BoxFuture<Result<String, String>>;
+    /// Tells a window which files `Save all` did not save, and why.
+    fn save_failed(&self, failed: FilesSaveFailed);
+    /// The window of the project is gone: its File view's tabs, their watches and the agent
+    /// locks they tracked go with it.
+    fn drop_tabs(&self, project_id: &str);
     /// Asks the app to exit with `code` (raising `RunEvent::ExitRequested` again).
     fn exit(&self, code: i32);
     fn emit_show(&self, label: &str, request: &ShowRequest);
+    /// Tells a window why it could not be hidden after `Keep working in background`.
+    fn emit_hide_failed(&self, label: &str, failure: &HideFailed);
     fn publish(&self, change: ProjectChanged);
     /// Writes the size and position of the open windows now.
     fn save_window_state(&self);
     /// A batch of file changes of a project, before its picture is rebuilt (the request editor
-    /// follows `.trama/requests/`).
+    /// follows `.weaver/requests/`).
     fn files_changed(&self, _project_id: &str, _root: &Path, _batch: &Rebuild) {}
-    /// Waits until the request editor of a project window saved what is pending (a window is closing).
+    /// The assets of a project may have changed (`.weaver/assets/`): the project just opened, or
+    /// a batch of its watcher named a path under it. The list is read again and, when it
+    /// differs, the window is told (`workspace.ASSETS_CHANGED`).
+    fn assets_changed(&self, _project_id: &str, _root: &Path) {}
+    /// A batch of a project's watcher named paths under `.weaver/notes/`: the sheet, an image or
+    /// the folder. The window is told when something changed that Weaver did not write itself
+    /// (`workspace.NOTES_CHANGED`). Never part of what rebuilds the picture.
+    fn notes_changed(&self, _project_id: &str, _root: &Path, _batch: NotesBatch) {}
+    /// Waits until the request editor and the Notes view of a project window saved what is pending (a window is closing).
     fn flush_before_close(&self, _project_id: &str) -> BoxFuture<()> {
         Box::pin(async {})
     }
@@ -163,14 +278,43 @@ pub enum OpenOutcome {
     Focused,
 }
 
+/// Why a window could not go to the background: the UI of that window shows it in an error toast.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HideFailed {
+    /// What the system said when the window could not be hidden.
+    pub reason: String,
+}
+
 /// What [`WindowManager::close_window`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CloseOutcome {
     Closed,
     /// The developer cancelled the confirmation: nothing changed.
     Cancelled,
+    /// The developer chose to keep the working jobs going in the background: nothing was
+    /// suspended and the window is hidden, not closed.
+    Background,
+    /// The developer chose to keep the working jobs going in the background and the window could
+    /// not be hidden (the reason): it stays shown and open, nothing was suspended, and its UI was
+    /// told why.
+    HideFailed(String),
+    /// The developer chose `Save all` and a file could not be saved: the window stays open on
+    /// its tab, the other files are saved and nothing is suspended.
+    NotSaved,
     /// There is no such window, or it is already closing.
     Ignored,
+}
+
+/// What [`WindowManager::send_to_background`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackgroundOutcome {
+    /// The window left the screen and is in the background.
+    Hidden,
+    /// The project has no window, or its window already is in the background: nothing changed.
+    Unchanged,
+    /// The window could not be hidden (the reason): it stays shown and is not in the background.
+    Failed(String),
 }
 
 pub struct WindowManager {
@@ -184,6 +328,13 @@ pub struct WindowManager {
     project: RwLock<Arc<dyn ProjectHooks>>,
     registry: Mutex<Registry>,
     watchers: Mutex<HashMap<String, WatchGuard>>,
+    /// Per project, the files with unsaved changes in its File view, as the UI last said.
+    unsaved: Mutex<HashMap<String, Vec<String>>>,
+    /// The projects whose File view has a tab: **Close Window** closes it instead of the window.
+    close_key: Mutex<HashSet<String>>,
+    /// Per project, the `Save all` waiting for the File view's texts.
+    flushing: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Vec<TabText>>>>,
+    flush_limit: Mutex<Duration>,
     me: Weak<WindowManager>,
 }
 
@@ -231,6 +382,10 @@ impl WindowManager {
             project: RwLock::new(Arc::new(NoProject)),
             registry: Mutex::new(Registry::new()),
             watchers: Mutex::new(HashMap::new()),
+            unsaved: Mutex::new(HashMap::new()),
+            close_key: Mutex::new(HashSet::new()),
+            flushing: Mutex::new(HashMap::new()),
+            flush_limit: Mutex::new(crate::requests::FLUSH_LIMIT),
             me: me.clone(),
         })
     }
@@ -353,6 +508,8 @@ impl WindowManager {
             root: canonical.to_path_buf(),
             name: name.clone(),
         });
+        // The assets are listed from the start, whether or not the Assets view is ever shown.
+        self.shell.assets_changed(id, canonical);
 
         let path_text = canonical.to_string_lossy().into_owned();
         match now_instant(self.clock.as_ref()) {
@@ -381,7 +538,9 @@ impl WindowManager {
         Ok(())
     }
 
-    /// One batch of changes of a project: the picture is rebuilt, and the UI told once.
+    /// One batch of changes of a project: what is under `.weaver/assets/` only refreshes the list
+    /// of the assets and what is under `.weaver/notes/` only goes to the Notes view; neither
+    /// reaches the picture. The rest rebuilds the picture, and the UI is told once.
     fn sink_for(&self, id: &str) -> BatchSink {
         let manager = self.me.clone();
         let id = id.to_owned();
@@ -391,9 +550,28 @@ impl WindowManager {
             };
             let id = id.clone();
             tauri::async_runtime::spawn(async move {
-                if let Ok(picture) = manager.pictures.get(&id) {
-                    manager.shell.files_changed(&id, &picture.root, &batch);
-                }
+                let root = manager.pictures.get(&id).ok().map(|picture| picture.root);
+                let batch = match &root {
+                    Some(root) => {
+                        let split = crate::assets::split_batch(root, batch);
+                        if split.assets {
+                            manager.shell.assets_changed(&id, root);
+                        }
+                        let Some(rest) = split.rest else {
+                            return;
+                        };
+                        let split = crate::notes::changes::split_batch(root, rest);
+                        if let Some(notes) = split.notes {
+                            manager.shell.notes_changed(&id, root, notes);
+                        }
+                        let Some(rest) = split.rest else {
+                            return;
+                        };
+                        manager.shell.files_changed(&id, root, &rest);
+                        rest
+                    }
+                    None => batch,
+                };
                 let published = manager.pictures.rebuild(&id, batch).await;
                 match &published {
                     Ok(Some(revision)) => manager.shell.publish(revision.event()),
@@ -418,13 +596,26 @@ impl WindowManager {
         }
     }
 
-    // --- notification.CLICKED, a second launch, the Dock ---------------------------------------
+    // --- notification.CLICKED, a second launch, the Dock, the background -------------------------
 
-    /// The window of the project comes to the front, showing `show` when given (what the
-    /// notification was about). `false` when the project has no window.
+    /// Brings a window forward; a project window that was in the background is back on the screen.
+    /// `false` when it does not exist.
+    fn bring_forward(&self, label: &str) -> bool {
+        if !self.shell.focus(label) {
+            return false;
+        }
+        if let Some(id) = crate::pictures::project_of_label(label) {
+            self.registry().shown(id);
+        }
+        true
+    }
+
+    /// The window of the project comes to the front, back from the background when it was there,
+    /// showing `show` when given (what the notification was about). `false` when the project has
+    /// no window.
     pub fn focus_project(&self, project_id: &str, show: Option<ShowRequest>) -> bool {
         let label = label_of(project_id);
-        if !self.shell.focus(&label) {
+        if !self.bring_forward(&label) {
             return false;
         }
         if let Some(request) = show {
@@ -433,24 +624,86 @@ impl WindowManager {
         true
     }
 
-    /// The most recently focused window comes to the front; the welcome window shows when there
-    /// is none.
-    pub fn focus_recent(&self) {
-        let order: Vec<String> = self.registry().focus_order().map(str::to_owned).collect();
-        if order.iter().any(|label| self.shell.focus(label)) || self.shell.focus_any() {
-            return;
-        }
+    /// The window labels, the most recently focused first.
+    pub fn focus_order(&self) -> Vec<String> {
+        self.registry().focus_order().map(str::to_owned).collect()
+    }
+
+    /// The welcome window comes to the front; it is created when it is not there.
+    pub fn show_welcome(&self) {
         if let Err(why) = self.shell.show_welcome() {
             log_warn!("the welcome window could not be shown: {why}");
         }
     }
 
-    /// A second launch handed its arguments over: a folder is `developer.OPEN_PROJECT`, anything
-    /// else brings the most recently used window forward.
+    /// The window of `order` used most recently comes to the front (`order` lists labels, the
+    /// most recent first); the welcome window shows when there is none.
+    fn focus_first_of(&self, order: &[String]) {
+        if order.iter().any(|label| self.bring_forward(label)) {
+            return;
+        }
+        match self.shell.focus_any() {
+            Some(label) => {
+                if let Some(id) = crate::pictures::project_of_label(&label) {
+                    self.registry().shown(id);
+                }
+            }
+            None => self.show_welcome(),
+        }
+    }
+
+    /// The most recently focused window comes to the front; the welcome window shows when there
+    /// is none.
+    pub fn focus_recent(&self) {
+        self.focus_first_of(&self.focus_order());
+    }
+
+    /// The window of the project leaves the screen (and, on Windows and Linux, the taskbar), after
+    /// `Keep working in background` of the close confirmation. Nothing is suspended and
+    /// `window.CLOSED` is not emitted: the window and its webview stay alive and the project stays
+    /// open. When the window cannot be hidden the failure is logged as a warning, the background
+    /// flag is not left set and the reason is returned.
+    pub fn send_to_background(&self, project_id: &str) -> BackgroundOutcome {
+        if !self.registry().send_to_background(project_id) {
+            return BackgroundOutcome::Unchanged;
+        }
+        if let Err(why) = self.shell.hide(&label_of(project_id)) {
+            log_warn!("the window of a project could not be sent to the background: {why}");
+            self.registry().shown(project_id);
+            return BackgroundOutcome::Failed(why);
+        }
+        BackgroundOutcome::Hidden
+    }
+
+    /// Whether the window of the project is in the background.
+    pub fn is_background(&self, project_id: &str) -> bool {
+        self.registry().is_background(project_id)
+    }
+
+    /// `developer.REOPEN_APP`: every project window in the background comes back on the screen, the
+    /// least recently used first, then the window used most recently gets the focus and ends on
+    /// top. With no window in the background the window used most recently comes to the front,
+    /// and the welcome window shows when no window is open.
+    pub fn reopen_app(&self) {
+        // Taken first: showing a window can move the focus, and with it the order.
+        let order = self.focus_order();
+        let hidden = self.registry().background_projects();
+        for id in hidden {
+            if !self.shell.reveal(&label_of(&id)) {
+                log_warn!("a window in the background could not be shown");
+            }
+            self.registry().shown(&id);
+        }
+        self.focus_first_of(&order);
+    }
+
+    /// A second launch handed its arguments over: a folder is `developer.OPEN_PROJECT` (the window
+    /// of that project alone comes back from the background), anything else is
+    /// `developer.REOPEN_APP`.
     pub fn second_launch(&self, args: Vec<String>, cwd: PathBuf) {
         match launch::folder_argument(&args, &cwd) {
             Some(folder) => self.open_in_background(folder, OpenReason::Developer),
-            None => self.focus_recent(),
+            None => self.reopen_app(),
         }
     }
 
@@ -469,9 +722,13 @@ impl WindowManager {
         });
     }
 
-    /// A click on the Dock icon with no window open (macOS): the welcome window shows.
+    /// A click on the Dock icon (macOS): `developer.REOPEN_APP` whenever a project window is in the
+    /// background, whatever `has_visible_windows` says; otherwise the welcome window shows only
+    /// when no window is visible.
     pub fn reopen(&self, has_visible_windows: bool) {
-        if !has_visible_windows {
+        if self.registry().has_background() {
+            self.reopen_app();
+        } else if !has_visible_windows {
             self.focus_recent();
         }
     }
@@ -512,23 +769,56 @@ impl WindowManager {
 
     // --- developer.CLOSE_WINDOW ------------------------------------------------------------------
 
-    /// `developer.CLOSE_WINDOW`: with jobs working in the project a native confirmation comes
-    /// first; cancelling changes nothing. Then the jobs are suspended and the window closes; the
-    /// project does not reopen at the next start. Closing the last project window opens the
-    /// welcome window.
+    /// `developer.CLOSE_WINDOW`: with jobs working in the project, or unsaved changes in its File
+    /// view, a native confirmation comes first; cancelling changes nothing. With unsaved changes the
+    /// developer chooses `Save all` or `Discard all`: a file that cannot be saved leaves the window
+    /// open on its tab, the other files saved and nothing suspended. With working jobs only the
+    /// developer can also choose to keep them working in the background: nothing is suspended and
+    /// the window does not close; when it cannot be hidden it stays shown and its UI is told why.
+    /// Else the
+    /// jobs are suspended and the window closes; the project does not reopen at the next start.
+    /// Closing the last project window opens the welcome window, unless another project window is
+    /// in the background.
     pub async fn close_window(&self, project_id: &str) -> CloseOutcome {
         let Some(project) = self.registry().begin_close(project_id) else {
             return CloseOutcome::Ignored;
         };
         let working = self.jobs().working_jobs(project_id);
-        if working > 0
-            && !self
+        let unsaved = self.unsaved(project_id);
+        if working > 0 || !unsaved.is_empty() {
+            let answer = self
                 .shell
-                .confirm(close_prompt(&project.name, working))
-                .await
-        {
-            self.registry().cancel_close(project_id);
-            return CloseOutcome::Cancelled;
+                .confirm(close_prompt(&project.name, working, &unsaved))
+                .await;
+            if answer == Confirmation::Background && unsaved.is_empty() {
+                self.registry().cancel_close(project_id);
+                return match self.send_to_background(project_id) {
+                    BackgroundOutcome::Hidden => CloseOutcome::Background,
+                    BackgroundOutcome::Unchanged => CloseOutcome::Cancelled,
+                    BackgroundOutcome::Failed(reason) => {
+                        self.shell.emit_hide_failed(
+                            &label_of(project_id),
+                            &HideFailed {
+                                reason: reason.clone(),
+                            },
+                        );
+                        CloseOutcome::HideFailed(reason)
+                    }
+                };
+            }
+            let saved = match answer {
+                Confirmation::Cancel | Confirmation::Background => false,
+                Confirmation::Accept if !unsaved.is_empty() => self.save_tabs(project_id).await,
+                Confirmation::Accept | Confirmation::Discard => true,
+            };
+            if !saved {
+                self.registry().cancel_close(project_id);
+                return if matches!(answer, Confirmation::Cancel | Confirmation::Background) {
+                    CloseOutcome::Cancelled
+                } else {
+                    CloseOutcome::NotSaved
+                };
+            }
         }
         // The welcome window opens before the last project window goes: the app never has no window.
         if self.registry().is_last_project(project_id) {
@@ -560,8 +850,12 @@ impl WindowManager {
         });
     }
 
-    /// Stops what the open window held: the watcher, the picture and its place in the registry.
+    /// Stops what the open window held: the watcher, the picture, what its File view said and its
+    /// place in the registry.
     fn forget_project(&self, project_id: &str) {
+        self.set_unsaved(project_id, Vec::new());
+        self.set_close_key(project_id, false);
+        self.shell.drop_tabs(project_id);
         self.project().window_closed(project_id);
         self.watchers
             .lock()
@@ -623,17 +917,20 @@ impl WindowManager {
         decision
     }
 
-    /// `developer.QUIT_APP`: with jobs working in any project a native confirmation comes first
-    /// (`confirm`); cancelling changes nothing. Then the session is written (the projects open
-    /// now reopen at the next start), the jobs of every project are suspended (`window.CLOSED`)
-    /// and the app exits with `code`. A shutdown that allows no confirmation passes
-    /// `confirm = false`: the jobs are suspended without asking.
+    /// `developer.QUIT_APP`: with jobs working in any project, or a File view with unsaved changes,
+    /// a native confirmation comes first (`confirm`); cancelling changes nothing. Every window with
+    /// unsaved changes asks in turn, its dialog counting the jobs of every project, and `Cancel` in
+    /// any of them stops the quit before anything is saved or suspended. Then the windows that
+    /// chose `Save all` are saved; when a file cannot be saved the others still are, nothing is
+    /// suspended and Weaver does not quit. Then the session is written (the projects open now
+    /// reopen at the next start), the jobs of every project are suspended (`window.CLOSED`) and the
+    /// app exits with `code`. A shutdown that allows no confirmation passes `confirm = false`: the
+    /// jobs are suspended without asking.
     pub async fn quit(&self, code: i32, confirm: bool) {
         if !self.registry().begin_quit() {
             return;
         }
-        let working = self.working_jobs();
-        if confirm && working > 0 && !self.shell.confirm(quit_prompt(working)).await {
+        if confirm && !self.confirm_quit().await {
             self.registry().cancel_quit();
             return;
         }
@@ -678,6 +975,182 @@ impl WindowManager {
         self.shell.exit(code);
     }
 
+    /// What a quit asks before it goes on; `true` when it does. Without unsaved changes anywhere
+    /// one dialog asks about the working jobs; otherwise each window with unsaved changes asks in
+    /// turn. Nothing is saved before every dialog is answered.
+    async fn confirm_quit(&self) -> bool {
+        let working = self.working_jobs();
+        let mut asking = Vec::new();
+        for project in self.open_projects() {
+            let unsaved = self.unsaved(&project.id);
+            if !unsaved.is_empty() {
+                asking.push((project, unsaved));
+            }
+        }
+        if asking.is_empty() {
+            return working == 0
+                || self.shell.confirm(quit_prompt(working)).await != Confirmation::Cancel;
+        }
+        let mut saving = Vec::new();
+        for (project, unsaved) in &asking {
+            self.bring_forward(&label_of(&project.id));
+            match self
+                .shell
+                .confirm(quit_unsaved_prompt(&project.name, working, unsaved))
+                .await
+            {
+                // The quit confirmation never offers the background: any other answer is a cancel.
+                Confirmation::Cancel | Confirmation::Background => return false,
+                Confirmation::Accept => saving.push(project.id.clone()),
+                Confirmation::Discard => {}
+            }
+        }
+        let mut saved = true;
+        for id in saving {
+            saved &= self.save_tabs(&id).await;
+        }
+        saved
+    }
+
+    // --- the unsaved changes of the File view ------------------------------------------------------
+
+    /// The File view of a window says in which files it has unsaved changes (all of them, each time).
+    pub fn set_unsaved(&self, project_id: &str, paths: Vec<String>) {
+        let mut unsaved = self.unsaved.lock().expect("unsaved poisoned");
+        if paths.is_empty() {
+            unsaved.remove(project_id);
+        } else {
+            unsaved.insert(project_id.to_owned(), paths);
+        }
+    }
+
+    /// The File view of a window has a tab (or has none): whether **Close Window** closes the tab.
+    pub fn set_close_key(&self, project_id: &str, claimed: bool) {
+        let mut keys = self.close_key.lock().expect("close key poisoned");
+        if claimed {
+            keys.insert(project_id.to_owned());
+        } else {
+            keys.remove(project_id);
+        }
+    }
+
+    /// **Close Window** closes a tab of the File view of this window, not the window.
+    pub fn close_key_claimed(&self, project_id: &str) -> bool {
+        self.close_key
+            .lock()
+            .expect("close key poisoned")
+            .contains(project_id)
+    }
+
+    /// The files with unsaved changes in the File view of a window, as it last said.
+    pub fn unsaved(&self, project_id: &str) -> Vec<String> {
+        self.unsaved
+            .lock()
+            .expect("unsaved poisoned")
+            .get(project_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The answer of a window's File view to `files-flush`.
+    pub fn tabs_flushed(&self, project_id: &str, tabs: Vec<TabText>) {
+        if let Some(waiting) = self
+            .flushing
+            .lock()
+            .expect("flushing poisoned")
+            .remove(project_id)
+        {
+            let _ = waiting.send(tabs);
+        }
+    }
+
+    /// How long `Save all` waits for the window's File view to send its texts.
+    pub fn set_flush_limit(&self, limit: Duration) {
+        *self.flush_limit.lock().expect("flush limit poisoned") = limit;
+    }
+
+    /// `Save all` of a window: asks its File view for the texts of its tabs, waits at most the
+    /// flush limit and saves each one as `developer.SAVE_FILE`. The files that were not saved
+    /// (the window did not answer in time, or the file could not be written) are returned with
+    /// the reason; the others are saved anyway.
+    pub async fn save_all(&self, project_id: &str) -> SaveReport {
+        let wanted = self.unsaved(project_id);
+        let mut report = SaveReport::default();
+        if wanted.is_empty() {
+            return report;
+        }
+        let limit = *self.flush_limit.lock().expect("flush limit poisoned");
+        let (answer, receiver) = tokio::sync::oneshot::channel();
+        self.flushing
+            .lock()
+            .expect("flushing poisoned")
+            .insert(project_id.to_owned(), answer);
+        let reached = self.shell.request_tab_texts(project_id);
+        let tabs = if reached {
+            tokio::time::timeout(limit, receiver)
+                .await
+                .ok()
+                .and_then(Result::ok)
+        } else {
+            None
+        };
+        self.flushing
+            .lock()
+            .expect("flushing poisoned")
+            .remove(project_id);
+        let Some(tabs) = tabs else {
+            report.failures = wanted
+                .into_iter()
+                .map(|path| SaveFailure {
+                    path,
+                    reason: "the window did not send its text in time".to_owned(),
+                })
+                .collect();
+            return report;
+        };
+        for tab in &tabs {
+            match self.shell.save_tab(project_id, &tab.path, &tab.text).await {
+                Ok(hash) => report.saved.push(SavedFile {
+                    path: tab.path.clone(),
+                    hash,
+                }),
+                Err(reason) => {
+                    log_warn!("{} was not saved: {reason}", tab.path);
+                    report.failures.push(SaveFailure {
+                        path: tab.path.clone(),
+                        reason,
+                    });
+                }
+            }
+        }
+        for path in wanted {
+            if !tabs.iter().any(|tab| tab.path == path) {
+                report.failures.push(SaveFailure {
+                    path,
+                    reason: "the window did not send its text".to_owned(),
+                });
+            }
+        }
+        report
+    }
+
+    /// [`Self::save_all`], and when a file was not saved, the window is told which and why (its
+    /// File view shows the tab of the first one, and marks the saved ones saved) and comes
+    /// forward. `true` when everything was saved.
+    async fn save_tabs(&self, project_id: &str) -> bool {
+        let report = self.save_all(project_id).await;
+        if report.failures.is_empty() {
+            return true;
+        }
+        self.bring_forward(&label_of(project_id));
+        self.shell.save_failed(FilesSaveFailed {
+            project_id: project_id.to_owned(),
+            saved: report.saved,
+            failures: report.failures,
+        });
+        false
+    }
+
     // --- the welcome window's data ----------------------------------------------------------------
 
     /// The recent projects, most recent first (blocking: call from the blocking pool).
@@ -699,7 +1172,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
-    use trama_core::project::clock::ManualClock;
+    use weaver_core::project::clock::ManualClock;
 
     use super::*;
     use crate::windows::watch::{Watch, WatchGuard};
@@ -709,10 +1182,23 @@ mod tests {
     struct FakeShell {
         log: Mutex<Vec<String>>,
         windows: Mutex<Vec<String>>,
-        answers: Mutex<Vec<bool>>,
+        answers: Mutex<Vec<Confirmation>>,
+        /// What the File view of the window sends when asked for its texts (`None`: it never answers).
+        texts: Mutex<Option<Vec<TabText>>>,
+        /// The files whose save is refused, with the reason.
+        refused: Mutex<HashMap<String, String>>,
+        failed: Mutex<Vec<FilesSaveFailed>>,
+        manager: Mutex<Option<Weak<WindowManager>>>,
         prompts: Mutex<Vec<ConfirmPrompt>>,
         published: Mutex<Vec<ProjectChanged>>,
         fail_windows: Mutex<bool>,
+        /// The windows taken off the screen.
+        hidden: Mutex<Vec<String>>,
+        fail_hide: Mutex<bool>,
+        /// The projects whose assets the manager asked to read again, in order.
+        assets: Mutex<Vec<String>>,
+        /// The batches under the notes folder the manager handed to the shell, in order.
+        notes: Mutex<Vec<(String, NotesBatch)>>,
     }
 
     impl FakeShell {
@@ -726,7 +1212,14 @@ mod tests {
             self.windows.lock().unwrap().clone()
         }
         fn answer(&self, yes: bool) {
-            self.answers.lock().unwrap().push(yes);
+            self.answer_with(if yes {
+                Confirmation::Accept
+            } else {
+                Confirmation::Cancel
+            });
+        }
+        fn answer_with(&self, answer: Confirmation) {
+            self.answers.lock().unwrap().push(answer);
         }
     }
 
@@ -762,19 +1255,34 @@ mod tests {
         fn focus(&self, label: &str) -> bool {
             let exists = self.windows.lock().unwrap().iter().any(|w| w == label);
             if exists {
+                self.hidden.lock().unwrap().retain(|w| w != label);
                 self.note(format!("focus {label}"));
             }
             exists
         }
-        fn focus_any(&self) -> bool {
+        fn focus_any(&self) -> Option<String> {
             let first = self.windows.lock().unwrap().first().cloned();
-            match first {
-                Some(label) => {
-                    self.note(format!("focus {label}"));
-                    true
-                }
-                None => false,
+            if let Some(label) = &first {
+                self.hidden.lock().unwrap().retain(|w| w != label);
+                self.note(format!("focus {label}"));
             }
+            first
+        }
+        fn hide(&self, label: &str) -> Result<(), String> {
+            if *self.fail_hide.lock().unwrap() {
+                return Err("no window system".into());
+            }
+            self.hidden.lock().unwrap().push(label.to_owned());
+            self.note(format!("hide {label}"));
+            Ok(())
+        }
+        fn reveal(&self, label: &str) -> bool {
+            let exists = self.windows.lock().unwrap().iter().any(|w| w == label);
+            if exists {
+                self.hidden.lock().unwrap().retain(|w| w != label);
+                self.note(format!("reveal {label}"));
+            }
+            exists
         }
         fn destroy(&self, label: &str) {
             self.windows.lock().unwrap().retain(|w| w != label);
@@ -783,11 +1291,45 @@ mod tests {
         fn window_count(&self) -> usize {
             self.windows.lock().unwrap().len()
         }
-        fn confirm(&self, prompt: ConfirmPrompt) -> BoxFuture<bool> {
+        fn confirm(&self, prompt: ConfirmPrompt) -> BoxFuture<Confirmation> {
             self.note(format!("confirm {}", prompt.title));
             self.prompts.lock().unwrap().push(prompt);
             let answer = self.answers.lock().unwrap().remove(0);
             Box::pin(async move { answer })
+        }
+        fn request_tab_texts(&self, project_id: &str) -> bool {
+            self.note(format!("flush {project_id}"));
+            let Some(texts) = self.texts.lock().unwrap().clone() else {
+                return true;
+            };
+            let manager = self
+                .manager
+                .lock()
+                .unwrap()
+                .clone()
+                .and_then(|m| m.upgrade());
+            if let Some(manager) = manager {
+                manager.tabs_flushed(project_id, texts);
+            }
+            true
+        }
+        fn save_tab(
+            &self,
+            _project_id: &str,
+            path: &str,
+            text: &str,
+        ) -> BoxFuture<Result<String, String>> {
+            self.note(format!("write {path} {text}"));
+            let refused = self.refused.lock().unwrap().get(path).cloned();
+            let hash = format!("hash-of-{path}");
+            Box::pin(async move { refused.map_or(Ok(hash), Err) })
+        }
+        fn save_failed(&self, failed: FilesSaveFailed) {
+            self.note(format!("save failed {}", failed.failures.len()));
+            self.failed.lock().unwrap().push(failed);
+        }
+        fn drop_tabs(&self, project_id: &str) {
+            self.note(format!("drop tabs {project_id}"));
         }
         fn exit(&self, code: i32) {
             self.note(format!("exit {code}"));
@@ -797,6 +1339,18 @@ mod tests {
                 "show {label} {:?} {:?}",
                 request.view, request.job_id
             ));
+        }
+        fn emit_hide_failed(&self, label: &str, failure: &HideFailed) {
+            self.note(format!("hide failed {label} {}", failure.reason));
+        }
+        fn assets_changed(&self, project_id: &str, _root: &Path) {
+            self.assets.lock().unwrap().push(project_id.to_owned());
+        }
+        fn notes_changed(&self, project_id: &str, _root: &Path, batch: NotesBatch) {
+            self.notes
+                .lock()
+                .unwrap()
+                .push((project_id.to_owned(), batch));
         }
         fn publish(&self, change: ProjectChanged) {
             self.published.lock().unwrap().push(change);
@@ -900,6 +1454,7 @@ mod tests {
             Arc::new(move |failure| sink.lock().unwrap().push(failure)),
         );
         manager.set_jobs(jobs.clone());
+        *shell.manager.lock().unwrap() = Some(Arc::downgrade(&manager));
         Fixture {
             manager,
             shell,
@@ -916,7 +1471,7 @@ mod tests {
     fn project(name: &str) -> (tempfile::TempDir, PathBuf, String) {
         let parent = tempfile::tempdir().unwrap();
         let root = parent.path().join(name);
-        std::fs::create_dir_all(root.join(".trama")).unwrap();
+        std::fs::create_dir_all(root.join(".weaver")).unwrap();
         let canonical = paths::canonical_root(&root).unwrap();
         let id = paths::project_hash_of_canonical(&canonical);
         (parent, canonical, id)
@@ -941,7 +1496,7 @@ mod tests {
             OpenOutcome::Focused
         );
         // A path that reaches the same folder another way is the same project.
-        let roundabout = root.join(".trama").join("..");
+        let roundabout = root.join(".weaver").join("..");
         assert_eq!(
             f.manager
                 .open_project(roundabout, OpenReason::Developer)
@@ -1089,7 +1644,7 @@ mod tests {
             .unwrap();
         let before = f.manager.pictures.get(&id).unwrap().revision;
 
-        let file = root.join(".trama").join("model").join("system.md");
+        let file = root.join(".weaver").join("model").join("system.md");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, "---\nname: Alpha\n---\n\n# Alpha\n").unwrap();
         let sink = f.watch.sinks.lock().unwrap().get(&root).unwrap().clone();
@@ -1115,6 +1670,147 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+    }
+
+    /// How many times the assets of the shell were asked to be read, waiting for `count` (the
+    /// batch is handled on the async runtime).
+    async fn assets_reads(shell: &FakeShell, count: usize) -> Vec<String> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let reads = shell.assets.lock().unwrap().clone();
+            if reads.len() >= count {
+                return reads;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the assets were not read again"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn the_assets_are_read_when_the_project_opens_and_after_a_batch_under_their_folder_which_never_reaches_the_picture(
+    ) {
+        let f = fixture();
+        let (_keep, root, id) = project("alpha");
+        f.manager
+            .open_project(root.clone(), OpenReason::Developer)
+            .await
+            .unwrap();
+        assert_eq!(
+            assets_reads(&f.shell, 1).await,
+            std::slice::from_ref(&id),
+            "read when the project opens"
+        );
+        let before = f.manager.pictures.get(&id).unwrap().revision;
+
+        let assets = root.join(".weaver").join("assets");
+        std::fs::create_dir_all(&assets).unwrap();
+        std::fs::write(assets.join("logo.png"), "png").unwrap();
+        let sink = f.watch.sinks.lock().unwrap().get(&root).unwrap().clone();
+        sink(Rebuild::Paths(vec![
+            assets.clone(),
+            assets.join("logo.png"),
+        ]));
+        assert_eq!(assets_reads(&f.shell, 2).await.len(), 2);
+        // Time for a rebuild that must not happen.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            f.shell.published.lock().unwrap().is_empty(),
+            "no project-changed for an asset"
+        );
+        assert_eq!(f.manager.pictures.get(&id).unwrap().revision, before);
+
+        // A batch that also names a file of the Model still rebuilds the picture, once.
+        let file = root.join(".weaver").join("model").join("system.md");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "---\nname: Alpha\n---\n\n# Alpha\n").unwrap();
+        sink(Rebuild::Paths(vec![assets.join("logo.png"), file]));
+        assert_eq!(assets_reads(&f.shell, 3).await.len(), 3);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while f.shell.published.lock().unwrap().is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no project-changed event"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(f.shell.published.lock().unwrap().len(), 1);
+
+        // A batch that names no path, events lost, reads the assets and rebuilds everything.
+        sink(Rebuild::All);
+        assert_eq!(assets_reads(&f.shell, 4).await.len(), 4);
+    }
+
+    /// The batches the shell was asked to tell the Notes view about, waiting for `count`.
+    async fn notes_batches(shell: &FakeShell, count: usize) -> Vec<(String, NotesBatch)> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let batches = shell.notes.lock().unwrap().clone();
+            if batches.len() >= count {
+                return batches;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the notes were not told of the batch"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_batch_under_the_notes_folder_only_reaches_the_notes_and_never_the_picture() {
+        let f = fixture();
+        let (_keep, root, id) = project("alpha");
+        f.manager
+            .open_project(root.clone(), OpenReason::Developer)
+            .await
+            .unwrap();
+        let before = f.manager.pictures.get(&id).unwrap().revision;
+
+        let notes = root.join(".weaver").join("notes");
+        std::fs::create_dir_all(&notes).unwrap();
+        std::fs::write(notes.join("notes.md"), "my notes\n").unwrap();
+        let sink = f.watch.sinks.lock().unwrap().get(&root).unwrap().clone();
+        sink(Rebuild::Paths(vec![
+            notes.clone(),
+            notes.join("notes.md"),
+            notes.join("shot.png"),
+        ]));
+        let batches = notes_batches(&f.shell, 1).await;
+        assert_eq!(batches[0].0, id);
+        assert!(batches[0].1.sheet);
+        assert!(batches[0].1.candidates.contains("shot.png"));
+        // Time for a rebuild that must not happen.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            f.shell.published.lock().unwrap().is_empty(),
+            "no project-changed for the notes"
+        );
+        assert_eq!(f.manager.pictures.get(&id).unwrap().revision, before);
+
+        // Hidden files of the folder tell the Notes view nothing and reach no one else.
+        sink(Rebuild::Paths(vec![notes.join(".gitignore")]));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(f.shell.notes.lock().unwrap().len(), 1);
+        assert!(f.shell.published.lock().unwrap().is_empty());
+
+        // A batch that also names a file of the Model still rebuilds the picture, once.
+        let file = root.join(".weaver").join("model").join("system.md");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "---\nname: Alpha\n---\n\n# Alpha\n").unwrap();
+        sink(Rebuild::Paths(vec![notes.join("notes.md"), file]));
+        assert_eq!(notes_batches(&f.shell, 2).await.len(), 2);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while f.shell.published.lock().unwrap().is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no project-changed event"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(f.shell.published.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -1143,6 +1839,29 @@ mod tests {
             !f.manager.focus_project("0000000000000000", None),
             "a project without a window cannot come forward"
         );
+    }
+
+    #[tokio::test]
+    async fn the_focus_order_lists_the_most_recently_focused_window_first_and_the_welcome_window_shows(
+    ) {
+        let f = fixture();
+        let (_a, root_a, id_a) = project("alpha");
+        let (_b, root_b, id_b) = project("beta");
+        for root in [root_a, root_b] {
+            f.manager
+                .open_project(root, OpenReason::Developer)
+                .await
+                .unwrap();
+        }
+        assert_eq!(f.manager.focus_order(), [label_of(&id_b), label_of(&id_a)]);
+        f.manager.on_focused(&label_of(&id_a));
+        assert_eq!(f.manager.focus_order(), [label_of(&id_a), label_of(&id_b)]);
+
+        let empty = fixture();
+        empty.manager.show_welcome();
+        assert_eq!(empty.shell.log().last().unwrap(), "create welcome");
+        empty.manager.show_welcome();
+        assert_eq!(empty.shell.log().last().unwrap(), "focus welcome");
     }
 
     #[tokio::test]
@@ -1247,7 +1966,7 @@ mod tests {
 
     #[tokio::test]
     async fn one_job_is_worded_in_the_singular() {
-        let close = close_prompt("alpha", 1);
+        let close = close_prompt("alpha", 1, &[]);
         assert_eq!(
             close.message,
             "1 job is working in alpha. Closing the window suspends it."
@@ -1341,6 +2060,264 @@ mod tests {
         f.manager.quit(0, false).await;
         assert!(f.shell.prompts.lock().unwrap().is_empty());
         assert!(f.jobs.events().contains(&format!("closed {id} AppQuit")));
+        assert_eq!(f.shell.log().last().unwrap(), "exit 0");
+    }
+
+    fn tab(path: &str, text: &str) -> TabText {
+        TabText {
+            path: path.to_owned(),
+            text: text.to_owned(),
+        }
+    }
+
+    async fn open(f: &Fixture, name: &str) -> (tempfile::TempDir, String) {
+        let (keep, root, id) = project(name);
+        f.manager
+            .open_project(root, OpenReason::Developer)
+            .await
+            .unwrap();
+        (keep, id)
+    }
+
+    #[tokio::test]
+    async fn unsaved_changes_are_asked_with_save_all_discard_all_and_cancel_listing_the_files() {
+        let f = fixture();
+        let (_a, id) = open(&f, "alpha").await;
+        f.jobs.set_working(&id, 2);
+        f.manager
+            .set_unsaved(&id, vec!["src/a.rs".into(), "docs/b.md".into()]);
+        f.shell.answer(false);
+        assert_eq!(f.manager.close_window(&id).await, CloseOutcome::Cancelled);
+
+        let prompt = f.shell.prompts.lock().unwrap()[0].clone();
+        assert_eq!(prompt.title, "Close alpha?");
+        assert_eq!(prompt.accept, "Save all");
+        assert_eq!(prompt.discard.as_deref(), Some("Discard all"));
+        assert_eq!(
+            prompt.message,
+            "Unsaved changes in:\n• src/a.rs\n• docs/b.md\n\n2 jobs are working in alpha. Closing the window suspends them."
+        );
+        assert!(
+            !f.shell.log().iter().any(|l| l.starts_with("flush")),
+            "cancel saves nothing"
+        );
+        assert_eq!(f.jobs.events(), [format!("opened {id} Developer")]);
+        assert_eq!(f.shell.windows(), [label_of(&id)]);
+    }
+
+    #[tokio::test]
+    async fn jobs_alone_keep_the_two_button_confirmation() {
+        let prompt = close_prompt("alpha", 3, &[]);
+        assert_eq!(prompt.accept, "Suspend and Close");
+        assert_eq!(prompt.discard, None);
+        let only_files = close_prompt("alpha", 0, &["a.txt".to_owned()]);
+        assert_eq!(only_files.message, "Unsaved changes in:\n• a.txt");
+        let quit = quit_unsaved_prompt("beta", 1, &["b.txt".to_owned()]);
+        assert_eq!(
+            quit.message,
+            "beta: Unsaved changes in:\n• b.txt\n\n1 job is working. Quitting suspends it; it resumes when Weaver starts again."
+        );
+        assert_eq!(quit.discard.as_deref(), Some("Discard all"));
+    }
+
+    #[tokio::test]
+    async fn discard_all_closes_the_window_without_saving() {
+        let f = fixture();
+        let (_a, id) = open(&f, "alpha").await;
+        f.manager.set_unsaved(&id, vec!["a.txt".into()]);
+        f.shell.answer_with(Confirmation::Discard);
+        assert_eq!(f.manager.close_window(&id).await, CloseOutcome::Closed);
+        assert!(!f
+            .shell
+            .log()
+            .iter()
+            .any(|l| l.starts_with("flush") || l.starts_with("write ")));
+        assert!(f.manager.unsaved(&id).is_empty());
+        assert!(f.shell.windows().iter().all(|w| w != &label_of(&id)));
+    }
+
+    #[tokio::test]
+    async fn save_all_saves_the_texts_the_window_sends_then_suspends_the_jobs_and_closes() {
+        let f = fixture();
+        let (_a, id) = open(&f, "alpha").await;
+        f.jobs.set_working(&id, 1);
+        f.manager
+            .set_unsaved(&id, vec!["a.txt".into(), "b.txt".into()]);
+        *f.shell.texts.lock().unwrap() = Some(vec![tab("a.txt", "one"), tab("b.txt", "two")]);
+        f.shell.answer(true);
+        assert_eq!(f.manager.close_window(&id).await, CloseOutcome::Closed);
+        let log = f.shell.log();
+        let at = |line: &str| {
+            log.iter()
+                .position(|l| l == line)
+                .unwrap_or_else(|| panic!("{line} in {log:?}"))
+        };
+        assert!(at(&format!("flush {id}")) < at("write a.txt one"));
+        assert!(at("write a.txt one") < at("write b.txt two"));
+        assert!(f
+            .jobs
+            .events()
+            .contains(&format!("closed {id} WindowClosed")));
+        assert!(f.shell.windows().iter().all(|w| w != &label_of(&id)));
+        assert!(f.shell.failed.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_file_that_cannot_be_saved_keeps_the_window_open_saves_the_others_and_suspends_nothing(
+    ) {
+        let f = fixture();
+        let (_a, id) = open(&f, "alpha").await;
+        f.jobs.set_working(&id, 1);
+        f.manager
+            .set_unsaved(&id, vec!["a.txt".into(), "b.txt".into()]);
+        *f.shell.texts.lock().unwrap() = Some(vec![tab("a.txt", "one"), tab("b.txt", "two")]);
+        f.shell.refused.lock().unwrap().insert(
+            "a.txt".into(),
+            "the file changed on disk since it was opened".into(),
+        );
+        f.shell.answer(true);
+        assert_eq!(f.manager.close_window(&id).await, CloseOutcome::NotSaved);
+        assert!(f.shell.log().contains(&"write b.txt two".to_owned()));
+        assert_eq!(
+            f.shell.failed.lock().unwrap().clone(),
+            [FilesSaveFailed {
+                project_id: id.clone(),
+                saved: vec![SavedFile {
+                    path: "b.txt".into(),
+                    hash: "hash-of-b.txt".into(),
+                }],
+                failures: vec![SaveFailure {
+                    path: "a.txt".into(),
+                    reason: "the file changed on disk since it was opened".into(),
+                }],
+            }]
+        );
+        assert_eq!(f.jobs.events(), [format!("opened {id} Developer")]);
+        assert_eq!(f.shell.windows(), [label_of(&id)]);
+        // The window can be closed again afterwards.
+        f.shell.refused.lock().unwrap().clear();
+        f.shell.answer(true);
+        assert_eq!(f.manager.close_window(&id).await, CloseOutcome::Closed);
+    }
+
+    #[tokio::test]
+    async fn a_window_that_does_not_answer_in_time_stays_open_with_every_file_failed() {
+        let f = fixture();
+        let (_a, id) = open(&f, "alpha").await;
+        f.manager.set_flush_limit(Duration::from_millis(30));
+        f.manager
+            .set_unsaved(&id, vec!["a.txt".into(), "b.txt".into()]);
+        f.shell.answer(true);
+        assert_eq!(f.manager.close_window(&id).await, CloseOutcome::NotSaved);
+        let failed = f.shell.failed.lock().unwrap().clone();
+        let paths: Vec<_> = failed[0].failures.iter().map(|x| x.path.as_str()).collect();
+        assert_eq!(paths, ["a.txt", "b.txt"]);
+        assert!(!f.shell.log().iter().any(|l| l.starts_with("write ")));
+        assert!(f.jobs.events().iter().all(|e| !e.starts_with("closed")));
+        assert_eq!(f.shell.windows(), [label_of(&id)]);
+    }
+
+    #[tokio::test]
+    async fn quitting_asks_each_window_with_unsaved_changes_in_turn_counting_every_jobs() {
+        let f = fixture();
+        let (_a, id_a) = open(&f, "alpha").await;
+        let (_b, id_b) = open(&f, "beta").await;
+        let (_c, id_c) = open(&f, "gamma").await;
+        f.jobs.set_working(&id_c, 2);
+        f.manager.set_unsaved(&id_a, vec!["a.txt".into()]);
+        f.manager.set_unsaved(&id_b, vec!["b.txt".into()]);
+        *f.shell.texts.lock().unwrap() = Some(vec![tab("a.txt", "A")]);
+        f.shell.answer(true);
+        f.shell.answer_with(Confirmation::Discard);
+        f.manager.quit(0, true).await;
+
+        let prompts = f.shell.prompts.lock().unwrap().clone();
+        assert_eq!(
+            prompts.len(),
+            2,
+            "gamma has no unsaved change and asks nothing"
+        );
+        assert!(prompts[0]
+            .message
+            .starts_with("alpha: Unsaved changes in:\n• a.txt"));
+        assert!(prompts[1]
+            .message
+            .starts_with("beta: Unsaved changes in:\n• b.txt"));
+        for prompt in &prompts {
+            assert!(prompt.message.ends_with(
+                "2 jobs are working. Quitting suspends them; they resume when Weaver starts again."
+            ));
+        }
+        let log = f.shell.log();
+        assert!(log.contains(&"write a.txt A".to_owned()));
+        assert!(!log.iter().any(|l| l.contains("write b.txt")));
+        assert_eq!(log.last().unwrap(), "exit 0");
+    }
+
+    #[tokio::test]
+    async fn cancel_in_any_window_stops_the_quit_before_anything_is_saved() {
+        let f = fixture();
+        let (_a, id_a) = open(&f, "alpha").await;
+        let (_b, id_b) = open(&f, "beta").await;
+        f.jobs.set_working(&id_a, 1);
+        f.manager.set_unsaved(&id_a, vec!["a.txt".into()]);
+        f.manager.set_unsaved(&id_b, vec!["b.txt".into()]);
+        *f.shell.texts.lock().unwrap() = Some(vec![tab("a.txt", "A"), tab("b.txt", "B")]);
+        f.shell.answer(true);
+        f.shell.answer(false);
+        f.manager.quit(0, true).await;
+        let log = f.shell.log();
+        assert!(!log
+            .iter()
+            .any(|l| l.starts_with("write ") || l.starts_with("exit")));
+        assert!(f.jobs.events().iter().all(|e| !e.starts_with("closed")));
+        // The quit can be asked again.
+        f.shell.answer_with(Confirmation::Discard);
+        f.shell.answer_with(Confirmation::Discard);
+        f.manager.quit(0, true).await;
+        assert_eq!(f.shell.log().last().unwrap(), "exit 0");
+    }
+
+    #[tokio::test]
+    async fn a_failed_save_on_quit_keeps_weaver_running_and_suspends_nothing() {
+        let f = fixture();
+        let (_a, id_a) = open(&f, "alpha").await;
+        f.jobs.set_working(&id_a, 1);
+        f.manager
+            .set_unsaved(&id_a, vec!["a.txt".into(), "b.txt".into()]);
+        *f.shell.texts.lock().unwrap() = Some(vec![tab("a.txt", "A"), tab("b.txt", "B")]);
+        f.shell
+            .refused
+            .lock()
+            .unwrap()
+            .insert("b.txt".into(), "disk full".into());
+        f.shell.answer(true);
+        f.manager.quit(0, true).await;
+        let log = f.shell.log();
+        assert!(
+            log.contains(&"write a.txt A".to_owned()),
+            "the others are saved"
+        );
+        assert!(!log.iter().any(|l| l.starts_with("exit")));
+        assert!(f.jobs.events().iter().all(|e| !e.starts_with("closed")));
+        assert_eq!(
+            f.shell.failed.lock().unwrap()[0].failures[0].reason,
+            "disk full"
+        );
+        // Weaver can be quit again afterwards.
+        f.shell.refused.lock().unwrap().clear();
+        f.shell.answer(true);
+        f.manager.quit(0, true).await;
+        assert_eq!(f.shell.log().last().unwrap(), "exit 0");
+    }
+
+    #[tokio::test]
+    async fn a_shutdown_that_allows_no_confirmation_asks_nothing_about_unsaved_changes() {
+        let f = fixture();
+        let (_a, id) = open(&f, "alpha").await;
+        f.manager.set_unsaved(&id, vec!["a.txt".into()]);
+        f.manager.quit(0, false).await;
+        assert!(f.shell.prompts.lock().unwrap().is_empty());
         assert_eq!(f.shell.log().last().unwrap(), "exit 0");
     }
 
@@ -1519,6 +2496,424 @@ mod tests {
             .events()
             .contains(&format!("closed {id} WindowClosed")));
         assert!(f.store.snapshot().last_session.is_empty());
+    }
+
+    async fn open_at(f: &Fixture, name: &str) -> (tempfile::TempDir, PathBuf, String) {
+        let (keep, root, id) = project(name);
+        f.manager
+            .open_project(root.clone(), OpenReason::Developer)
+            .await
+            .unwrap();
+        (keep, root, id)
+    }
+
+    /// What the shell did from the first line that starts with `from` on.
+    fn log_from(f: &Fixture, from: &str) -> Vec<String> {
+        let log = f.shell.log();
+        let start = log.iter().position(|l| l.starts_with(from)).unwrap();
+        log[start..].to_vec()
+    }
+
+    #[tokio::test]
+    async fn sending_a_window_to_the_background_hides_it_and_suspends_nothing() {
+        let f = fixture();
+        let (_a, root, id) = open_at(&f, "alpha").await;
+        f.jobs.set_working(&id, 2);
+
+        assert_eq!(f.manager.send_to_background(&id), BackgroundOutcome::Hidden);
+        assert!(f.manager.is_background(&id));
+        assert_eq!(
+            f.shell.log().last().unwrap(),
+            &format!("hide {}", label_of(&id))
+        );
+        // No confirmation, and the project stays open: window, picture, jobs and session.
+        assert!(f.shell.prompts.lock().unwrap().is_empty());
+        assert_eq!(f.manager.open_projects().len(), 1);
+        assert_eq!(f.shell.windows(), [label_of(&id)]);
+        assert!(f.manager.pictures.get(&id).is_ok());
+        assert_eq!(
+            f.jobs.events(),
+            [format!("opened {id} Developer")],
+            "window.CLOSED is not emitted"
+        );
+        assert_eq!(
+            f.store.snapshot().last_session,
+            [root.to_string_lossy().into_owned()]
+        );
+        // A window already in the background, and one that is not open, change nothing.
+        assert_eq!(
+            f.manager.send_to_background(&id),
+            BackgroundOutcome::Unchanged
+        );
+        assert_eq!(
+            f.manager.send_to_background("missing"),
+            BackgroundOutcome::Unchanged
+        );
+    }
+
+    #[tokio::test]
+    async fn a_window_that_cannot_be_hidden_stays_on_the_screen() {
+        let f = fixture();
+        let (_a, _root, id) = open_at(&f, "alpha").await;
+        *f.shell.fail_hide.lock().unwrap() = true;
+        assert_eq!(
+            f.manager.send_to_background(&id),
+            BackgroundOutcome::Failed("no window system".into())
+        );
+        assert!(!f.manager.is_background(&id));
+    }
+
+    #[tokio::test]
+    async fn every_project_window_can_be_in_the_background_at_once() {
+        let f = fixture();
+        let (_a, _, id_a) = open_at(&f, "alpha").await;
+        let (_b, _, id_b) = open_at(&f, "beta").await;
+        assert_eq!(
+            f.manager.send_to_background(&id_a),
+            BackgroundOutcome::Hidden
+        );
+        assert_eq!(
+            f.manager.send_to_background(&id_b),
+            BackgroundOutcome::Hidden
+        );
+        assert_eq!(f.manager.open_projects().len(), 2);
+        assert_eq!(f.shell.windows().len(), 2, "no welcome window opens");
+    }
+
+    #[test]
+    fn closing_with_jobs_working_alone_offers_the_background_and_unsaved_changes_never_do() {
+        let jobs = close_prompt("alpha", 3, &[]);
+        assert_eq!(jobs.accept, "Suspend and Close");
+        assert_eq!(jobs.discard, None);
+        assert_eq!(
+            jobs.background.as_deref(),
+            Some("Keep working in background")
+        );
+
+        let unsaved = close_prompt("alpha", 3, &["a.txt".to_owned()]);
+        assert_eq!(unsaved.accept, "Save all");
+        assert_eq!(unsaved.discard.as_deref(), Some("Discard all"));
+        assert_eq!(unsaved.background, None);
+
+        assert_eq!(quit_prompt(2).background, None);
+        assert_eq!(
+            quit_unsaved_prompt("alpha", 2, &["a.txt".to_owned()]).background,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn keep_working_in_background_hides_the_window_instead_of_closing_it() {
+        let f = fixture();
+        let (_a, root, id) = open_at(&f, "alpha").await;
+        f.jobs.set_working(&id, 2);
+        f.shell.answer_with(Confirmation::Background);
+
+        assert_eq!(f.manager.close_window(&id).await, CloseOutcome::Background);
+        assert!(f.manager.is_background(&id));
+        assert_eq!(
+            f.shell.log().last().unwrap(),
+            &format!("hide {}", label_of(&id))
+        );
+        assert_eq!(
+            f.shell.windows(),
+            [label_of(&id)],
+            "the window is not closed, nor a welcome window opened"
+        );
+        assert_eq!(
+            f.jobs.events(),
+            [format!("opened {id} Developer")],
+            "nothing is suspended"
+        );
+        assert_eq!(
+            f.store.snapshot().last_session,
+            [root.to_string_lossy().into_owned()]
+        );
+        // The close request is not stuck: a later one asks again.
+        f.manager.on_focused(&label_of(&id));
+        f.shell.answer(false);
+        assert_eq!(f.manager.close_window(&id).await, CloseOutcome::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn keep_working_in_background_with_a_window_that_cannot_be_hidden_leaves_it_open_and_says_why(
+    ) {
+        let f = fixture();
+        let (_a, root, id) = open_at(&f, "alpha").await;
+        f.jobs.set_working(&id, 2);
+        *f.shell.fail_hide.lock().unwrap() = true;
+        f.shell.answer_with(Confirmation::Background);
+
+        assert_eq!(
+            f.manager.close_window(&id).await,
+            CloseOutcome::HideFailed("no window system".into())
+        );
+        // The window stays shown and open, and nothing is suspended.
+        assert!(!f.manager.is_background(&id));
+        assert!(f.shell.hidden.lock().unwrap().is_empty());
+        assert_eq!(f.shell.windows(), [label_of(&id)]);
+        assert_eq!(f.manager.open_projects().len(), 1);
+        assert_eq!(
+            f.jobs.events(),
+            [format!("opened {id} Developer")],
+            "nothing is suspended"
+        );
+        assert_eq!(
+            f.store.snapshot().last_session,
+            [root.to_string_lossy().into_owned()]
+        );
+        // The reason goes to the UI of that window.
+        assert_eq!(
+            f.shell.log().last().unwrap(),
+            &format!("hide failed {} no window system", label_of(&id))
+        );
+        // The close request is not stuck: a later one asks again.
+        f.manager.on_focused(&label_of(&id));
+        f.shell.answer(false);
+        assert_eq!(f.manager.close_window(&id).await, CloseOutcome::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn suspend_and_close_does_what_closing_did() {
+        let f = fixture();
+        let (_a, id) = open(&f, "alpha").await;
+        f.jobs.set_working(&id, 1);
+        f.shell.answer(true);
+        assert_eq!(f.manager.close_window(&id).await, CloseOutcome::Closed);
+        assert!(f
+            .jobs
+            .events()
+            .contains(&format!("closed {id} WindowClosed")));
+        assert!(!f.manager.is_background(&id));
+    }
+
+    #[tokio::test]
+    async fn closing_the_last_window_on_the_screen_opens_no_welcome_window_while_others_are_in_the_background(
+    ) {
+        let f = fixture();
+        let (_a, root_a, id_a) = open_at(&f, "alpha").await;
+        let (_b, _, id_b) = open_at(&f, "beta").await;
+        f.manager.send_to_background(&id_a);
+
+        assert_eq!(f.manager.close_window(&id_b).await, CloseOutcome::Closed);
+        assert_eq!(f.shell.windows(), [label_of(&id_a)]);
+        assert!(!f.shell.log().iter().any(|l| l.contains("welcome")));
+        assert_eq!(
+            f.store.snapshot().last_session,
+            [root_a.to_string_lossy().into_owned()]
+        );
+        // The window in the background is still the project's: closing it is the last window.
+        f.manager.reopen_app();
+        assert_eq!(f.manager.close_window(&id_a).await, CloseOutcome::Closed);
+        assert_eq!(f.shell.windows(), ["welcome"]);
+    }
+
+    #[tokio::test]
+    async fn a_window_in_the_background_counts_for_the_quit_and_the_restore_list() {
+        let f = fixture();
+        let (_a, root_a, id_a) = open_at(&f, "alpha").await;
+        let (_b, root_b, _id_b) = open_at(&f, "beta").await;
+        f.jobs.set_working(&id_a, 1);
+        f.manager.send_to_background(&id_a);
+        assert_eq!(f.manager.working_jobs(), 1);
+
+        f.shell.answer(true);
+        f.manager.quit(0, true).await;
+        let prompt = f.shell.prompts.lock().unwrap()[0].clone();
+        assert_eq!(prompt.title, "Quit Weaver?");
+        assert!(
+            prompt.message.starts_with("1 job is working."),
+            "{}",
+            prompt.message
+        );
+        assert_eq!(
+            prompt.background, None,
+            "quitting never offers the background"
+        );
+        assert_eq!(
+            f.store.snapshot().last_session,
+            [
+                root_a.to_string_lossy().into_owned(),
+                root_b.to_string_lossy().into_owned()
+            ]
+        );
+        assert!(f.jobs.events().contains(&format!("closed {id_a} AppQuit")));
+        assert_eq!(f.shell.log().last().unwrap(), "exit 0");
+    }
+
+    #[tokio::test]
+    async fn the_next_start_opens_every_window_of_the_restore_list_on_the_screen() {
+        let f = fixture();
+        let (_a, root_a, id_a) = project("alpha");
+        let (_b, root_b, id_b) = project("beta");
+        f.store
+            .update(|state| {
+                state.set_last_session(vec![
+                    root_a.to_string_lossy().into_owned(),
+                    root_b.to_string_lossy().into_owned(),
+                ])
+            })
+            .unwrap();
+        f.manager.restore(None).await;
+        assert_eq!(f.shell.windows(), [label_of(&id_a), label_of(&id_b)]);
+        assert!(!f.manager.is_background(&id_a));
+        assert!(!f.manager.is_background(&id_b));
+        assert!(f.shell.hidden.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reopening_the_app_shows_every_window_in_the_background_least_recently_used_first_then_focuses_the_last_used(
+    ) {
+        let f = fixture();
+        let (_a, _, id_a) = open_at(&f, "alpha").await;
+        let (_b, _, id_b) = open_at(&f, "beta").await;
+        let (_c, _, id_c) = open_at(&f, "gamma").await;
+        // Used last: c, then b, then a.
+        f.manager.on_focused(&label_of(&id_a));
+        f.manager.on_focused(&label_of(&id_b));
+        f.manager.on_focused(&label_of(&id_c));
+        for id in [&id_c, &id_a, &id_b] {
+            assert_eq!(f.manager.send_to_background(id), BackgroundOutcome::Hidden);
+        }
+
+        f.manager.reopen_app();
+        assert_eq!(
+            log_from(&f, "reveal"),
+            [
+                format!("reveal {}", label_of(&id_a)),
+                format!("reveal {}", label_of(&id_b)),
+                format!("reveal {}", label_of(&id_c)),
+                format!("focus {}", label_of(&id_c)),
+            ]
+        );
+        for id in [&id_a, &id_b, &id_c] {
+            assert!(!f.manager.is_background(id));
+        }
+        assert!(f.shell.hidden.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reopening_the_app_with_no_window_in_the_background_focuses_the_window_used_most_recently(
+    ) {
+        let f = fixture();
+        let (_a, _, id_a) = open_at(&f, "alpha").await;
+        let (_b, _, _id_b) = open_at(&f, "beta").await;
+        f.manager.on_focused(&label_of(&id_a));
+        f.manager.reopen_app();
+        assert_eq!(
+            f.shell.log().last().unwrap(),
+            &format!("focus {}", label_of(&id_a))
+        );
+        assert!(!f.shell.log().iter().any(|l| l.starts_with("reveal")));
+    }
+
+    #[tokio::test]
+    async fn reopening_the_app_with_no_project_window_shows_the_welcome_window() {
+        let f = fixture();
+        f.manager.reopen_app();
+        assert_eq!(f.shell.windows(), ["welcome"]);
+        f.manager.reopen_app();
+        assert_eq!(f.shell.log().last().unwrap(), "focus welcome");
+    }
+
+    #[tokio::test]
+    async fn the_dock_icon_brings_the_windows_back_whenever_one_is_in_the_background() {
+        let f = fixture();
+        let (_a, _, id_a) = open_at(&f, "alpha").await;
+        let (_b, _, id_b) = open_at(&f, "beta").await;
+        // No window in the background and one visible: nothing happens, as before.
+        let before = f.shell.log();
+        f.manager.reopen(true);
+        assert_eq!(f.shell.log(), before);
+
+        f.manager.send_to_background(&id_a);
+        // The system says a window is visible (beta): the window in the background comes back anyway.
+        f.manager.reopen(true);
+        assert!(!f.manager.is_background(&id_a));
+        assert!(f
+            .shell
+            .log()
+            .contains(&format!("reveal {}", label_of(&id_a))));
+        assert!(f.shell.hidden.lock().unwrap().is_empty());
+
+        f.manager.send_to_background(&id_a);
+        f.manager.send_to_background(&id_b);
+        f.manager.reopen(false);
+        assert!(!f.manager.is_background(&id_a) && !f.manager.is_background(&id_b));
+    }
+
+    #[tokio::test]
+    async fn a_second_launch_without_a_folder_brings_every_window_back() {
+        let f = fixture();
+        let (_a, _, id_a) = open_at(&f, "alpha").await;
+        let (_b, _, id_b) = open_at(&f, "beta").await;
+        f.manager.send_to_background(&id_a);
+        f.manager.send_to_background(&id_b);
+
+        f.manager
+            .second_launch(vec!["weaver".to_owned()], PathBuf::from("/"));
+        assert!(f.shell.hidden.lock().unwrap().is_empty());
+        assert!(!f.manager.is_background(&id_a) && !f.manager.is_background(&id_b));
+        // beta was used most recently: it has the focus.
+        assert_eq!(
+            f.shell.log().last().unwrap(),
+            &format!("focus {}", label_of(&id_b))
+        );
+    }
+
+    #[tokio::test]
+    async fn opening_a_project_or_clicking_its_notification_brings_back_only_its_window() {
+        let f = fixture();
+        let (_a, root_a, id_a) = open_at(&f, "alpha").await;
+        let (_b, _, id_b) = open_at(&f, "beta").await;
+        f.manager.send_to_background(&id_a);
+        f.manager.send_to_background(&id_b);
+
+        assert_eq!(
+            f.manager
+                .open_project(root_a, OpenReason::Developer)
+                .await
+                .unwrap(),
+            OpenOutcome::Focused
+        );
+        assert!(!f.manager.is_background(&id_a));
+        assert!(f.manager.is_background(&id_b));
+        assert_eq!(*f.shell.hidden.lock().unwrap(), [label_of(&id_b)]);
+
+        f.manager.send_to_background(&id_a);
+        let request = ShowRequest {
+            project_id: id_a.clone(),
+            view: ShowView::Jobs,
+            job_id: None,
+        };
+        assert!(f.manager.focus_project(&id_a, Some(request)));
+        assert!(!f.manager.is_background(&id_a));
+        assert!(f.manager.is_background(&id_b));
+        assert!(!f.shell.log().iter().any(|l| l.starts_with("reveal")));
+    }
+
+    #[tokio::test]
+    async fn a_save_all_that_fails_brings_back_only_its_window() {
+        let f = fixture();
+        let (_a, id_a) = open(&f, "alpha").await;
+        let (_b, id_b) = open(&f, "beta").await;
+        f.manager.set_unsaved(&id_a, vec!["a.txt".into()]);
+        *f.shell.texts.lock().unwrap() = Some(vec![tab("a.txt", "A")]);
+        f.shell
+            .refused
+            .lock()
+            .unwrap()
+            .insert("a.txt".into(), "disk full".into());
+        f.manager.send_to_background(&id_a);
+        f.manager.send_to_background(&id_b);
+
+        // Quitting asks the window with unsaved changes, back from the background, and `Save all` fails.
+        f.shell.answer(true);
+        f.manager.quit(0, true).await;
+        assert!(!f.manager.is_background(&id_a));
+        assert!(f.manager.is_background(&id_b));
+        assert!(!f.shell.log().iter().any(|l| l.starts_with("exit")));
+        assert_eq!(f.shell.failed.lock().unwrap().len(), 1);
     }
 
     #[test]

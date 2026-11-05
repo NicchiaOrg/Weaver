@@ -8,15 +8,18 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use trama_core::omp::machine::ReadyOmp;
-use trama_core::paths::AppDirs;
-use trama_core::project::image::ProjectImage;
-use trama_core::settings::{Permissions, Settings};
+use weaver_core::omp::machine::ReadyOmp;
+use weaver_core::paths::AppDirs;
+use weaver_core::project::image::ProjectImage;
+use weaver_core::settings::{Permissions, Settings};
 
 use super::host::{Host, MutationResult};
 use super::wire::{EntriesEvent, JobRow, JobsSnapshot};
+use crate::file_lock::FileLockService;
+use crate::file_tabs::events::testing::{recording, Recorder as FileEventsRecorder};
 use crate::mutations::MutationQueues;
 use crate::pictures::Pictures;
+use crate::subagents::wire::{SubAgentEntries, SubAgentsEvent};
 use crate::windows::jobs::BoxFuture;
 
 /// The binary of the fake agent, built once by a nested `cargo build` into its own target folder
@@ -59,9 +62,17 @@ pub struct TestHost {
     queues: Arc<MutationQueues>,
     pub snapshots: Mutex<Vec<JobsSnapshot>>,
     pub entries: Mutex<Vec<EntriesEvent>>,
+    pub lists: Mutex<Vec<SubAgentsEvent>>,
+    pub agent_entries: Mutex<Vec<SubAgentEntries>>,
     pub missing: Mutex<Vec<Option<String>>>,
     pub board_changes: Mutex<usize>,
     pub ready: Mutex<bool>,
+    /// The agent lock of the File view, fed by the actors of the jobs and of General.
+    pub file_locks: Arc<FileLockService>,
+    /// What the agent lock told the UI.
+    pub lock_events: Arc<FileEventsRecorder>,
+    /// The names of the assets of every project, for the `@` tags.
+    pub assets: Mutex<Vec<String>>,
     _base: tempfile::TempDir,
 }
 
@@ -71,7 +82,10 @@ impl TestHost {
         let dirs =
             AppDirs::from_bases(&base.path().join("config"), &base.path().join("data"), None);
         std::fs::create_dir_all(dirs.local_data_dir()).unwrap();
+        let (file_events, lock_events) = recording();
         Arc::new(TestHost {
+            file_locks: FileLockService::new(file_events),
+            lock_events,
             queues: Arc::new(MutationQueues::new(dirs.clone())),
             dirs,
             settings: Mutex::new(Settings::default()),
@@ -79,10 +93,13 @@ impl TestHost {
             pictures: Arc::new(Pictures::new()),
             snapshots: Mutex::default(),
             entries: Mutex::default(),
+            lists: Mutex::default(),
+            agent_entries: Mutex::default(),
             missing: Mutex::default(),
             board_changes: Mutex::new(0),
             ready: Mutex::new(true),
             _base: base,
+            assets: Mutex::default(),
         })
     }
 
@@ -110,16 +127,16 @@ impl TestHost {
         self.settings.lock().unwrap().permissions = permissions;
     }
 
-    /// A project with `.trama/` and the files given (path under `.trama/`, content).
+    /// A project with `.weaver/` and the files given (path under `.weaver/`, content).
     pub async fn project(&self, files: &[(&str, &str)]) -> (tempfile::TempDir, Project) {
         let dir = tempfile::tempdir().unwrap();
         for (rel, content) in files {
-            let path = dir.path().join(".trama").join(rel);
+            let path = dir.path().join(".weaver").join(rel);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, content).unwrap();
         }
-        std::fs::create_dir_all(dir.path().join(".trama")).unwrap();
-        let root = trama_core::paths::canonical_root(dir.path()).unwrap();
+        std::fs::create_dir_all(dir.path().join(".weaver")).unwrap();
+        let root = weaver_core::paths::canonical_root(dir.path()).unwrap();
         let id = self.pictures.open(root.clone()).await.unwrap();
         (dir, Project { root, id })
     }
@@ -172,12 +189,20 @@ impl Host for TestHost {
         self.missing.lock().unwrap().push(reason);
     }
 
+    fn file_locks(&self) -> Option<Arc<FileLockService>> {
+        Some(self.file_locks.clone())
+    }
+
+    fn asset_names(&self, _project_id: &str) -> Vec<String> {
+        self.assets.lock().unwrap().clone()
+    }
+
     fn inherited_env(&self) -> Vec<(OsString, OsString)> {
         let script = self.script.lock().unwrap().clone();
         vec![
             (OsString::from("FAKE_ACP_SCRIPT"), script.into_os_string()),
             // A variable of Weaver's own environment that omp must never see.
-            (OsString::from("TRAMA_JOB"), OsString::from("inherited")),
+            (OsString::from("WEAVER_JOB"), OsString::from("inherited")),
         ]
     }
 
@@ -191,6 +216,14 @@ impl Host for TestHost {
 
     fn emit_entries(&self, event: &EntriesEvent) {
         self.entries.lock().unwrap().push(event.clone());
+    }
+
+    fn emit_sub_agents(&self, event: &SubAgentsEvent) {
+        self.lists.lock().unwrap().push(event.clone());
+    }
+
+    fn emit_sub_agent_entries(&self, event: &SubAgentEntries) {
+        self.agent_entries.lock().unwrap().push(event.clone());
     }
 
     fn board_changed(&self, _project_id: &str) {

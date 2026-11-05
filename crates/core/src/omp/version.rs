@@ -5,7 +5,9 @@
 
 use std::cmp::Ordering;
 
-/// The oldest omp Weaver works with. One constant, compared as semver.
+/// The oldest omp Weaver works with. One constant, compared as semver. Raising it means checking
+/// again the omp internals Weaver reads: the sub-agent fields and the agent lock's tool fields,
+/// listed in [`crate::jobs::subagents`].
 pub const MIN_OMP_VERSION: &str = "18.15.0";
 
 /// A semantic version: `major.minor.patch`, an optional `-prerelease`, build metadata ignored.

@@ -1,4 +1,4 @@
-//! `trama question new`: submits a round of questions to the app and waits, with no time limit,
+//! `weaver question new`: submits a round of questions to the app and waits, with no time limit,
 //! until a result exists (`requirements/cli#question-round`).
 //!
 //! It does not use the request kind `command`: that kind runs inside the project's queue under
@@ -14,11 +14,11 @@ use std::sync::mpsc;
 use std::thread;
 
 use serde_json::{json, Map, Value};
-use trama_core::command::{code, CommandReply};
-use trama_core::ipc::{self, SendError};
-use trama_core::paths::AppDirs;
-use trama_core::protocol::{self, ProtocolError, Request, Response};
-use trama_core::question::{
+use weaver_core::command::{code, CommandReply};
+use weaver_core::ipc::{self, SendError};
+use weaver_core::paths::AppDirs;
+use weaver_core::protocol::{self, ProtocolError, Request, Response};
+use weaver_core::question::{
     self, code as round_code, CANCELLED_MESSAGE, INTERRUPTED_MESSAGE, KIND,
 };
 
@@ -130,7 +130,7 @@ fn answered(payload: Value) -> Result<CommandReply, Failure> {
 
 #[cfg(test)]
 mod tests {
-    use trama_core::protocol::ErrorBody;
+    use weaver_core::protocol::ErrorBody;
 
     use super::*;
 

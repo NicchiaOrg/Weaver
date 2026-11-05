@@ -16,8 +16,8 @@
 use std::sync::{Arc, RwLock};
 
 use serde::Serialize;
-use trama_core::project::board::AgentFacts;
 use ts_rs::TS;
+use weaver_core::project::board::AgentFacts;
 
 /// The kind of card a job is preparing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

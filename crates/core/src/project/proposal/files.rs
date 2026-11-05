@@ -1,7 +1,7 @@
 //! The text inside the folders of Proposals.
 //!
 //! The project image does not hold the copies a Proposal keeps of the files it changes (they sit
-//! under `proposals/<id>-<slug>/` at the path they have under `.trama/`), so the code that
+//! under `proposals/<id>-<slug>/` at the path they have under `.weaver/`), so the code that
 //! decides reads them once with [`read_folders`] and passes them on as [`Folders`]: the rules
 //! stay pure functions over text.
 
@@ -44,7 +44,7 @@ impl Folder {
         }
     }
 
-    /// The file `rel` the Proposal holds as a new version of a file under `.trama/`: not a Task.
+    /// The file `rel` the Proposal holds as a new version of a file under `.weaver/`: not a Task.
     pub fn held(&self) -> impl Iterator<Item = (&String, &String)> {
         self.files.iter().filter(|(path, _)| !is_task_path(path))
     }
@@ -125,7 +125,7 @@ pub fn registered(card: &Card) -> Vec<String> {
 }
 
 /// The changes the files of a Proposal make: each registered file it holds is written at its
-/// path under `.trama/`, each removed path is deleted. Files that are not registered, and Task
+/// path under `.weaver/`, each removed path is deleted. Files that are not registered, and Task
 /// files, are not part of it.
 pub fn changes_of(card: &Card, folder: &Folder) -> ChangeSet {
     let base = data::base_of(card);

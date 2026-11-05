@@ -217,7 +217,8 @@ mod tests {
         Round::new(
             id,
             Origin::Drift {
-                drift: "d1d1d1d1".into(),
+                id: "d1d1d1d1".into(),
+                drift: "D1".into(),
                 title: "A drift".into(),
             },
             request(),

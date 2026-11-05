@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HistoryEntry } from "@/bindings/HistoryEntry";
 import type { HistorySnapshot } from "@/bindings/HistorySnapshot";
 import type { HistoryTask } from "@/bindings/HistoryTask";
+import { BoardActionsContext } from "@/components/board/board-ui";
 import { groupByDay, inPeriod, localMidnight, plainSummary } from "@/components/history/history-model";
 import { HistoryView } from "@/components/history/history-view";
 import { ProjectContext } from "@/components/project-context";
@@ -140,6 +141,13 @@ describe("the label colour", () => {
 });
 
 describe("HistoryView", () => {
+  it("has the view header with the title History and the Period filter on its right", async () => {
+    install([entry("aaaaaaaa", "Checkout works", local(11, 2, 9, 30))]);
+    await show();
+    const header = screen.getByRole("heading", { level: 1, name: "History" }).closest("header")!;
+    expect(within(header).getByRole("combobox", { name: "Period" })).toBeInTheDocument();
+  });
+
   it("groups the entries by local day under Today, Yesterday and the long date, and shows the time only in the first two", async () => {
     install([
       entry("aaaaaaaa", "Checkout works", local(11, 2, 9, 30)),
@@ -273,5 +281,50 @@ describe("HistoryView", () => {
     await act(async () => handlers.get("project-changed")?.({ projectId: PROJECT, revision: 3, slices: ["history"] }));
     expect(await screen.findByText("Second")).toBeInTheDocument();
     expect(asked()).toBe(2);
+  });
+});
+
+describe("Ask more on a History entry", () => {
+  function open(askMore = vi.fn().mockResolvedValue("askaskas")) {
+    install([entry("eeeeeeee", "Checkout works", local(11, 2, 9, 30), { tasks: [task("bbbbbbbb", "Pay with a card", { body: "Card payments." })] })]);
+    render(
+      <TooltipProvider>
+        <ProjectContext.Provider value={{ projectId: PROJECT, showView: vi.fn(), openJob: vi.fn(), openedJob: null }}>
+          <BoardActionsContext.Provider value={{ askMore }}>
+            <HistoryView now={() => NOW} />
+          </BoardActionsContext.Provider>
+        </ProjectContext.Provider>
+      </TooltipProvider>,
+    );
+    return askMore;
+  }
+
+  it("is in the footer of the entry's dialog, with its tooltip and accessible name, and sends only the entry", async () => {
+    const user = userEvent.setup();
+    const askMore = open();
+    await screen.findByRole("combobox", { name: "Period" });
+    await user.click(screen.getByRole("button", { name: /Checkout works/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Checkout works" });
+    const button = within(dialog).getByRole("button", { name: "Ask more about eeeeeeee" });
+    expect(button).toHaveTextContent("Ask more");
+    expect(button).toBeEnabled();
+    await user.hover(button);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Ask an agent about this History entry");
+    await user.click(button);
+    expect(askMore).toHaveBeenCalledWith({ kind: "history", entry: "eeeeeeee" });
+    // The dialog stays as it was.
+    expect(screen.getByRole("dialog", { name: "Checkout works" })).toBeInTheDocument();
+  });
+
+  it("is not on the Tasks of the entry, collapsed or expanded", async () => {
+    const user = userEvent.setup();
+    open();
+    await screen.findByRole("combobox", { name: "Period" });
+    await user.click(screen.getByRole("button", { name: /Checkout works/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Checkout works" });
+    await user.click(within(dialog).getByRole("button", { name: /Pay with a card/ }));
+    expect(within(dialog).getByText("Card payments.")).toBeVisible();
+    expect(within(dialog).queryByRole("button", { name: "Ask more about bbbbbbbb" })).toBeNull();
+    expect(within(dialog).getAllByRole("button", { name: /^Ask more/ })).toHaveLength(1);
   });
 });

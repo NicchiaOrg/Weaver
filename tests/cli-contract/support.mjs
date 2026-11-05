@@ -1,22 +1,22 @@
-// Support of the CLI contract tests: they run the compiled `trama` binary, never the library.
+// Support of the CLI contract tests: they run the compiled `weaver-cli` binary, never the library.
 //
-// Every run is hermetic: the environment of the child loses every `TRAMA_*` and `WEAVER_*`
+// Every run is hermetic: the environment of the child loses every `WEAVER_*` and `WEAVER_*`
 // variable, and the folders where Weaver keeps its files (home, config, local data) point into a
 // temporary sandbox, so a run never reads or writes the developer's home or settings and the
 // suite passes the same with or without those variables in the environment.
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const executable = process.platform === "win32" ? "trama.exe" : "trama";
+const executable = process.platform === "win32" ? "weaver-cli.exe" : "weaver-cli";
 
 /** Where the contract tests find the binary under test. */
 export function locateBinary() {
-  // Not a TRAMA_* name on purpose: the suite never reads those variables from its environment.
+  // Not a WEAVER_* name on purpose: the suite never reads those variables from its environment.
   const chosen = process.env.CLI_CONTRACT_BIN;
   if (chosen) {
     if (!existsSync(chosen)) throw new Error(`CLI_CONTRACT_BIN names a file that does not exist: ${chosen}`);
@@ -27,12 +27,12 @@ export function locateBinary() {
     if (existsSync(candidate)) return candidate;
   }
   throw new Error(
-    `No compiled trama binary: build it (cargo build -p trama-cli) or set CLI_CONTRACT_BIN to its path. Looked in ${path.join(repositoryRoot, "target")}.`,
+    `No compiled weaver-cli binary: build it (cargo build -p weaver-cli) or set CLI_CONTRACT_BIN to its path. Looked in ${path.join(repositoryRoot, "target")}.`,
   );
 }
 
-/** The `trama` under test. */
-export const TRAMA = locateBinary();
+/** The `weaver-cli` under test. */
+export const WEAVER_CLI = locateBinary();
 
 const temporaryFolders = [];
 
@@ -48,7 +48,7 @@ export function cleanup() {
   for (const folder of temporaryFolders.splice(0)) rmSync(folder, { recursive: true, force: true });
 }
 
-/** `{ env, sandbox }`: the inherited environment without `TRAMA_*`/`WEAVER_*`, homes in a sandbox. */
+/** `{ env, sandbox }`: the inherited environment without `WEAVER_*`/`WEAVER_*`, homes in a sandbox. */
 export function hermeticEnvironment(extra = {}) {
   const sandbox = temporaryFolder("cli-contract-home-");
   const folders = {
@@ -61,23 +61,29 @@ export function hermeticEnvironment(extra = {}) {
     LOCALAPPDATA: path.join(sandbox, "local"),
     APPDATA: path.join(sandbox, "roaming"),
   };
+  if (process.platform === "win32") {
+    // Windows finds the config and local data folders of the user through the shell, from the
+    // profile folder (`USERPROFILE`, not `APPDATA` or `LOCALAPPDATA`), and fails when they do not
+    // exist: with the sandbox profile empty, Weaver finds no folder to keep its project lock in.
+    for (const name of ["Roaming", "Local"]) mkdirSync(path.join(sandbox, "AppData", name), { recursive: true });
+  }
   const env = {};
   for (const [name, value] of Object.entries(process.env)) {
-    if (!/^(TRAMA_|WEAVER_)/i.test(name)) env[name] = value;
+    if (!/^(WEAVER_|WEAVER_)/i.test(name)) env[name] = value;
   }
   delete env.XDG_RUNTIME_DIR;
   return { env: { ...env, ...folders, ...extra }, sandbox };
 }
 
 /**
- * Runs `trama` and returns `{ status, stdout, stderr, timedOut }`.
+ * Runs `weaver-cli` and returns `{ status, stdout, stderr, timedOut }`.
  *
  * `stdin`: a string or Buffer to send; `"open"` leaves the pipe open and silent until the process
  * exits (a command that reads it would hang and time out); `undefined` closes it at once.
  */
 export function run(args, { stdin, cwd, env, timeoutMs = 30_000 } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(TRAMA, args, { cwd, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(WEAVER_CLI, args, { cwd, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     const out = [];
     const err = [];
     let timedOut = false;
@@ -118,7 +124,7 @@ export function makeFolder(...parts) {
   return folder;
 }
 
-/** A fresh project: `trama project new --input '{}'` in a new folder. Returns the root. */
+/** A fresh project: `weaver project new --input '{}'` in a new folder. Returns the root. */
 export async function newProject(environment) {
   const root = temporaryFolder("cli-contract-project-");
   const result = await run(["project", "new", "--input", "{}", "--root", root], { env: environment.env, cwd: root });
@@ -126,4 +132,20 @@ export async function newProject(environment) {
     throw new Error(`project new failed (exit ${result.status}): ${result.stderr || result.stdout}`);
   }
   return root;
+}
+
+/** Runs real git in `folder` with no global or system configuration; returns its stdout. */
+export function git(folder, args) {
+  return execFileSync("git", args, {
+    cwd: folder,
+    encoding: "utf8",
+    env: { ...process.env, GIT_CONFIG_GLOBAL: path.join(tmpdir(), "no-such-git-config"), GIT_CONFIG_NOSYSTEM: "1" },
+  });
+}
+
+/** A new empty git repository under the system temporary folder, removed by [`cleanup`]. Returns the root. */
+export function gitRepository(prefix = "cli-contract-repo-") {
+  const folder = temporaryFolder(prefix);
+  git(folder, ["init", "-q"]);
+  return folder;
 }

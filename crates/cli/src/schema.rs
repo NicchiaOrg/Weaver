@@ -109,7 +109,7 @@ fn root(title: String, description: &str, mut body: Map<String, Value>) -> Value
 /// The schema of the input object.
 pub fn input_schema(command: &Command) -> Value {
     root(
-        format!("trama {} {} input", command.object, command.verb),
+        format!("weaver {} {} input", command.object, command.verb),
         "",
         properties(&command.input, true),
     )
@@ -118,13 +118,13 @@ pub fn input_schema(command: &Command) -> Value {
 /// The schema of the `--json` output.
 pub fn output_schema(command: &Command) -> Value {
     root(
-        format!("trama {} {} output", command.object, command.verb),
+        format!("weaver {} {} output", command.object, command.verb),
         "",
         properties(&command.output, false),
     )
 }
 
-/// The schema of the command line: the words and the argument of `trama <object> <verb> ...`.
+/// The schema of the command line: the words and the argument of `weaver <object> <verb> ...`.
 pub fn command_schema(command: &Command) -> Value {
     let mut props = Map::new();
     props.insert("object".into(), json!({ "const": command.object }));
@@ -186,7 +186,7 @@ mod tests {
 
     fn sample() -> Command {
         Command::new("task", "move", "Moves a Task.", not_implemented)
-            .arg(Arg::Card(trama_core::project::cards::CardKind::Task))
+            .arg(Arg::Card(weaver_core::project::cards::CardKind::Task))
             .states(&["doing", "todo", "done"])
             .input(vec![
                 opt("unchanged", nonblank(), "Closes a fix Task."),
@@ -196,7 +196,7 @@ mod tests {
                 req("id", line(), "The identity."),
                 req("number", nullable(int_min(1)), "The short number."),
             ])
-            .example("trama task move t3 done")
+            .example("weaver task move t3 done")
     }
 
     #[test]
@@ -246,7 +246,7 @@ mod tests {
         assert_eq!(schema["required"], json!(["object", "verb", "id", "state"]));
         assert_eq!(
             schema["title"],
-            "trama task move <id> doing|todo|done [--input <json>|-] [--root <dir>] [--json]"
+            "weaver task move <id> doing|todo|done [--input <json>|-] [--root <dir>] [--json]"
         );
     }
 }

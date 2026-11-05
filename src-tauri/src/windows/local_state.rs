@@ -8,7 +8,10 @@
 //!   window;
 //! * `lastSession`: the canonical paths of the projects whose window was open when Weaver last
 //!   quit, in opening order. It is written at quit and on each window open or close; closing a
-//!   window removes it from the list, quitting does not.
+//!   window removes it from the list, quitting does not;
+//! * `systemCertificates`: `{autoEnabledAt}`, when Weaver turned System Certificates on by itself
+//!   because Zscaler is installed (`requirements/data#system-certificates`). Written once, never
+//!   removed; absent from the file until then.
 //!
 //! [`LocalState`] is the pure value and its rules; [`StateStore`] keeps it in memory and writes it
 //! atomically. The store does file I/O: call it from the blocking pool.
@@ -18,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use trama_core::{atomic, paths};
+use weaver_core::{atomic, paths};
 
 use crate::log_warn;
 
@@ -40,12 +43,30 @@ pub struct RecentProject {
     pub opened: String,
 }
 
+/// What `state.json` remembers of System Certificates (`requirements/data#system-certificates`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SystemCertificatesMark {
+    /// When Weaver turned the setting on by itself because Zscaler is installed (UTC ISO 8601).
+    /// Present means Weaver never does it again; Weaver never removes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_enabled_at: Option<String>,
+}
+
+impl SystemCertificatesMark {
+    fn is_empty(&self) -> bool {
+        self.auto_enabled_at.is_none()
+    }
+}
+
 /// The content of `state.json`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LocalState {
     pub recent: Vec<RecentProject>,
     pub last_session: Vec<String>,
+    #[serde(skip_serializing_if = "SystemCertificatesMark::is_empty")]
+    pub system_certificates: SystemCertificatesMark,
 }
 
 /// Whether two canonical paths name the same project: the same text, or on Windows the same text
@@ -293,5 +314,44 @@ mod tests {
             .update(|state| state.record_open("/work/a", "a", &at(1)))
             .unwrap();
         assert_eq!(StateStore::in_dir(dir.path()).snapshot().recent.len(), 1);
+    }
+
+    #[test]
+    fn the_marker_is_written_next_to_the_projects_and_read_back_and_is_absent_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = StateStore::in_dir(dir.path());
+        store
+            .update(|state| state.record_open("/work/a", "a", &at(1)))
+            .unwrap();
+        let before = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
+        assert!(!before.contains("systemCertificates"), "{before}");
+
+        let instant = "2026-11-02T07:00:00.000Z".to_owned();
+        store
+            .update(|state| state.system_certificates.auto_enabled_at = Some(instant.clone()))
+            .unwrap();
+        let text = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
+        assert!(
+            text.contains(r#""systemCertificates": {"#) && text.contains(r#""autoEnabledAt""#),
+            "{text}"
+        );
+        let again = StateStore::in_dir(dir.path()).snapshot();
+        assert_eq!(again.system_certificates.auto_enabled_at, Some(instant));
+        assert_eq!(again.recent.len(), 1, "the projects are kept");
+        // A later change of the projects keeps the marker: one owner, no overwriting.
+        store
+            .update(|state| state.record_open("/work/b", "b", &at(2)))
+            .unwrap();
+        let kept = StateStore::in_dir(dir.path()).snapshot();
+        assert!(kept.system_certificates.auto_enabled_at.is_some());
+        assert_eq!(kept.recent.len(), 2);
+    }
+
+    #[test]
+    fn an_unreadable_file_counts_as_without_the_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(FILE_NAME), r#"{"systemCertificates": 7}"#).unwrap();
+        let store = StateStore::in_dir(dir.path());
+        assert_eq!(store.snapshot().system_certificates.auto_enabled_at, None);
     }
 }

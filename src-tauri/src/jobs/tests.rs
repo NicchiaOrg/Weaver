@@ -1,18 +1,21 @@
 //! The jobs against the scripted fake ACP agent: every transition of the Machine `job` as the app
 //! drives it, steering, permissions, forms, Stop, suspension and resume. No omp, no network.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::{json, Value};
-use trama_core::jobs::machine::RESUME_PROMPT;
-use trama_core::jobs::{JobState, JobStore};
-use trama_core::project::image::ProjectImage;
-use trama_core::settings::Permissions;
+use weaver_core::jobs::machine::RESUME_PROMPT;
+use weaver_core::jobs::subagents::SubAgentState;
+use weaver_core::jobs::{JobState, JobStore};
+use weaver_core::project::image::ProjectImage;
+use weaver_core::settings::Permissions;
 
 use super::conversation::{Delivery, EndLine, Entry, PermissionState};
 use super::registry::Jobs;
 use super::starts::Ctx;
 use super::testing::{row, text_update, until, Project, TestHost, LIMIT, TASK};
+use crate::subagents::wire::Step;
 
 fn ctx<'a>(project: &'a Project, image: &'a ProjectImage) -> Ctx<'a> {
     Ctx {
@@ -62,7 +65,7 @@ async fn a_run_goes_from_queued_through_running_to_done_with_its_conversation_an
     let (host, jobs, _dir, project) = one_task().await;
     host.script(json!({
         "log": host.received_log(),
-        "logEnv": ["TRAMA_JOB", "TRAMA_RUN", "TRAMA_TASK", "TRAMA_ENDPOINT"],
+        "logEnv": ["WEAVER_JOB", "WEAVER_RUN", "WEAVER_TASK", "WEAVER_ENDPOINT"],
         "prompts": [[
             agent("Reading "), agent("the Task."),
             { "update": { "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Read a.rs", "kind": "read", "status": "in_progress" } },
@@ -84,7 +87,7 @@ async fn a_run_goes_from_queued_through_running_to_done_with_its_conversation_an
 
     let conversation = entries(&jobs, &project, &id);
     assert!(
-        matches!(&conversation[0], Entry::Instruction { text } if text.starts_with("Use the trama-implement skill on Task aaaaaaaa."))
+        matches!(&conversation[0], Entry::Instruction { text } if text.starts_with("Use the weaver-implement skill on Task aaaaaaaa."))
     );
     assert!(conversation.contains(&Entry::Agent {
         text: "Reading the Task.".into(),
@@ -97,11 +100,11 @@ async fn a_run_goes_from_queued_through_running_to_done_with_its_conversation_an
 
     let received = host.received();
     let env = &received[0];
-    // The inherited TRAMA_JOB never reaches omp; Weaver's own variables do.
-    assert_eq!(env["env"]["TRAMA_JOB"], json!(id));
-    assert_eq!(env["env"]["TRAMA_RUN"], "1");
-    assert_eq!(env["env"]["TRAMA_TASK"], "aaaaaaaa");
-    assert_eq!(env["env"]["TRAMA_ENDPOINT"], "/tmp/weaver-test.sock");
+    // The inherited WEAVER_JOB never reaches omp; Weaver's own variables do.
+    assert_eq!(env["env"]["WEAVER_JOB"], json!(id));
+    assert_eq!(env["env"]["WEAVER_RUN"], "1");
+    assert_eq!(env["env"]["WEAVER_TASK"], "aaaaaaaa");
+    assert_eq!(env["env"]["WEAVER_ENDPOINT"], "/tmp/weaver-test.sock");
     let args: Vec<&str> = env["args"]
         .as_array()
         .unwrap()
@@ -141,7 +144,7 @@ async fn a_run_goes_from_queued_through_running_to_done_with_its_conversation_an
     assert!(prompt["params"]["prompt"][0]["text"]
         .as_str()
         .unwrap()
-        .starts_with("Use the trama-implement skill on Task aaaaaaaa."));
+        .starts_with("Use the weaver-implement skill on Task aaaaaaaa."));
     until("the shutdown", LIMIT, || {
         host.received()
             .iter()
@@ -156,9 +159,9 @@ async fn a_run_goes_from_queued_through_running_to_done_with_its_conversation_an
         (record.state, record.session_id.as_deref()),
         (JobState::Done, Some("fake-session"))
     );
-    assert!(record.args.contains(&"--advisor".to_owned()) && record.env["TRAMA_JOB"] == id);
+    assert!(record.args.contains(&"--advisor".to_owned()) && record.env["WEAVER_JOB"] == id);
     until("the overlay to be deleted", LIMIT, || {
-        !trama_core::jobs::record::overlay_file(&host.dirs, &id).exists()
+        !weaver_core::jobs::record::overlay_file(&host.dirs, &id).exists()
     })
     .await;
 }
@@ -369,6 +372,39 @@ async fn a_steer_that_needs_a_prompt_starts_a_new_turn_when_the_turn_ends() {
 }
 
 #[tokio::test]
+async fn a_message_that_tags_assets_goes_to_omp_with_the_block_and_the_conversation_shows_only_the_text(
+) {
+    let (host, jobs, _dir, project) = one_task().await;
+    *host.assets.lock().unwrap() = vec!["logo.png".to_owned(), "my notes.txt".to_owned()];
+    host.script(json!({ "log": host.received_log(), "steering": ["injected"], "prompts": [[agent("Start"), { "wait_steer": 1 }, agent("Got it")]] }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Running).await;
+    until("the first words", LIMIT, || {
+        entries(&jobs, &project, &id)
+            .iter()
+            .any(|e| matches!(e, Entry::Agent { text, .. } if text == "Start"))
+    })
+    .await;
+    let written = "Use @my notes.txt, and @logo.png; not @missing.png";
+    jobs.send_message(&project.id, &id, written).unwrap();
+    state_of(&host, &project, &id, JobState::Done).await;
+
+    let steer = host
+        .received()
+        .into_iter()
+        .find(|m| m["method"] == "_session/steering")
+        .unwrap();
+    assert_eq!(
+        steer["params"]["prompt"][0]["text"],
+        format!("{written}\n\nAssets tagged by the developer (added by Weaver, not written by the developer):\nRead the file `.weaver/assets/my notes.txt`.\nRead the file `.weaver/assets/logo.png`.")
+    );
+    assert!(entries(&jobs, &project, &id).iter().any(|e| matches!(
+        e,
+        Entry::Developer { text, delivery: Delivery::Delivered, .. } if text == written
+    )));
+}
+
+#[tokio::test]
 async fn yolo_answers_a_permission_that_still_arrives_with_the_first_allow_always() {
     let (host, jobs, _dir, project) = one_task().await;
     host.script(
@@ -563,7 +599,7 @@ async fn forms_and_asks_are_declined_at_once_with_the_fixed_text_and_the_ui_hear
     assert_eq!(answer["result"]["action"], "decline");
     assert_eq!(
         answer["result"]["_meta"]["message"],
-        "In Weaver jobs, ask the developer only with `trama question new` (bash timeout 0). Do not ask in any other way."
+        "In Weaver jobs, ask the developer only with `weaver question new` (bash timeout 0). Do not ask in any other way."
     );
     assert!(!entries(&jobs, &project, &id)
         .iter()
@@ -618,7 +654,7 @@ async fn a_job_that_ends_gives_back_the_tasks_it_held_in_the_same_step() {
     let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
     state_of(&host, &project, &id, JobState::Running).await;
     // The agent takes the Task: In progress, held by this job.
-    let file = project.root.join(".trama/tasks/aaaaaaaa-first-task.md");
+    let file = project.root.join(".weaver/tasks/aaaaaaaa-first-task.md");
     std::fs::write(
         &file,
         TASK.replace("column: todo", "column: doing")
@@ -744,7 +780,7 @@ async fn a_job_left_working_by_a_crash_is_suspended_at_the_next_start_and_resume
     record.id = "crashed1".to_owned();
     record
         .env
-        .insert("TRAMA_JOB".to_owned(), "crashed1".to_owned());
+        .insert("WEAVER_JOB".to_owned(), "crashed1".to_owned());
     store.write(&record).unwrap();
     first.stop(&project.id, &id).unwrap();
     state_of(&host, &project, &id, JobState::Stopped).await;
@@ -755,7 +791,7 @@ async fn a_job_left_working_by_a_crash_is_suspended_at_the_next_start_and_resume
     let second = Jobs::new(host.clone());
     host.script(json!({
         "log": host.received_log(),
-        "replay": [text_update("user_message_chunk", "Use the trama-implement skill on Task aaaaaaaa."), text_update("agent_message_chunk", "I was reading.")],
+        "replay": [text_update("user_message_chunk", "Use the weaver-implement skill on Task aaaaaaaa."), text_update("agent_message_chunk", "I was reading.")],
         "prompts": [[agent("Back at work")]],
     }));
     second.window_opened(&project.id, &project.root);
@@ -770,7 +806,7 @@ async fn a_job_left_working_by_a_crash_is_suspended_at_the_next_start_and_resume
         .unwrap()
         .entries;
     assert!(
-        matches!(&conversation[0], Entry::Instruction { text } if text.starts_with("Use the trama-implement skill"))
+        matches!(&conversation[0], Entry::Instruction { text } if text.starts_with("Use the weaver-implement skill"))
     );
     assert!(conversation
         .iter()
@@ -870,7 +906,7 @@ async fn notes_announcements_and_ghosts_follow_the_job_until_the_card_arrives_or
     std::fs::write(
         project
             .root
-            .join(".trama/tasks/bbbbbbbb-cancel-an-order.md"),
+            .join(".weaver/tasks/bbbbbbbb-cancel-an-order.md"),
         TASK.replace("First task", "Cancel an order"),
     )
     .unwrap();
@@ -898,9 +934,9 @@ async fn notes_announcements_and_ghosts_follow_the_job_until_the_card_arrives_or
 
 #[tokio::test]
 async fn the_authority_accepts_only_a_working_job_of_the_project_and_runs_the_job_commands() {
-    use trama_cli::exec::{execute, Authority};
-    use trama_cli::spec::Caller;
-    use trama_core::command::CommandRequest;
+    use weaver_cli::exec::{execute, Authority};
+    use weaver_cli::spec::Caller;
+    use weaver_core::command::CommandRequest;
 
     let (host, jobs, _dir, project) = one_task().await;
     host.script(json!({ "prompts": [[{ "wait_steer": 1 }]] }));
@@ -925,6 +961,7 @@ async fn the_authority_accepts_only_a_working_job_of_the_project_and_runs_the_jo
         state: None,
         input: input.as_object().unwrap().clone(),
         general: None,
+        ask: None,
     };
     let caller = Caller {
         job: Some(id.clone()),
@@ -1002,7 +1039,7 @@ async fn the_authority_accepts_only_a_working_job_of_the_project_and_runs_the_jo
         )
         .unwrap_err()
         .code,
-        trama_core::command::code::FORBIDDEN
+        weaver_core::command::code::FORBIDDEN
     );
     // `job new` is for the working General only.
     assert_eq!(
@@ -1013,7 +1050,7 @@ async fn the_authority_accepts_only_a_working_job_of_the_project_and_runs_the_jo
         )
         .unwrap_err()
         .code,
-        trama_core::command::code::FORBIDDEN
+        weaver_core::command::code::FORBIDDEN
     );
 
     jobs.send_message(&project.id, &id, "Wrap up").unwrap();
@@ -1026,20 +1063,23 @@ async fn the_authority_accepts_only_a_working_job_of_the_project_and_runs_the_jo
         )
         .unwrap_err()
         .code,
-        trama_core::command::code::FORBIDDEN
+        weaver_core::command::code::FORBIDDEN
     );
 }
 
 #[tokio::test]
 async fn the_general_starts_a_job_with_the_developers_refusals() {
-    use trama_cli::exec::execute;
-    use trama_cli::spec::Caller;
-    use trama_core::command::CommandRequest;
+    use weaver_cli::exec::execute;
+    use weaver_cli::spec::Caller;
+    use weaver_core::command::CommandRequest;
 
     struct Always;
     impl super::authority::GeneralAuthority for Always {
         fn accepts(&self, _root: &std::path::Path, token: &str) -> bool {
             token == "general-token"
+        }
+        fn accepts_ask(&self, _root: &std::path::Path, token: &str) -> bool {
+            token == "ask-token"
         }
         fn job_requested(
             &self,
@@ -1062,6 +1102,7 @@ async fn the_general_starts_a_job_with_the_developers_refusals() {
         state: None,
         input: input.as_object().unwrap().clone(),
         general: Some("general-token".into()),
+        ask: None,
     };
     let general = Caller {
         general: Some("general-token".into()),
@@ -1078,7 +1119,7 @@ async fn the_general_starts_a_job_with_the_developers_refusals() {
     assert_eq!(jobs.record(&id).unwrap().name, "Run T1");
     // The developer's refusal: another Run works.
     let refused = execute(&request(json!({ "kind": "run" })), &general, &authority).unwrap_err();
-    assert_eq!(refused.code, trama_core::command::code::REFUSED);
+    assert_eq!(refused.code, weaver_core::command::code::REFUSED);
     assert!(
         refused.message.contains("A run is in progress"),
         "{}",
@@ -1096,7 +1137,7 @@ async fn the_general_starts_a_job_with_the_developers_refusals() {
         execute(&request(json!({ "kind": "scan" })), &wrong, &authority)
             .unwrap_err()
             .code,
-        trama_core::command::code::FORBIDDEN
+        weaver_core::command::code::FORBIDDEN
     );
     // A design request cannot be sent before the design requests install their sender.
     assert!(execute(
@@ -1154,4 +1195,567 @@ async fn the_list_is_ordered_waiting_running_queued_then_the_finished_and_keeps_
         "latest end first"
     );
     assert!(snapshot.jobs.iter().all(|r| r.name == "Scan"));
+}
+
+const CERTIFICATE_NAMES: [&str; 3] = [
+    "NODE_EXTRA_CA_CERTS",
+    "SSL_CERT_FILE",
+    "PI_REQUEST_COMPRESSION",
+];
+
+/// The setting `System Certificates` and the bundle file, as the Machine leaves them.
+fn system_certificates(host: &TestHost, enabled: bool, bundle: bool) {
+    host.settings.lock().unwrap().system_certificates.enabled = enabled;
+    let file = host.dirs.system_certificates_file();
+    if bundle {
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "pem").unwrap();
+    } else {
+        let _ = std::fs::remove_file(&file);
+    }
+}
+
+/// The script of an omp process that logs the certificate variables it received.
+fn logging_script(host: &TestHost, prompts: Value) -> Value {
+    json!({
+        "log": host.received_log(),
+        "logEnv": CERTIFICATE_NAMES,
+        "prompts": prompts,
+    })
+}
+
+/// The environment logged at each start of the agent, in order.
+fn started_environments(host: &TestHost) -> Vec<Value> {
+    host.received()
+        .into_iter()
+        .filter(|line| line.get("env").is_some())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_job_starts_with_the_certificate_variables_only_with_the_setting_on_and_a_bundle() {
+    for (enabled, bundle, expected) in [
+        (true, true, true),
+        (false, true, false),
+        (true, false, false),
+    ] {
+        let (host, jobs, _dir, project) = one_task().await;
+        system_certificates(&host, enabled, bundle);
+        host.script(logging_script(&host, json!([[{ "end": "end_turn" }]])));
+        let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+        state_of(&host, &project, &id, JobState::Done).await;
+
+        let environments = started_environments(&host);
+        assert_eq!(environments.len(), 1);
+        let bundle_path = host.dirs.system_certificates_file();
+        for name in CERTIFICATE_NAMES {
+            let expected_value = match (expected, name) {
+                (false, _) => Value::Null,
+                (true, "PI_REQUEST_COMPRESSION") => json!("0"),
+                (true, _) => json!(bundle_path.to_string_lossy()),
+            };
+            assert_eq!(
+                environments[0]["env"][name], expected_value,
+                "{name} {enabled} {bundle}"
+            );
+        }
+
+        // The registry never holds them, with the setting on or off.
+        jobs.flush();
+        let record = JobStore::new(&host.dirs).read(&id).unwrap().unwrap();
+        for name in CERTIFICATE_NAMES {
+            assert!(!record.env.contains_key(name), "{name} in the registry");
+        }
+        assert_eq!(record.env["WEAVER_JOB"], id);
+    }
+}
+
+#[tokio::test]
+async fn a_resumed_job_gets_the_certificate_variables_of_that_moment_not_those_of_its_first_start()
+{
+    // Started with the setting on, resumed with it off: the process gets none.
+    let (host, jobs, _dir, project) = one_task().await;
+    system_certificates(&host, true, true);
+    host.script(logging_script(&host, json!([[{ "hold": true }]])));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Running).await;
+    assert!(started_environments(&host)[0]["env"]["SSL_CERT_FILE"].is_string());
+    jobs.window_closed(&project.id).await;
+    jobs.flush();
+    let record = JobStore::new(&host.dirs).read(&id).unwrap().unwrap();
+    assert!(CERTIFICATE_NAMES
+        .iter()
+        .all(|name| !record.env.contains_key(*name)));
+
+    system_certificates(&host, false, true);
+    host.script(logging_script(&host, json!([[{ "end": "end_turn" }]])));
+    jobs.window_opened(&project.id, &project.root);
+    state_of(&host, &project, &id, JobState::Done).await;
+    let environments = started_environments(&host);
+    assert_eq!(environments.len(), 2);
+    assert!(CERTIFICATE_NAMES
+        .iter()
+        .all(|name| environments[1]["env"][name].is_null()));
+    // The job id and the endpoint of the saved env are still there.
+    assert_eq!(jobs.record(&id).unwrap().env["WEAVER_JOB"], id);
+
+    // Started with the setting off, resumed with it on: the process gets them.
+    let (host, jobs, _dir, project) = one_task().await;
+    system_certificates(&host, false, true);
+    host.script(logging_script(&host, json!([[{ "hold": true }]])));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Running).await;
+    assert!(CERTIFICATE_NAMES
+        .iter()
+        .all(|name| started_environments(&host)[0]["env"][name].is_null()));
+    jobs.window_closed(&project.id).await;
+
+    system_certificates(&host, true, true);
+    host.script(logging_script(&host, json!([[{ "end": "end_turn" }]])));
+    jobs.window_opened(&project.id, &project.root);
+    state_of(&host, &project, &id, JobState::Done).await;
+    let environments = started_environments(&host);
+    assert_eq!(environments.len(), 2);
+    assert_eq!(environments[1]["env"]["PI_REQUEST_COMPRESSION"], "0");
+    jobs.flush();
+    let record = JobStore::new(&host.dirs).read(&id).unwrap().unwrap();
+    assert!(CERTIFICATE_NAMES
+        .iter()
+        .all(|name| !record.env.contains_key(*name)));
+}
+
+/// A certificate error and an HTTP error, each with the setting on and off, and the explanation
+/// each one must produce.
+fn proxy_cases() -> Vec<(String, bool, String)> {
+    let mut cases = Vec::new();
+    for text in [
+        "fetch failed: UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+        "request failed: HTTP 407",
+    ] {
+        for on in [false, true] {
+            let expected = weaver_core::omp::failure::explain(text, on).unwrap();
+            assert_eq!(expected.contains("turning on System Certificates"), !on);
+            cases.push((text.to_owned(), on, expected));
+        }
+    }
+    cases
+}
+
+fn set_system_certificates(host: &TestHost, on: bool) {
+    host.settings.lock().unwrap().system_certificates.enabled = on;
+}
+
+async fn failed_reason(host: &TestHost, project: &Project, id: &str) -> Option<String> {
+    state_of(host, project, id, JobState::Failed).await;
+    row(host, &project.id, id).unwrap().reason
+}
+
+#[tokio::test]
+async fn an_exit_with_a_proxy_error_in_the_stderr_tail_is_explained_and_its_details_stay_omps_lines(
+) {
+    for (text, on, expected) in proxy_cases() {
+        let (host, jobs, _dir, project) = one_task().await;
+        set_system_certificates(&host, on);
+        // The error is not on the last line: the whole tail is tested.
+        host.script(json!({ "prompts": [[agent("Working"), { "stderr": text }, { "stderr": "error: giving up" }, { "sleep": 100 }, { "exit": 3 }]] }));
+        let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+        assert_eq!(
+            failed_reason(&host, &project, &id).await,
+            Some(expected),
+            "{text} {on}"
+        );
+        let conversation = entries(&jobs, &project, &id);
+        let Some(Entry::End(EndLine::Failed { details, .. })) = conversation.last() else {
+            panic!("{conversation:?}")
+        };
+        assert_eq!(
+            details.as_deref(),
+            Some(format!("{text}\nerror: giving up").as_str())
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_opening_a_start_and_a_turn_that_fail_with_a_proxy_error_are_explained() {
+    for (text, on, expected) in proxy_cases() {
+        // `session/new` fails.
+        let (host, jobs, _dir, project) = one_task().await;
+        set_system_certificates(&host, on);
+        host.script(json!({ "newError": text }));
+        let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+        assert_eq!(
+            failed_reason(&host, &project, &id).await.as_deref(),
+            Some(expected.as_str()),
+            "opening {text} {on}"
+        );
+
+        // The reply to the first `session/prompt` is an error.
+        let (host, jobs, _dir, project) = one_task().await;
+        set_system_certificates(&host, on);
+        host.script(json!({ "prompts": [[{ "error": text }]] }));
+        let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+        assert_eq!(
+            failed_reason(&host, &project, &id).await.as_deref(),
+            Some(expected.as_str()),
+            "start {text} {on}"
+        );
+
+        // A later turn fails.
+        let (host, jobs, _dir, project) = one_task().await;
+        set_system_certificates(&host, on);
+        host.script(json!({ "prompts": [[agent("Working"), { "error": text }]] }));
+        let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+        assert_eq!(
+            failed_reason(&host, &project, &id).await.as_deref(),
+            Some(expected.as_str()),
+            "turn {text} {on}"
+        );
+        // The reason kept is the explanation: a later change of the setting rewrites nothing.
+        set_system_certificates(&host, !on);
+        assert_eq!(
+            jobs.record(&id).unwrap().reason.as_deref(),
+            Some(expected.as_str())
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_resume_that_fails_with_a_proxy_error_is_explained_else_it_stays_not_resumed() {
+    for (text, on, expected) in proxy_cases() {
+        let (host, jobs, _dir, project) = one_task().await;
+        host.script(json!({ "prompts": [[{ "hold": true }]] }));
+        let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+        state_of(&host, &project, &id, JobState::Running).await;
+        jobs.window_closed(&project.id).await;
+        set_system_certificates(&host, on);
+        host.script(json!({ "loadError": text }));
+        jobs.window_opened(&project.id, &project.root);
+        assert_eq!(
+            failed_reason(&host, &project, &id).await.as_deref(),
+            Some(expected.as_str()),
+            "{text} {on}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_refused_message_with_a_proxy_error_shows_the_explanation() {
+    for (text, on, expected) in proxy_cases() {
+        let (host, jobs, _dir, project) = one_task().await;
+        set_system_certificates(&host, on);
+        host.script(json!({ "steering": [format!("failed:{text}")], "prompts": [[{ "wait_steer": 1 }, agent("Still here")]] }));
+        let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+        state_of(&host, &project, &id, JobState::Running).await;
+        jobs.send_message(&project.id, &id, "Hello").unwrap();
+        state_of(&host, &project, &id, JobState::Done).await;
+        assert!(
+            entries(&jobs, &project, &id).iter().any(|e| matches!(e, Entry::Developer { delivery: Delivery::NotDelivered { reason }, .. } if *reason == expected)),
+            "{text} {on}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn errors_that_are_not_certificate_or_http_refusals_keep_their_reasons() {
+    for text in ["status 404", "HTTP 429 Too Many Requests", "quota exceeded"] {
+        let (host, jobs, _dir, project) = one_task().await;
+        set_system_certificates(&host, false);
+        host.script(json!({ "prompts": [[{ "error": text }]] }));
+        let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+        assert_eq!(
+            failed_reason(&host, &project, &id).await.as_deref(),
+            Some(text)
+        );
+    }
+    // A fixed reason stays when nothing in the error or in stderr is a proxy problem.
+    let (host, jobs, _dir, project) = one_task().await;
+    host.script(json!({ "prompts": [[{ "stderr": "retrying" }, { "end": "refusal" }]] }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    assert_eq!(
+        failed_reason(&host, &project, &id).await.as_deref(),
+        Some("the agent refused")
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Sub-agents
+// ---------------------------------------------------------------------------------------------
+
+/// The main session file of the fake agent's session under the sessions folder of the test host,
+/// and the folder of its sub-agents' transcripts.
+fn session_files(host: &TestHost) -> (PathBuf, PathBuf) {
+    let folder = host
+        .dirs
+        .local_data_dir()
+        .join("omp-sessions")
+        .join("--project--");
+    std::fs::create_dir_all(&folder).unwrap();
+    let main = folder.join("2026-11-02T07-00-00-000Z_fake-session.jsonl");
+    std::fs::write(&main, "{}\n").unwrap();
+    let agents = folder.join("2026-11-02T07-00-00-000Z_fake-session");
+    (main, agents)
+}
+
+fn record_line(record: Value) -> String {
+    format!("{record}\n")
+}
+
+fn user_line(text: &str) -> String {
+    record_line(
+        json!({ "type": "message", "message": { "role": "user", "content": [{ "type": "text", "text": text }] } }),
+    )
+}
+
+fn assistant_line(text: &str) -> String {
+    record_line(
+        json!({ "type": "message", "message": { "role": "assistant", "content": [{ "type": "text", "text": text }] } }),
+    )
+}
+
+fn exit_line(kind: &str) -> String {
+    record_line(json!({ "type": "custom", "customType": "session_exit", "data": { "kind": kind } }))
+}
+
+/// A step of the fake agent that appends `text` to the transcript `file`.
+fn write_step(file: &Path, text: &str) -> Value {
+    json!({ "write": { "path": file.to_string_lossy(), "text": text } })
+}
+
+fn progress_step(call: &str, status: &str, progress: Value) -> Value {
+    json!({ "update": { "sessionUpdate": "tool_call_update", "toolCallId": call, "status": status, "rawOutput": { "details": { "progress": progress } } } })
+}
+
+fn step(call: &str, id: &str) -> Step {
+    Step {
+        call: call.into(),
+        id: id.into(),
+    }
+}
+
+fn states(jobs: &Jobs, project: &Project, job: &str) -> Vec<(String, SubAgentState)> {
+    jobs.sub_agents(&project.id, job)
+        .unwrap()
+        .nodes
+        .iter()
+        .map(|n| (n.id.clone(), n.state))
+        .collect()
+}
+
+fn state_of_agent(jobs: &Jobs, project: &Project, job: &str, agent: &str) -> Option<SubAgentState> {
+    states(jobs, project, job)
+        .into_iter()
+        .find(|(id, _)| id == agent)
+        .map(|(_, state)| state)
+}
+
+#[tokio::test]
+async fn the_sub_agents_of_a_job_are_listed_with_their_states_and_their_transcripts_read_while_shown(
+) {
+    let (host, jobs, _dir, project) = one_task().await;
+    let (_main, agents) = session_files(&host);
+    let (gate_one, gate_two) = (
+        host.dirs.local_data_dir().join("gate-one"),
+        host.dirs.local_data_dir().join("gate-two"),
+    );
+    let b_line = assistant_line("Working on B.");
+    let (b_first, b_second) = b_line.split_at(15);
+    host.script(json!({
+        "prompts": [[
+            { "update": { "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Task", "status": "in_progress" } },
+            progress_step("t1", "in_progress", json!([
+                { "id": "0-A", "name": "A", "status": "running" },
+                { "id": "1-B", "name": "B", "status": "running" },
+                { "id": "2-C", "name": "C", "status": "running" },
+                { "id": "__advisor.turn", "status": "running" },
+            ])),
+            write_step(&agents.join("0-A.jsonl"), &(user_line("Read the code.") + &assistant_line("Done reading.") + &exit_line("normal"))),
+            write_step(&agents.join("1-B.jsonl"), &(user_line("Write the test.") + b_first)),
+            write_step(&agents.join("__advisor.turn.jsonl"), &user_line("advise")),
+            // The call returns while they still work: they run in the background.
+            progress_step("t1", "completed", json!([
+                { "id": "0-A", "name": "A", "status": "pending" },
+                { "id": "1-B", "name": "B", "status": "pending" },
+                { "id": "2-C", "name": "C", "status": "pending" },
+            ])),
+            { "wait_file": gate_one },
+            write_step(&agents.join("1-B.jsonl"), b_second),
+            { "update": { "sessionUpdate": "tool_call", "toolCallId": "w1", "title": "Wait", "status": "completed",
+                "rawOutput": { "details": { "jobs": [{ "id": "1-B", "status": "failed" }] } } } },
+            { "wait_file": gate_two },
+        ]],
+    }));
+    let id = run_task(&jobs, &project, "aaaaaaaa").unwrap();
+    until("the three sub-agents to be listed", LIMIT, || {
+        states(&jobs, &project, &id).len() == 3
+    })
+    .await;
+
+    // The list is on screen and A's conversation is shown: its transcript is read, and its exit
+    // record (the fallback) settles it while the task call says it still works.
+    let path_a = vec![step("t1", "0-A")];
+    jobs.sub_agents_view(&project.id, &id, true, Some(path_a.clone()))
+        .unwrap();
+    until("A to be read", LIMIT, || {
+        state_of_agent(&jobs, &project, &id, "0-A") == Some(SubAgentState::Succeeded)
+    })
+    .await;
+    let a = jobs
+        .sub_agent_conversation(&project.id, &id, &path_a)
+        .unwrap();
+    assert_eq!(a.unavailable, None);
+    assert_eq!(
+        a.entries,
+        [
+            Entry::Assignment {
+                from: "Run T1".into(),
+                text: "Read the code.".into()
+            },
+            Entry::Agent {
+                text: "Done reading.".into(),
+                complete: true
+            },
+        ]
+    );
+    assert_eq!(
+        state_of_agent(&jobs, &project, &id, "1-B"),
+        Some(SubAgentState::Working)
+    );
+
+    // B's half-written line waits; C has no transcript yet, which is only its conversation's problem.
+    let path_b = vec![step("t1", "1-B")];
+    jobs.sub_agents_view(&project.id, &id, true, Some(path_b.clone()))
+        .unwrap();
+    until("B's first record", LIMIT, || {
+        jobs.sub_agent_conversation(&project.id, &id, &path_b)
+            .is_ok_and(|c| c.entries.len() == 1)
+    })
+    .await;
+    let c = jobs
+        .sub_agent_conversation(&project.id, &id, &[step("t1", "2-C")])
+        .unwrap();
+    assert!(c.entries.is_empty());
+    until("C's transcript to be reported missing", LIMIT, || {
+        jobs.sub_agent_conversation(&project.id, &id, &[step("t1", "2-C")])
+            .is_ok_and(|c| c.unavailable.as_deref() == Some("the transcript file was not found"))
+    })
+    .await;
+    assert_eq!(
+        state_of_agent(&jobs, &project, &id, "2-C"),
+        Some(SubAgentState::Working),
+        "it keeps its state from the other sources"
+    );
+    assert!(jobs
+        .sub_agent_conversation(&project.id, &id, &[step("t1", "__advisor.turn")])
+        .is_err());
+
+    // The rest of B's line, then a `wait` that says it failed: the change reaches the UI.
+    std::fs::write(&gate_one, "").unwrap();
+    until("B to fail and its message to arrive", LIMIT, || {
+        state_of_agent(&jobs, &project, &id, "1-B") == Some(SubAgentState::Failed)
+            && host.agent_entries.lock().unwrap().iter().any(|event| {
+                event.path == path_b
+                    && event.changes.iter().any(|change| {
+                        matches!(&change.entry, Entry::Agent { text, .. } if text == "Working on B.")
+                    })
+            })
+    })
+    .await;
+    assert!(host
+        .lists
+        .lock()
+        .unwrap()
+        .last()
+        .is_some_and(|list| list.nodes.len() == 3));
+
+    // The job ends with C still working: C is interrupted, in the list and under the task row.
+    std::fs::write(&gate_two, "").unwrap();
+    state_of(&host, &project, &id, JobState::Done).await;
+    assert_eq!(
+        states(&jobs, &project, &id),
+        [
+            ("0-A".to_owned(), SubAgentState::Succeeded),
+            ("1-B".to_owned(), SubAgentState::Failed),
+            ("2-C".to_owned(), SubAgentState::Interrupted),
+        ]
+    );
+    let row_states: Vec<SubAgentState> = entries(&jobs, &project, &id)
+        .iter()
+        .filter_map(|entry| match entry {
+            Entry::Tool(tool) if tool.id == "t1" => Some(tool.sub_agents.iter().map(|a| a.state)),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(
+        row_states,
+        [
+            SubAgentState::Succeeded,
+            SubAgentState::Failed,
+            SubAgentState::Interrupted
+        ]
+    );
+}
+
+#[tokio::test]
+async fn the_sub_agents_are_rebuilt_from_the_replayed_history_and_read_again_after_a_reload() {
+    let (host, first) = setup();
+    let (_dir, project) = host
+        .project(&[("tasks/aaaaaaaa-first-task.md", TASK)])
+        .await;
+    host.script(json!({ "prompts": [[{ "hold": true }]] }));
+    let id = run_task(&first, &project, "aaaaaaaa").unwrap();
+    state_of(&host, &project, &id, JobState::Running).await;
+    first.flush();
+    let store = JobStore::new(&host.dirs);
+    let mut record = store.read(&id).unwrap().unwrap();
+    record.pid = None;
+    record.pid_started = None;
+    record.id = "crashed1".to_owned();
+    record
+        .env
+        .insert("WEAVER_JOB".to_owned(), "crashed1".to_owned());
+    store.write(&record).unwrap();
+    first.stop(&project.id, &id).unwrap();
+    state_of(&host, &project, &id, JobState::Stopped).await;
+    first.flush();
+
+    let (_main, agents) = session_files(&host);
+    std::fs::create_dir_all(&agents).unwrap();
+    std::fs::write(
+        agents.join("0-A.jsonl"),
+        user_line("Read the code.") + &assistant_line("Read it.") + &exit_line("normal"),
+    )
+    .unwrap();
+
+    let second = Jobs::new(host.clone());
+    host.script(json!({
+        "replay": [
+            text_update("user_message_chunk", "Use the weaver-implement skill on Task aaaaaaaa."),
+            { "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Task", "status": "completed",
+              "rawOutput": { "details": { "progress": [{ "id": "0-A", "name": "A", "status": "completed" }] } } },
+        ],
+        "prompts": [[agent("Back at work")]],
+    }));
+    second.window_opened(&project.id, &project.root);
+    until("the crashed job to finish", LIMIT, || {
+        second
+            .record("crashed1")
+            .is_some_and(|r| r.state == JobState::Done)
+    })
+    .await;
+    assert_eq!(
+        states(&second, &project, "crashed1"),
+        [("0-A".to_owned(), SubAgentState::Succeeded)],
+        "rebuilt from the history, not from the live updates"
+    );
+    let path = vec![step("t1", "0-A")];
+    second
+        .sub_agents_view(&project.id, "crashed1", true, Some(path.clone()))
+        .unwrap();
+    until("the transcript to be read from the start", LIMIT, || {
+        second
+            .sub_agent_conversation(&project.id, "crashed1", &path)
+            .is_ok_and(|c| c.entries.len() == 2)
+    })
+    .await;
 }

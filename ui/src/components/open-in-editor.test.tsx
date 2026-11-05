@@ -19,19 +19,19 @@ beforeEach(() => {
 
 describe("Open in editor", () => {
   it("opens the file at the line", async () => {
-    render(<OpenInEditor file="/work/alpha/.trama/model/cart.md" line={12} />);
+    render(<OpenInEditor file="/work/alpha/.weaver/model/cart.md" line={12} />);
     await userEvent.setup().click(screen.getByRole("button", { name: "Open in editor" }));
-    expect(call).toHaveBeenCalledWith("open_in_editor", { file: "/work/alpha/.trama/model/cart.md", line: 12, projectId: null });
+    expect(call).toHaveBeenCalledWith("open_in_editor", { file: "/work/alpha/.weaver/model/cart.md", line: 12, projectId: null });
   });
 
   it("takes the project of the window for a file relative to it", async () => {
     render(
       <ProjectContext.Provider value={{ projectId: "0123456789abcdef", showView: vi.fn(), openJob: vi.fn(), openedJob: null }}>
-        <OpenInEditor file=".trama/model/cart.md" />
+        <OpenInEditor file=".weaver/model/cart.md" />
       </ProjectContext.Provider>,
     );
     await userEvent.setup().click(screen.getByRole("button", { name: "Open in editor" }));
-    expect(call).toHaveBeenCalledWith("open_in_editor", { file: ".trama/model/cart.md", line: null, projectId: "0123456789abcdef" });
+    expect(call).toHaveBeenCalledWith("open_in_editor", { file: ".weaver/model/cart.md", line: null, projectId: "0123456789abcdef" });
   });
 
   it("works with the keyboard", async () => {

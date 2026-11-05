@@ -19,6 +19,7 @@ use super::analysis;
 use super::data::{self, base_value, set, strings, Kind, Status, NEW_FILE};
 use super::files::{Folder, Folders};
 use super::label::validate_label;
+use super::resolution;
 
 // ---------------------------------------------------------------------------------------------
 // new
@@ -46,7 +47,7 @@ pub struct NewProposal {
 pub struct Created {
     pub id: String,
     pub kind: Kind,
-    /// `proposals/<id>-<slug>/proposal.md`, relative to `.trama/`.
+    /// `proposals/<id>-<slug>/proposal.md`, relative to `.weaver/`.
     pub path: String,
     pub changes: ChangeSet,
     /// Why it is not bound to its request or to the Proposal it reworks.
@@ -230,7 +231,7 @@ pub struct EditRequest {
 pub struct EditableFile {
     /// The path the agent asked for, or the Task path with its identity (`tasks/<id>-<slug>.md`).
     pub path: String,
-    /// The file to write, relative to `.trama/`: `proposals/<id>-<slug>/<path>`.
+    /// The file to write, relative to `.weaver/`: `proposals/<id>-<slug>/<path>`.
     pub file: String,
 }
 
@@ -241,6 +242,10 @@ pub struct Edited {
     /// An Open Proposal went back to Draft.
     pub sent_back_to_draft: bool,
     pub files: Vec<EditableFile>,
+    /// A rebase dropped these entries of `requires`, each with what was wrong with it.
+    pub dropped_requires: Vec<analysis::Required>,
+    /// A rebase dropped these rows of a resolution: their Drift is no longer open.
+    pub dropped_drifts: Vec<ResolutionRow>,
 }
 
 fn is_slug(text: &str) -> bool {
@@ -352,6 +357,39 @@ pub fn plan_edit(
     let attached = data::attached_drift(image, id).is_some();
     let empty = Folder::default();
     let folder = folders.get(id).unwrap_or(&empty);
+
+    // A refinement starts from the current files: first it stops requiring what is broken, and
+    // everything below (the content copied, `base`) counts only the Proposals that remain.
+    let dropped_requires = if request.rebase {
+        analysis::broken_requires(image, id)
+    } else {
+        Vec::new()
+    };
+    let rebased;
+    let image = if dropped_requires.is_empty() {
+        image
+    } else {
+        let kept: Vec<String> = data::requires_of(card)
+            .into_iter()
+            .filter(|required| !dropped_requires.iter().any(|d| &d.id == required))
+            .collect();
+        let mut without = ChangeSet::new();
+        without.write(
+            &card.path,
+            data::rewritten(card, |front| {
+                if kept.is_empty() {
+                    front.remove("requires");
+                } else {
+                    set(front, "requires", strings(&kept));
+                }
+            }),
+        );
+        rebased = image.with_changes(&without);
+        &rebased
+    };
+    let card = image
+        .card(CardKind::Proposal, id)
+        .expect("the Proposal is still in the image");
     let below = analysis::applied_below(image, folders, id);
 
     let mut problems: Vec<String> = Vec::new();
@@ -494,21 +532,26 @@ pub fn plan_edit(
             rows.retain(|r| !request.remove_drifts.contains(&r.drift));
         }
     }
+    // A refinement drops the decisions on Drifts no longer open; those still open stay taken.
+    let mut dropped_drifts: Vec<ResolutionRow> = Vec::new();
+    if request.rebase && kind == Kind::Resolution {
+        let (open, closed): (Vec<ResolutionRow>, Vec<ResolutionRow>) =
+            rows.into_iter().partition(|row| {
+                image
+                    .card(CardKind::Drift, &row.drift)
+                    .is_some_and(resolution::is_open)
+            });
+        rows = open;
+        dropped_drifts = closed;
+    }
 
+    // The refinement's rebase, after the requirements and rows were dropped: `base` again, with
+    // the required Proposals that remain applied below.
     if request.rebase {
-        if kind != Kind::Change {
-            problems.push(format!(
-                "rebase: only a `change` is refined, not a {}",
-                kind.as_str()
-            ));
-        } else if attached {
-            problems.push("rebase: a Proposal attached to a Drift is not refined".to_owned());
-        } else {
-            let paths: Vec<String> = base.keys().cloned().collect();
-            for path in paths {
-                let recorded = analysis::current_base(image, folders, id, &path);
-                base.insert(path, recorded);
-            }
+        let paths: Vec<String> = base.keys().cloned().collect();
+        for path in paths {
+            let recorded = analysis::current_base(image, folders, id, &path);
+            base.insert(path, recorded);
         }
     }
 
@@ -537,7 +580,9 @@ pub fn plan_edit(
                 set(front, "refining", true);
             }
             if kind == Kind::Resolution
-                && (!request.drifts.is_empty() || !request.remove_drifts.is_empty())
+                && (!request.drifts.is_empty()
+                    || !request.remove_drifts.is_empty()
+                    || !dropped_drifts.is_empty())
             {
                 let list: Vec<Value> = rows
                     .iter()
@@ -563,10 +608,12 @@ pub fn plan_edit(
         status: status_after,
         sent_back_to_draft: sent_back,
         files,
+        dropped_requires,
+        dropped_drifts,
     })
 }
 
-/// The file of `path` on disk under `.trama/`, as normalized text; `None` when it is not there.
+/// The file of `path` on disk under `.weaver/`, as normalized text; `None` when it is not there.
 pub fn read_project_file(project_root: &Path, path: &str) -> Option<String> {
     text::read_text(&layout::absolute(project_root, path)).ok()
 }
