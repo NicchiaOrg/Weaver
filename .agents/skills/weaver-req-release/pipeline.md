@@ -16,7 +16,7 @@
 
 ### Workflow `ci`
 
-- File `.github/workflows/ci.yml`. Triggers: push to `dev`, pull requests to `dev` or `main`, push to `main`.
+- File `.github/workflows/ci.yml`. Triggers: push to `dev`, pull requests to `dev`, push to `main`; never pull requests to `main`. A pull request from `dev` to `main` gets its checks from the run of the push to `dev` on the same commit, and the run of the push to `main` is the one that tests the merge commit before `release`.
 - Matrix `fail-fast: false`, every entry required: `macos-latest` (arm64), `windows-latest` (x64), `ubuntu-22.04` (x64). Windows is x64 only. No job of `ci` has `continue-on-error`: a failure on any system fails the run, on `dev` as on `main`, also while only some systems are released.
 - On Linux the Tauri 2 system packages are installed first (`libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `patchelf`).
 - Steps per platform: install, build the frontend, `cargo test --workspace --locked --no-fail-fast`, Vitest, build the app in release mode with the bundled `weaver-cli`. `--no-fail-fast` runs the tests of every crate even when an earlier crate fails.
