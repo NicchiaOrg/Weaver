@@ -175,6 +175,8 @@ async fn a_tool_that_names_a_file_locks_it_until_it_completes_and_the_job_goes_o
     let job = fx.run_task();
     fx.becomes_locked(&fx.file).await;
     assert!(!fx.locked(&fx.other), "the tool names one file only");
+    // The event follows the lock: it is sent once the lock is taken, not with it.
+    until("the lock event", LIMIT, || !fx.events().is_empty()).await;
     assert_eq!(
         fx.events()
             .iter()
@@ -185,7 +187,14 @@ async fn a_tool_that_names_a_file_locks_it_until_it_completes_and_the_job_goes_o
 
     fx.open_gate();
     fx.becomes_free(&fx.file).await;
-    assert_eq!(fx.events().last().map(|e| e.locked), Some(false));
+    until("the release event", LIMIT, || fx.events().len() == 2).await;
+    assert_eq!(
+        fx.events()
+            .iter()
+            .map(|e| (e.path.as_str(), e.locked))
+            .collect::<Vec<_>>(),
+        vec![("src/a.rs", true), ("src/a.rs", false)]
+    );
     fx.state(&job, JobState::Running).await;
     fx.jobs.stop(&fx.project.id, &job).unwrap();
     fx.state(&job, JobState::Stopped).await;
