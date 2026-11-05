@@ -18,53 +18,69 @@ const temporary = [];
 after(() => temporary.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
 const V = "1.2.3";
-const UPDATER = ["Weaver_universal.app.tar.gz"];
-const UPLOADED = [`Weaver_${V}_universal.dmg`, ...UPDATER, ...UPDATER.map((name) => `${name}.sig`)];
+const UPDATER = ["Weaver_universal.app.tar.gz", `Weaver_${V}_x64-setup.exe`, `Weaver_${V}_amd64.AppImage`];
+const UPLOADED = [
+  `Weaver_${V}_universal.dmg`,
+  `Weaver_${V}_amd64.deb`,
+  ...UPDATER,
+  ...UPDATER.map((name) => `${name}.sig`),
+];
 
-test("only macOS is released for now, with the names Tauri produces for the product Weaver", () => {
-  assert.deepEqual(downloads(V), { macos: ["Weaver_1.2.3_universal.dmg"] });
+test("the download names are the ones Tauri produces for the product Weaver", () => {
+  assert.deepEqual(downloads(V), {
+    macos: ["Weaver_1.2.3_universal.dmg"],
+    windows: ["Weaver_1.2.3_x64-setup.exe"],
+    linux: ["Weaver_1.2.3_amd64.AppImage", "Weaver_1.2.3_amd64.deb"],
+  });
   assert.throws(() => downloads("1.2"), /not a version/);
   assert.throws(() => downloads("1.2.3; rm -rf /"), /not a version/);
 });
 
-test("the release notes name the file to download and the steps to open an unsigned build", () => {
+test("the release notes name each file to download and the steps to open an unsigned build", () => {
   const notes = releaseNotes(V);
-  assert.match(notes, /\| macOS \(Apple silicon and Intel\) \| `Weaver_1\.2\.3_universal\.dmg` \|/);
-  for (const step of ["**Open**", "**Open Anyway**"]) assert.ok(notes.includes(step), step);
-  assert.doesNotMatch(notes, /Windows|Linux|setup\.exe|AppImage/, "a system that is not released is not offered");
+  for (const file of Object.values(downloads(V)).flat()) assert.match(notes, new RegExp(file.replace(/\./g, "\\.")));
+  for (const step of ["**Open**", "**Open Anyway**", "**More info**", "**Run anyway**", "chmod +x Weaver_1.2.3_amd64.AppImage"]) {
+    assert.ok(notes.includes(step), step);
+  }
   assert.doesNotMatch(notes, /\b(I|we|my|our)\b/i);
 });
 
 test("a draft with every file passes; a missing file or signature is named", () => {
   assert.deepEqual(missingAssets(V, UPLOADED), []);
-  assert.deepEqual(missingAssets(V, UPLOADED.filter((n) => !n.endsWith(".dmg"))), [`Weaver_${V}_universal.dmg`]);
-  assert.deepEqual(missingAssets(V, UPLOADED.filter((n) => n !== "Weaver_universal.app.tar.gz.sig")), [
-    "Weaver_universal.app.tar.gz.sig",
+  assert.deepEqual(missingAssets(V, UPLOADED.filter((n) => n !== `Weaver_${V}_amd64.deb`)), [`Weaver_${V}_amd64.deb`]);
+  assert.deepEqual(missingAssets(V, UPLOADED.filter((n) => n !== `Weaver_${V}_x64-setup.exe.sig`)), [
+    `Weaver_${V}_x64-setup.exe.sig`,
   ]);
+  const withoutDmg = UPLOADED.filter((n) => !n.endsWith(".dmg"));
+  assert.deepEqual(missingAssets(V, withoutDmg), [`Weaver_${V}_universal.dmg`]);
+  const noWindows = UPLOADED.filter((n) => !n.includes("setup.exe"));
+  assert.equal(missingAssets(V, noWindows).length, 2);
 });
 
-test("a second updater file of macOS is refused as ambiguous", () => {
-  assert.match(missingAssets(V, [...UPLOADED, "Other.app.tar.gz"]).join("\n"), /exactly one updater file of macos/);
+test("a second MSI-less Windows file or a second AppImage is refused as ambiguous", () => {
+  assert.match(missingAssets(V, [...UPLOADED, "Other.AppImage"]).join("\n"), /exactly one updater file of linux/);
 });
 
-test("latest.json has the two macOS platforms, their url and the signature of the .sig file", () => {
+test("latest.json has the four platforms, their urls and the signatures of the .sig files", () => {
   const signatures = Object.fromEntries(UPDATER.map((name) => [name, `sig-of-${name}\n`]));
   const manifest = buildLatestJson({ version: V, pubDate: "2026-11-02T07:00:00.000Z", names: UPLOADED, signatures });
   assert.equal(manifest.version, V);
   assert.equal(manifest.pub_date, "2026-11-02T07:00:00.000Z");
   assert.deepEqual(Object.keys(manifest.platforms).sort(), Object.keys(MANIFEST_PLATFORMS).sort());
-  assert.deepEqual(Object.keys(manifest.platforms).sort(), ["darwin-aarch64", "darwin-x86_64"]);
+  assert.deepEqual(Object.keys(manifest.platforms).sort(), ["darwin-aarch64", "darwin-x86_64", "linux-x86_64", "windows-x86_64"]);
   const base = "https://github.com/nicchia-code/weaver/releases/download/v1.2.3";
   assert.deepEqual(manifest.platforms["darwin-aarch64"], {
     signature: "sig-of-Weaver_universal.app.tar.gz",
     url: `${base}/Weaver_universal.app.tar.gz`,
   });
   assert.deepEqual(manifest.platforms["darwin-x86_64"], manifest.platforms["darwin-aarch64"]);
+  assert.equal(manifest.platforms["windows-x86_64"].url, `${base}/Weaver_1.2.3_x64-setup.exe`);
+  assert.equal(manifest.platforms["linux-x86_64"].url, `${base}/Weaver_1.2.3_amd64.AppImage`);
 });
 
 test("latest.json is refused without a signature", () => {
-  const signatures = { [UPDATER[0]]: "  \n" };
-  assert.throws(() => buildLatestJson({ version: V, pubDate: "x", names: UPLOADED, signatures }), /signature of .*\.app\.tar\.gz is missing/);
+  const signatures = { [UPDATER[0]]: "a", [UPDATER[1]]: "  \n" , [UPDATER[2]]: "c" };
+  assert.throws(() => buildLatestJson({ version: V, pubDate: "x", names: UPLOADED, signatures }), /signature of .*setup\.exe is missing/);
 });
 
 test("the command line verifies a draft and writes latest.json", () => {
@@ -82,7 +98,7 @@ test("the command line verifies a draft and writes latest.json", () => {
   const made = run("manifest", V, assets, signatures, out);
   assert.equal(made.status, 0, made.stderr);
   const manifest = JSON.parse(readFileSync(out, "utf8"));
-  assert.equal(manifest.platforms["darwin-aarch64"].signature, "signature of Weaver_universal.app.tar.gz");
+  assert.equal(manifest.platforms["linux-x86_64"].signature, `signature of Weaver_${V}_amd64.AppImage`);
 
   writeFileSync(assets, JSON.stringify(UPLOADED.slice(1).map((name, id) => ({ name, id }))));
   const failed = run("verify", V, assets);
